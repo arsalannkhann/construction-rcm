@@ -21,6 +21,9 @@ import {
   sovLines,
   subcontractors,
   nextVersion,
+  memberships,
+  retainageReleases,
+  users,
 } from '@/db/schema';
 import { recordAudit, type AuditActor } from '@/server/audit';
 import { newId, sha256Hex } from '@/server/ids';
@@ -32,6 +35,18 @@ import { notifyPermission } from './notify';
 export type ReconSummary = { opened: number; openBlocking: number; openWarnings: number; passed: number };
 
 const SEVERITY_ORDER = { blocking: 0, warning: 1, info: 2 } as const;
+
+/** JSON with keys in a fixed order, for comparing a stored value (jsonb reorders keys) with a fresh one. */
+function stable(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value ?? null);
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  return `{${Object.keys(obj)
+    .filter((k) => obj[k] !== undefined)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${stable(obj[k])}`)
+    .join(',')}}`;
+}
 
 function fingerprint(c: CheckResult): string {
   return sha256Hex(
@@ -67,6 +82,24 @@ function priorFromBaseline(b: ContractBaseline): ReconPrior {
   };
 }
 
+/** Mail providers anyone can sign up to. Sharing one of these domains with the contact on file proves nothing. */
+const PUBLIC_MAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com',
+  'proton.me', 'protonmail.com', 'gmx.com', 'mail.com', 'zoho.com', 'comcast.net', 'att.net', 'sbcglobal.net', 'bellsouth.net', 'verizon.net', 'cox.net', 'charter.net',
+]);
+
+/** Who an emailed package came from, relative to what is on file. */
+export function classifySender(senderEmail: string | null, contactEmail: string | null, teamEmails: string[]): 'contact' | 'domain' | 'team' | 'unknown' {
+  const sender = senderEmail?.trim().toLowerCase() ?? '';
+  if (!sender.includes('@')) return 'unknown';
+  const contact = contactEmail?.trim().toLowerCase() ?? '';
+  if (contact && sender === contact) return 'contact';
+  if (teamEmails.some((e) => e.trim().toLowerCase() === sender)) return 'team';
+  const domain = sender.slice(sender.lastIndexOf('@') + 1);
+  if (contact && domain === contact.slice(contact.lastIndexOf('@') + 1) && !PUBLIC_MAIL_DOMAINS.has(domain)) return 'domain';
+  return 'unknown';
+}
+
 /** Assemble everything the engine needs for one application. Returns null if it is not matched to a contract. */
 export async function loadReconInput(db: DB, orgId: string, appId: string, today: string): Promise<{ input: ReconInput; app: typeof payApplications.$inferSelect } | null> {
   const [app] = await db.select().from(payApplications).where(and(eq(payApplications.orgId, orgId), eq(payApplications.id, appId)));
@@ -79,6 +112,11 @@ export async function loadReconInput(db: DB, orgId: string, appId: string, today
   const [sub] = await db.select().from(subcontractors).where(eq(subcontractors.id, contract.subcontractorId));
 
   const cos = await db.select().from(changeOrders).where(eq(changeOrders.contractId, contract.id));
+  const releases = await db.select().from(retainageReleases).where(and(eq(retainageReleases.contractId, contract.id), eq(retainageReleases.status, 'approved')));
+  const team =
+    app.receivedVia === 'email'
+      ? await db.select({ email: users.email }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.orgId, orgId), eq(memberships.status, 'active')))
+      : [];
   const sov = await db.select().from(sovLines).where(eq(sovLines.contractId, contract.id)).orderBy(asc(sovLines.sortOrder));
   const lines = await db.select().from(payAppLines).where(eq(payAppLines.payApplicationId, appId)).orderBy(asc(payAppLines.sortOrder));
   const waivers = await db.select().from(lienWaivers).where(eq(lienWaivers.payApplicationId, appId));
@@ -123,7 +161,10 @@ export async function loadReconInput(db: DB, orgId: string, appId: string, today
       originalAmount: contract.originalAmount,
       retainageWorkBps: contract.retainageWorkBps,
       retainageStoredBps: contract.retainageStoredBps,
+      retainageTerms: contract.retainageTerms,
     },
+    retainageReleases: releases.map((r) => ({ id: r.id, amount: r.amount, effectiveOn: r.effectiveOn, note: r.note })),
+    intake: { via: app.receivedVia === 'email' ? 'email' : 'upload', senderEmail: app.senderEmail, sender: classifySender(app.senderEmail, sub?.contactEmail ?? null, team.map((t) => t.email)) },
     changeOrders: cos.map((c) => ({ id: c.id, number: c.number, title: c.title, amount: c.amount, status: c.status })),
     sov: sov.map((s) => ({ id: s.id, itemNo: s.itemNo, description: s.description, scheduledValue: s.scheduledValue })),
     prior,
@@ -204,6 +245,9 @@ export const runReconciliation = locked(async function runReconciliation(db: DB,
   const seen = new Set<string>();
   let opened = 0;
   let reopened = 0;
+  // Did anything a reviewer or approver would see actually change? If not, the application's
+  // version stays put, so someone part-way through a decision is not told to start again for nothing.
+  let changed = false;
 
   const ordered = [...out.checks].sort(
     (a, b) =>
@@ -219,6 +263,7 @@ export const runReconciliation = locked(async function runReconciliation(db: DB,
     const fp = fingerprint(check);
     const keepAccepted = check.outcome === 'fail' && prev?.status === 'accepted' && prev.fingerprint === fp;
     const status = check.outcome === 'pass' ? 'passed' : keepAccepted ? 'accepted' : 'open';
+    if (!prev || prev.status !== status || prev.fingerprint !== fp || prev.detail !== check.detail) changed = true;
     if (status === 'open' && prev?.status !== 'open') {
       opened++;
       if (prev?.status === 'accepted') reopened++;
@@ -246,7 +291,10 @@ export const runReconciliation = locked(async function runReconciliation(db: DB,
   }
 
   const stale = existing.filter((f) => !seen.has(`${f.code}|${f.subjectKey}`));
-  if (stale.length > 0) await db.delete(findings).where(inArray(findings.id, stale.map((f) => f.id)));
+  if (stale.length > 0) {
+    await db.delete(findings).where(inArray(findings.id, stale.map((f) => f.id)));
+    changed = true;
+  }
 
   const current = await db.select({ status: findings.status, severity: findings.severity }).from(findings).where(eq(findings.payApplicationId, appId));
   const openBlocking = current.filter((f) => f.status === 'open' && f.severity === 'blocking').length;
@@ -255,18 +303,30 @@ export const runReconciliation = locked(async function runReconciliation(db: DB,
 
   // An application already waiting for approval goes back to review if something new blocks it.
   const bounce = app.status === 'pending_approval' && openBlocking > 0 && opened > 0;
-  await db
-    .update(payApplications)
-    .set({ version: nextVersion,
-      verified: out.verified,
-      verifiedAmount: out.verified.currentPaymentDue,
-      claimedAmount: app.claimed.currentPaymentDue,
-      openBlocking,
-      openWarnings,
-      updatedAt: now,
-      ...(bounce ? { status: 'needs_review', submittedForApprovalAt: null, submittedForApprovalBy: null } : {}),
-    })
-    .where(eq(payApplications.id, appId));
+  if (
+    bounce ||
+    app.openBlocking !== openBlocking ||
+    app.openWarnings !== openWarnings ||
+    app.claimedAmount !== app.claimed.currentPaymentDue ||
+    stable(app.verified) !== stable(out.verified)
+  ) {
+    changed = true;
+  }
+  if (changed) {
+    await db
+      .update(payApplications)
+      .set({
+        version: nextVersion,
+        verified: out.verified,
+        verifiedAmount: out.verified.currentPaymentDue,
+        claimedAmount: app.claimed.currentPaymentDue,
+        openBlocking,
+        openWarnings,
+        updatedAt: now,
+        ...(bounce ? { status: 'needs_review', submittedForApprovalAt: null, submittedForApprovalBy: null } : {}),
+      })
+      .where(eq(payApplications.id, appId));
+  }
 
   if (reopened > 0) {
     await recordAudit(db, {
