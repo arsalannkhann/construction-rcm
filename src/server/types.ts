@@ -23,6 +23,13 @@ export type OrgSettings = {
   requireNotarization: boolean;
   /** Extracted values below this confidence are flagged for a human look. */
   lowConfidenceThreshold: number;
+  /** Every member must set up two-step verification before they can work in this organisation. */
+  requireMfa: boolean;
+  /**
+   * Email from an address that is not on file for a subcontractor or a team member:
+   * `flag` accepts it with a blocking finding, `reject` turns it away.
+   */
+  unknownSenderPolicy: 'flag' | 'reject';
 };
 
 export const DEFAULT_ORG_SETTINGS: OrgSettings = {
@@ -32,7 +39,29 @@ export const DEFAULT_ORG_SETTINGS: OrgSettings = {
   requireSignature: true,
   requireNotarization: false,
   lowConfidenceThreshold: 0.75,
+  requireMfa: false,
+  unknownSenderPolicy: 'flag',
 };
+
+/** Settings saved before a field existed do not have it; always read through this. */
+export function resolveSettings(stored: Partial<OrgSettings> | null | undefined): OrgSettings {
+  return { ...DEFAULT_ORG_SETTINGS, ...(stored ?? {}) };
+}
+
+/** Agreed changes to the retainage rate on completed work as the contract progresses. */
+export type RetainageTerms = {
+  reduction: {
+    /** Share of the contract sum to date that must be complete (work in place, not stored material) before the rate changes, in basis points. */
+    atPercentBps: number;
+    /** The rate on completed work from that point on, in basis points. */
+    toBps: number;
+    /** `future_work`: only work beyond the threshold is at the new rate. `all_work`: the new rate applies to everything, releasing the difference. */
+    appliesTo: 'future_work' | 'all_work';
+  } | null;
+};
+
+/** For each corrected summary value: what was read from the document and what the reviewer changed it to. */
+export type HeaderCorrections = Record<string, { from: number | string | null; to: number | string | null }>;
 
 // ── Documents & extraction ──────────────────────────────────────────────────
 

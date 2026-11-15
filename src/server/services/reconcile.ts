@@ -7,6 +7,7 @@
  */
 import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import type { DB } from '@/db';
+import { locked } from '@/db/tx';
 import {
   changeOrders,
   contracts,
@@ -19,12 +20,13 @@ import {
   projects,
   sovLines,
   subcontractors,
+  nextVersion,
 } from '@/db/schema';
 import { recordAudit, type AuditActor } from '@/server/audit';
 import { newId, sha256Hex } from '@/server/ids';
 import { reconcile, type CheckResult, type ReconInput, type ReconOutput, type ReconPrior } from '@/server/recon/engine';
 import type { ApprovedRecord, ContractBaseline, FindingCategory, Tri, WaiverType } from '@/server/types';
-import { FINDING_CATEGORIES, OPEN_STATUSES } from '@/server/types';
+import { FINDING_CATEGORIES, OPEN_STATUSES, resolveSettings } from '@/server/types';
 import { notifyPermission } from './notify';
 
 export type ReconSummary = { opened: number; openBlocking: number; openWarnings: number; passed: number };
@@ -112,7 +114,7 @@ export async function loadReconInput(db: DB, orgId: string, appId: string, today
   for (const [key, ev] of Object.entries(app.evidence ?? {})) confidence[key] = ev.confidence;
 
   const input: ReconInput = {
-    policy: org.settings,
+    policy: resolveSettings(org.settings),
     today,
     project: { name: project?.name ?? '', state: project?.state ?? null },
     subcontractor: { name: sub?.name ?? '' },
@@ -183,14 +185,14 @@ export async function computeReconciliation(db: DB, orgId: string, appId: string
  * Recompute and store findings + verified figures for one application.
  * A finding a person accepted stays accepted only while the facts behind it are unchanged.
  */
-export async function runReconciliation(db: DB, orgId: string, appId: string, opts: { now?: Date; actor?: AuditActor } = {}): Promise<ReconSummary | null> {
+export const runReconciliation = locked(async function runReconciliation(db: DB, orgId: string, appId: string, opts: { now?: Date; actor?: AuditActor } = {}): Promise<ReconSummary | null> {
   const now = opts.now ?? new Date();
   const loaded = await loadReconInput(db, orgId, appId, now.toISOString().slice(0, 10));
   if (!loaded) {
     await db.delete(findings).where(and(eq(findings.orgId, orgId), eq(findings.payApplicationId, appId)));
     await db
       .update(payApplications)
-      .set({ verified: null, verifiedAmount: null, openBlocking: 0, openWarnings: 0, updatedAt: now })
+      .set({ version: nextVersion, verified: null, verifiedAmount: null, openBlocking: 0, openWarnings: 0, updatedAt: now })
       .where(and(eq(payApplications.orgId, orgId), eq(payApplications.id, appId)));
     return null;
   }
@@ -255,7 +257,7 @@ export async function runReconciliation(db: DB, orgId: string, appId: string, op
   const bounce = app.status === 'pending_approval' && openBlocking > 0 && opened > 0;
   await db
     .update(payApplications)
-    .set({
+    .set({ version: nextVersion,
       verified: out.verified,
       verifiedAmount: out.verified.currentPaymentDue,
       claimedAmount: app.claimed.currentPaymentDue,
@@ -298,10 +300,10 @@ export async function runReconciliation(db: DB, orgId: string, appId: string, op
   }
 
   return { opened, openBlocking, openWarnings, passed };
-}
+});
 
 /** Re-check every undecided application on a contract, oldest first. */
-export async function rereconcileContract(db: DB, orgId: string, contractId: string, opts: { now?: Date; actor?: AuditActor; except?: string } = {}): Promise<void> {
+export const rereconcileContract = locked(async function rereconcileContract(db: DB, orgId: string, contractId: string, opts: { now?: Date; actor?: AuditActor; except?: string } = {}): Promise<void> {
   const open = await db
     .select({ id: payApplications.id, n: payApplications.applicationNumber })
     .from(payApplications)
@@ -311,4 +313,4 @@ export async function rereconcileContract(db: DB, orgId: string, contractId: str
     if (row.id === opts.except) continue;
     await runReconciliation(db, orgId, row.id, opts);
   }
-}
+});

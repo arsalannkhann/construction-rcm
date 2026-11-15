@@ -9,6 +9,7 @@ import { and, asc, eq, inArray } from 'drizzle-orm';
 import { formatBps, formatMoney, parseMoney } from '@/lib/money';
 import { US_STATES } from '@/lib/utils';
 import type { DB } from '@/db';
+import { locked } from '@/db/tx';
 import { changeOrders, contracts, payAppLines, payApplications, projects, sovLines, subcontractors } from '@/db/schema';
 import { recordAudit } from '@/server/audit';
 import { assertCan, UserError, type Ctx } from '@/server/auth/permissions';
@@ -35,16 +36,16 @@ function validateProject(input: ProjectInput) {
   return { name: required(input.name, 'Project name'), number: clean(input.number), address: clean(input.address), city: clean(input.city), state, ownerName: clean(input.ownerName) };
 }
 
-export async function createProject(db: DB, ctx: Ctx, input: ProjectInput, external?: { source: string; id: string }): Promise<string> {
+export const createProject = locked(async function createProject(db: DB, ctx: Ctx, input: ProjectInput, external?: { source: string; id: string }): Promise<string> {
   assertCan(ctx, 'records:write');
   const values = validateProject(input);
   const id = newId('prj');
   await db.insert(projects).values({ id, orgId: ctx.orgId, ...values, externalSource: external?.source ?? null, externalId: external?.id ?? null, createdBy: ctx.userId });
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'project.created', entityType: 'project', entityId: id, summary: `Created project ${values.name}${external ? ` (imported from ${external.source})` : ''}`, data: values });
   return id;
-}
+});
 
-export async function updateProject(db: DB, ctx: Ctx, id: string, input: ProjectInput & { status?: 'active' | 'closed' }): Promise<void> {
+export const updateProject = locked(async function updateProject(db: DB, ctx: Ctx, id: string, input: ProjectInput & { status?: 'active' | 'closed' }): Promise<void> {
   assertCan(ctx, 'records:write');
   const [project] = await db.select().from(projects).where(and(eq(projects.orgId, ctx.orgId), eq(projects.id, id)));
   if (!project) throw new UserError('Project not found.');
@@ -56,7 +57,7 @@ export async function updateProject(db: DB, ctx: Ctx, id: string, input: Project
     const rows = await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.projectId, id));
     for (const c of rows) await rereconcileContract(db, ctx.orgId, c.id, { actor: ctx });
   }
-}
+});
 
 // ── Subcontractors ──────────────────────────────────────────────────────────
 
@@ -68,16 +69,16 @@ function validateSub(input: SubcontractorInput) {
   return { name: required(input.name, 'Subcontractor name'), trade: clean(input.trade), contactName: clean(input.contactName), contactEmail: email, phone: clean(input.phone), address: clean(input.address) };
 }
 
-export async function createSubcontractor(db: DB, ctx: Ctx, input: SubcontractorInput, external?: { source: string; id: string }): Promise<string> {
+export const createSubcontractor = locked(async function createSubcontractor(db: DB, ctx: Ctx, input: SubcontractorInput, external?: { source: string; id: string }): Promise<string> {
   assertCan(ctx, 'records:write');
   const values = validateSub(input);
   const id = newId('sub');
   await db.insert(subcontractors).values({ id, orgId: ctx.orgId, ...values, externalSource: external?.source ?? null, externalId: external?.id ?? null });
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'subcontractor.created', entityType: 'subcontractor', entityId: id, summary: `Added subcontractor ${values.name}`, data: values });
   return id;
-}
+});
 
-export async function updateSubcontractor(db: DB, ctx: Ctx, id: string, input: SubcontractorInput): Promise<void> {
+export const updateSubcontractor = locked(async function updateSubcontractor(db: DB, ctx: Ctx, id: string, input: SubcontractorInput): Promise<void> {
   assertCan(ctx, 'records:write');
   const [sub] = await db.select().from(subcontractors).where(and(eq(subcontractors.orgId, ctx.orgId), eq(subcontractors.id, id)));
   if (!sub) throw new UserError('Subcontractor not found.');
@@ -88,7 +89,7 @@ export async function updateSubcontractor(db: DB, ctx: Ctx, id: string, input: S
     const rows = await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.subcontractorId, id));
     for (const c of rows) await rereconcileContract(db, ctx.orgId, c.id, { actor: ctx });
   }
-}
+});
 
 // ── Schedule of values ──────────────────────────────────────────────────────
 
@@ -176,7 +177,7 @@ function validateSchedule(lines: ScheduleLineInput[]) {
 }
 
 /** Replace the base (non-change-order) schedule of a contract. */
-export async function saveSchedule(db: DB, ctx: Ctx, contractId: string, input: ScheduleLineInput[]): Promise<void> {
+export const saveSchedule = locked(async function saveSchedule(db: DB, ctx: Ctx, contractId: string, input: ScheduleLineInput[]): Promise<void> {
   assertCan(ctx, 'records:write');
   const [contract] = await db.select().from(contracts).where(and(eq(contracts.orgId, ctx.orgId), eq(contracts.id, contractId)));
   if (!contract) throw new UserError('Contract not found.');
@@ -216,7 +217,7 @@ export async function saveSchedule(db: DB, ctx: Ctx, contractId: string, input: 
     data: { lines: lines.length, total, removed: removed.map((r) => r.itemNo) },
   });
   await rereconcileContract(db, ctx.orgId, contractId, { actor: ctx });
-}
+});
 
 // ── Contracts ───────────────────────────────────────────────────────────────
 
@@ -240,7 +241,7 @@ function validateTerms(input: Pick<ContractInput, 'originalAmount' | 'retainageW
   if (!isDate(input.executedOn)) throw new UserError('Enter a valid contract date.');
 }
 
-export async function createContract(db: DB, ctx: Ctx, input: ContractInput, external?: { source: string; id: string }): Promise<string> {
+export const createContract = locked(async function createContract(db: DB, ctx: Ctx, input: ContractInput, external?: { source: string; id: string }): Promise<string> {
   assertCan(ctx, 'records:write');
   validateTerms(input);
   const [project] = await db.select().from(projects).where(and(eq(projects.orgId, ctx.orgId), eq(projects.id, input.projectId)));
@@ -281,11 +282,11 @@ export async function createContract(db: DB, ctx: Ctx, input: ContractInput, ext
     data: { number, title, originalAmount: input.originalAmount, retainageWorkBps: input.retainageWorkBps, retainageStoredBps: input.retainageStoredBps, scheduleLines: schedule.length },
   });
   return id;
-}
+});
 
 export type ContractPatch = { number: string; title: string; originalAmount: number; retainageWorkBps: number; retainageStoredBps: number; executedOn?: string | null; status?: 'active' | 'closed' };
 
-export async function updateContract(db: DB, ctx: Ctx, id: string, patch: ContractPatch): Promise<void> {
+export const updateContract = locked(async function updateContract(db: DB, ctx: Ctx, id: string, patch: ContractPatch): Promise<void> {
   assertCan(ctx, 'records:write');
   const [contract] = await db.select().from(contracts).where(and(eq(contracts.orgId, ctx.orgId), eq(contracts.id, id)));
   if (!contract) throw new UserError('Contract not found.');
@@ -302,7 +303,7 @@ export async function updateContract(db: DB, ctx: Ctx, id: string, patch: Contra
   await db.update(contracts).set(next).where(eq(contracts.id, id));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'contract.updated', entityType: 'contract', entityId: id, summary: `Updated contract ${next.number}${changes.length ? `: ${changes.join('; ')}` : ''}`, data: { changes } });
   await rereconcileContract(db, ctx.orgId, id, { actor: ctx });
-}
+});
 
 // ── Change orders ───────────────────────────────────────────────────────────
 
@@ -355,7 +356,7 @@ async function rematchOpenApplications(db: DB, orgId: string, contractId: string
   }
 }
 
-export async function createChangeOrder(db: DB, ctx: Ctx, contractId: string, input: ChangeOrderInput, external?: { id: string }): Promise<string> {
+export const createChangeOrder = locked(async function createChangeOrder(db: DB, ctx: Ctx, contractId: string, input: ChangeOrderInput, external?: { id: string }): Promise<string> {
   assertCan(ctx, 'records:write');
   const [contract] = await db.select().from(contracts).where(and(eq(contracts.orgId, ctx.orgId), eq(contracts.id, contractId)));
   if (!contract) throw new UserError('Contract not found.');
@@ -370,9 +371,9 @@ export async function createChangeOrder(db: DB, ctx: Ctx, contractId: string, in
   await rematchOpenApplications(db, ctx.orgId, contractId);
   await rereconcileContract(db, ctx.orgId, contractId, { actor: ctx });
   return id;
-}
+});
 
-export async function updateChangeOrder(db: DB, ctx: Ctx, id: string, input: ChangeOrderInput): Promise<void> {
+export const updateChangeOrder = locked(async function updateChangeOrder(db: DB, ctx: Ctx, id: string, input: ChangeOrderInput): Promise<void> {
   assertCan(ctx, 'records:write');
   const [co] = await db.select().from(changeOrders).where(and(eq(changeOrders.orgId, ctx.orgId), eq(changeOrders.id, id)));
   if (!co) throw new UserError('Change order not found.');
@@ -396,4 +397,4 @@ export async function updateChangeOrder(db: DB, ctx: Ctx, id: string, input: Cha
   });
   await rematchOpenApplications(db, ctx.orgId, co.contractId);
   await rereconcileContract(db, ctx.orgId, co.contractId, { actor: ctx });
-}
+});

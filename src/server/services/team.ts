@@ -4,13 +4,14 @@
  */
 import { and, desc, eq, gt, isNull, ne } from 'drizzle-orm';
 import type { DB } from '@/db';
-import { invitations, memberships, organizations, payApplications, sessions, users } from '@/db/schema';
+import { locked } from '@/db/tx';
+import { invitations, memberships, organizations, payApplications, sessions, users, nextVersion } from '@/db/schema';
 import { recordAudit } from '@/server/audit';
 import { hashPassword, passwordProblem, verifyPassword } from '@/server/auth/password';
 import { assertCan, ROLE_LABEL, UserError, type Ctx } from '@/server/auth/permissions';
 import { newId, randomToken, sha256Hex } from '@/server/ids';
 import type { OrgSettings, Role } from '@/server/types';
-import { DEFAULT_ORG_SETTINGS, OPEN_STATUSES, ROLES } from '@/server/types';
+import { DEFAULT_ORG_SETTINGS, OPEN_STATUSES, ROLES, resolveSettings } from '@/server/types';
 import { inArray } from 'drizzle-orm';
 import { runReconciliation } from './reconcile';
 
@@ -172,7 +173,7 @@ function assertAssignable(ctx: Ctx, role: string): asserts role is Role {
 }
 
 /** Create an invitation and return the one-time token (shown once, stored only as a hash). */
-export async function inviteMember(db: DB, ctx: Ctx, input: { email: string; role: string }): Promise<{ id: string; token: string }> {
+export const inviteMember = locked(async function inviteMember(db: DB, ctx: Ctx, input: { email: string; role: string }): Promise<{ id: string; token: string }> {
   assertCan(ctx, 'team:manage');
   const email = normaliseEmail(input.email);
   if (!validEmail(email)) throw new UserError('Enter a valid email address.');
@@ -190,15 +191,15 @@ export async function inviteMember(db: DB, ctx: Ctx, input: { email: string; rol
   await db.insert(invitations).values({ id, orgId: ctx.orgId, email, role: input.role, tokenHash: sha256Hex(token), invitedBy: ctx.userId, expiresAt: new Date(Date.now() + INVITE_DAYS * 86_400_000) });
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'team.invited', entityType: 'invitation', entityId: id, summary: `Invited ${email} as ${ROLE_LABEL[input.role]}`, data: { email, role: input.role } });
   return { id, token };
-}
+});
 
-export async function revokeInvitation(db: DB, ctx: Ctx, id: string): Promise<void> {
+export const revokeInvitation = locked(async function revokeInvitation(db: DB, ctx: Ctx, id: string): Promise<void> {
   assertCan(ctx, 'team:manage');
   const [inv] = await db.select().from(invitations).where(and(eq(invitations.orgId, ctx.orgId), eq(invitations.id, id)));
   if (!inv || inv.acceptedAt || inv.revokedAt) return;
   await db.update(invitations).set({ revokedAt: new Date() }).where(eq(invitations.id, id));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'team.invitation_revoked', entityType: 'invitation', entityId: id, summary: `Revoked the invitation for ${inv.email}` });
-}
+});
 
 export async function findInvitation(db: DB, token: string) {
   const [row] = await db
@@ -246,7 +247,7 @@ async function ownerCount(db: DB, orgId: string, exceptUserId?: string): Promise
   return rows.filter((r) => r.userId !== exceptUserId).length;
 }
 
-export async function changeRole(db: DB, ctx: Ctx, userId: string, role: string): Promise<void> {
+export const changeRole = locked(async function changeRole(db: DB, ctx: Ctx, userId: string, role: string): Promise<void> {
   assertCan(ctx, 'team:manage');
   assertAssignable(ctx, role);
   if (userId === ctx.userId) throw new UserError('You cannot change your own role. Ask another admin.');
@@ -260,9 +261,9 @@ export async function changeRole(db: DB, ctx: Ctx, userId: string, role: string)
   await db.update(memberships).set({ role }).where(eq(memberships.id, m.id));
   const [user] = await db.select({ name: users.name }).from(users).where(eq(users.id, userId));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'team.role_changed', entityType: 'membership', entityId: userId, summary: `Changed ${user?.name ?? 'member'} from ${ROLE_LABEL[m.role as Role]} to ${ROLE_LABEL[role]}`, data: { from: m.role, to: role } });
-}
+});
 
-export async function setMemberActive(db: DB, ctx: Ctx, userId: string, active: boolean): Promise<void> {
+export const setMemberActive = locked(async function setMemberActive(db: DB, ctx: Ctx, userId: string, active: boolean): Promise<void> {
   assertCan(ctx, 'team:manage');
   if (userId === ctx.userId) throw new UserError('You cannot deactivate yourself.');
   const [m] = await db.select().from(memberships).where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.userId, userId)));
@@ -275,11 +276,11 @@ export async function setMemberActive(db: DB, ctx: Ctx, userId: string, active: 
   if (!active) {
     // Cut off access immediately and hand back anything assigned to them.
     await db.delete(sessions).where(and(eq(sessions.userId, userId), eq(sessions.orgId, ctx.orgId)));
-    await db.update(payApplications).set({ assigneeId: null }).where(and(eq(payApplications.orgId, ctx.orgId), eq(payApplications.assigneeId, userId), inArray(payApplications.status, OPEN_STATUSES)));
+    await db.update(payApplications).set({ version: nextVersion, assigneeId: null }).where(and(eq(payApplications.orgId, ctx.orgId), eq(payApplications.assigneeId, userId), inArray(payApplications.status, OPEN_STATUSES)));
   }
   const [user] = await db.select({ name: users.name }).from(users).where(eq(users.id, userId));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: active ? 'team.reactivated' : 'team.deactivated', entityType: 'membership', entityId: userId, summary: `${active ? 'Reactivated' : 'Deactivated'} ${user?.name ?? 'member'}` });
-}
+});
 
 // ── Organisation settings ───────────────────────────────────────────────────
 
@@ -289,35 +290,41 @@ export async function getOrganization(db: DB, ctx: Ctx) {
   return org;
 }
 
-export async function renameOrganization(db: DB, ctx: Ctx, name: string): Promise<void> {
+export const renameOrganization = locked(async function renameOrganization(db: DB, ctx: Ctx, name: string): Promise<void> {
   assertCan(ctx, 'org:manage');
   const clean = name.trim();
   if (clean.length < 2 || clean.length > 120) throw new UserError('Enter your company name.');
   await db.update(organizations).set({ name: clean }).where(eq(organizations.id, ctx.orgId));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'organization.renamed', entityType: 'organization', entityId: ctx.orgId, summary: `Renamed the organisation from ${ctx.orgName} to ${clean}` });
-}
+});
 
-export async function updatePolicy(db: DB, ctx: Ctx, input: OrgSettings): Promise<void> {
+/** Change review policy. Fields left out of `input` keep their current value. */
+export const updatePolicy = locked(async function updatePolicy(db: DB, ctx: Ctx, input: Partial<OrgSettings>): Promise<void> {
   assertCan(ctx, 'policy:manage');
   const org = await getOrganization(db, ctx);
-  if (!Number.isInteger(input.toleranceCents) || input.toleranceCents < 0 || input.toleranceCents > 100_000) throw new UserError('Rounding tolerance must be between $0 and $1,000.');
-  if (!(input.lowConfidenceThreshold >= 0 && input.lowConfidenceThreshold <= 1)) throw new UserError('The confidence threshold must be between 0 and 100%.');
+  const current = resolveSettings(org.settings);
+  const merged = { ...current, ...input };
+  if (!Number.isInteger(merged.toleranceCents) || merged.toleranceCents < 0 || merged.toleranceCents > 100_000) throw new UserError('Rounding tolerance must be between $0 and $1,000.');
+  if (!(merged.lowConfidenceThreshold >= 0 && merged.lowConfidenceThreshold <= 1)) throw new UserError('The confidence threshold must be between 0 and 100%.');
+  if (merged.unknownSenderPolicy !== 'flag' && merged.unknownSenderPolicy !== 'reject') throw new UserError('Choose what happens to email from an unknown sender.');
   const next: OrgSettings = {
-    toleranceCents: input.toleranceCents,
-    requireConditionalWaiver: !!input.requireConditionalWaiver,
-    requirePriorUnconditionalWaiver: !!input.requirePriorUnconditionalWaiver,
-    requireSignature: !!input.requireSignature,
-    requireNotarization: !!input.requireNotarization,
-    lowConfidenceThreshold: input.lowConfidenceThreshold,
+    toleranceCents: merged.toleranceCents,
+    requireConditionalWaiver: !!merged.requireConditionalWaiver,
+    requirePriorUnconditionalWaiver: !!merged.requirePriorUnconditionalWaiver,
+    requireSignature: !!merged.requireSignature,
+    requireNotarization: !!merged.requireNotarization,
+    lowConfidenceThreshold: merged.lowConfidenceThreshold,
+    requireMfa: !!merged.requireMfa,
+    unknownSenderPolicy: merged.unknownSenderPolicy,
   };
-  const changed = (Object.keys(next) as Array<keyof OrgSettings>).filter((k) => next[k] !== org.settings[k]);
+  const changed = (Object.keys(next) as Array<keyof OrgSettings>).filter((k) => next[k] !== current[k]);
   if (changed.length === 0) return;
   await db.update(organizations).set({ settings: next }).where(eq(organizations.id, ctx.orgId));
-  await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'policy.updated', entityType: 'organization', entityId: ctx.orgId, summary: `Changed review policy: ${changed.map((k) => `${k} ${String(org.settings[k])} → ${String(next[k])}`).join('; ')}`, data: { before: org.settings, after: next } });
+  await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'policy.updated', entityType: 'organization', entityId: ctx.orgId, summary: `Changed review policy: ${changed.map((k) => `${k} ${String(current[k])} → ${String(next[k])}`).join('; ')}`, data: { before: current, after: next } });
   // Policy changes what counts as a finding, so every undecided application is re-checked.
   const open = await db.select({ id: payApplications.id }).from(payApplications).where(and(eq(payApplications.orgId, ctx.orgId), inArray(payApplications.status, OPEN_STATUSES), ne(payApplications.status, 'needs_matching')));
   for (const app of open) await runReconciliation(db, ctx.orgId, app.id, { actor: ctx });
-}
+});
 
 export async function updateProfile(db: DB, userId: string, input: { name: string }): Promise<void> {
   const name = input.name.trim();

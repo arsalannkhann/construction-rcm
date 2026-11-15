@@ -16,7 +16,7 @@ import { and, eq } from 'drizzle-orm';
 import { centsToDecimalString, formatMoney } from '@/lib/money';
 import { formatDate, pluralize } from '@/lib/utils';
 import type { DB } from '@/db';
-import { contracts, payApplications, projects, sovLines, transfers } from '@/db/schema';
+import { contracts, payApplications, projects, sovLines, transfers, nextVersion } from '@/db/schema';
 import { recordAudit } from '@/server/audit';
 import { assertCan, can, UserError, type Ctx } from '@/server/auth/permissions';
 import { newId } from '@/server/ids';
@@ -175,7 +175,7 @@ export async function pushToProcore(db: DB, ctx: Ctx, applicationId: string): Pr
       const at = new Date();
       await db.insert(transfers).values({ id: transferId, orgId: ctx.orgId, payApplicationId: plan.applicationId, kind: SOURCE, status: 'failed', error, createdBy: ctx.userId, createdAt: at });
       // An application that was already exported to a file keeps that status.
-      await db.update(payApplications).set({ transferStatus: 'failed', updatedAt: at }).where(and(mine, eq(payApplications.transferStatus, 'none')));
+      await db.update(payApplications).set({ version: nextVersion, transferStatus: 'failed', updatedAt: at }).where(and(mine, eq(payApplications.transferStatus, 'none')));
       await recordAudit(db, {
         orgId: ctx.orgId,
         actor: ctx,
@@ -193,7 +193,7 @@ export async function pushToProcore(db: DB, ctx: Ctx, applicationId: string): Pr
 
     const at = new Date();
     await db.insert(transfers).values({ id: transferId, orgId: ctx.orgId, payApplicationId: plan.applicationId, kind: SOURCE, status: 'completed', externalRef: sent.invoiceId, createdBy: ctx.userId, createdAt: at });
-    await db.update(payApplications).set({ transferStatus: 'synced', updatedAt: at }).where(mine);
+    await db.update(payApplications).set({ version: nextVersion, transferStatus: 'synced', updatedAt: at }).where(mine);
     await updateIntegration(db, ctx.orgId, { lastSyncAt: at });
     const work = plan.items.reduce((total, i) => total + i.work, 0);
     const stored = plan.items.reduce((total, i) => total + i.stored, 0);

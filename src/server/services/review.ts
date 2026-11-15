@@ -9,6 +9,7 @@ import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import { formatMoney } from '@/lib/money';
 import { formatDate } from '@/lib/utils';
 import type { DB } from '@/db';
+import { locked } from '@/db/tx';
 import {
   changeOrders,
   comments,
@@ -25,6 +26,7 @@ import {
   sovLines,
   subcontractors,
   users,
+  nextVersion,
 } from '@/db/schema';
 import { recordAudit } from '@/server/audit';
 import { assertCan, can, PermissionError, UserError, type Ctx } from '@/server/auth/permissions';
@@ -65,7 +67,7 @@ const appLabel = (app: App) => `application #${app.applicationNumber ?? '?'}`;
 
 export type HeaderPatch = Partial<Record<ClaimedField, number | null>> & { applicationNumber?: number | null; periodTo?: string | null };
 
-export async function updateHeader(db: DB, ctx: Ctx, appId: string, patch: HeaderPatch): Promise<void> {
+export const updateHeader = locked(async function updateHeader(db: DB, ctx: Ctx, appId: string, patch: HeaderPatch): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -100,7 +102,7 @@ export async function updateHeader(db: DB, ctx: Ctx, appId: string, patch: Heade
   }
   if (changes.length === 0) return;
 
-  await db.update(payApplications).set({ ...set, updatedAt: new Date() }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, ...set, updatedAt: new Date() }).where(eq(payApplications.id, appId));
   const show = (c: (typeof changes)[number], v: unknown) => (typeof v === 'number' && c.field !== 'applicationNumber' ? formatMoney(v) : v === null ? 'blank' : c.field === 'periodTo' ? formatDate(String(v)) : String(v));
   await recordAudit(db, {
     orgId: ctx.orgId,
@@ -113,15 +115,15 @@ export async function updateHeader(db: DB, ctx: Ctx, appId: string, patch: Heade
     data: { changes },
   });
   await runReconciliation(db, ctx.orgId, appId, { actor: ctx });
-}
+});
 
-export async function confirmSignature(db: DB, ctx: Ctx, appId: string, confirmed: boolean): Promise<void> {
+export const confirmSignature = locked(async function confirmSignature(db: DB, ctx: Ctx, appId: string, confirmed: boolean): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
   await db
     .update(payApplications)
-    .set({ signatureConfirmedAt: confirmed ? new Date() : null, signatureConfirmedBy: confirmed ? ctx.userId : null, updatedAt: new Date() })
+    .set({ version: nextVersion, signatureConfirmedAt: confirmed ? new Date() : null, signatureConfirmedBy: confirmed ? ctx.userId : null, updatedAt: new Date() })
     .where(eq(payApplications.id, appId));
   await recordAudit(db, {
     orgId: ctx.orgId,
@@ -133,14 +135,14 @@ export async function confirmSignature(db: DB, ctx: Ctx, appId: string, confirme
     summary: confirmed ? 'Confirmed by looking at the document that the pay application is signed' : 'Withdrew the confirmation that the pay application is signed',
   });
   await runReconciliation(db, ctx.orgId, appId, { actor: ctx });
-}
+});
 
 // ── Line items ──────────────────────────────────────────────────────────────
 
 export type LinePatch = Partial<Record<LineAmountField, number | null>> & { itemNo?: string | null; description?: string | null };
 export type EditKind = 'correction' | 'adjustment';
 
-export async function updateLine(db: DB, ctx: Ctx, lineId: string, patch: LinePatch, kind: EditKind, note?: string | null): Promise<void> {
+export const updateLine = locked(async function updateLine(db: DB, ctx: Ctx, lineId: string, patch: LinePatch, kind: EditKind, note?: string | null): Promise<void> {
   assertCan(ctx, 'application:review');
   const [line] = await db.select().from(payAppLines).where(and(eq(payAppLines.orgId, ctx.orgId), eq(payAppLines.id, lineId)));
   if (!line) throw new UserError('Line not found.');
@@ -195,9 +197,9 @@ export async function updateLine(db: DB, ctx: Ctx, lineId: string, patch: LinePa
     data: { kind, note: note ?? null, patch },
   });
   await runReconciliation(db, ctx.orgId, app.id, { actor: ctx });
-}
+});
 
-export async function addLine(db: DB, ctx: Ctx, appId: string, values: LinePatch): Promise<string> {
+export const addLine = locked(async function addLine(db: DB, ctx: Ctx, appId: string, values: LinePatch): Promise<string> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -246,9 +248,9 @@ export async function addLine(db: DB, ctx: Ctx, appId: string, values: LinePatch
   });
   await runReconciliation(db, ctx.orgId, appId, { actor: ctx });
   return id;
-}
+});
 
-export async function deleteLine(db: DB, ctx: Ctx, lineId: string): Promise<void> {
+export const deleteLine = locked(async function deleteLine(db: DB, ctx: Ctx, lineId: string): Promise<void> {
   assertCan(ctx, 'application:review');
   const [line] = await db.select().from(payAppLines).where(and(eq(payAppLines.orgId, ctx.orgId), eq(payAppLines.id, lineId)));
   if (!line) throw new UserError('Line not found.');
@@ -266,10 +268,10 @@ export async function deleteLine(db: DB, ctx: Ctx, lineId: string): Promise<void
     data: { line: { itemNo: line.itemNo, description: line.description, scheduledValue: line.scheduledValue, previous: line.previous, thisPeriod: line.thisPeriod, stored: line.stored, total: line.total } },
   });
   await runReconciliation(db, ctx.orgId, app.id, { actor: ctx });
-}
+});
 
 /** Point a submitted row at a contract line (or at nothing). */
-export async function setLineMatch(db: DB, ctx: Ctx, lineId: string, sovLineId: string | null): Promise<void> {
+export const setLineMatch = locked(async function setLineMatch(db: DB, ctx: Ctx, lineId: string, sovLineId: string | null): Promise<void> {
   assertCan(ctx, 'application:review');
   const [line] = await db.select().from(payAppLines).where(and(eq(payAppLines.orgId, ctx.orgId), eq(payAppLines.id, lineId)));
   if (!line) throw new UserError('Line not found.');
@@ -294,7 +296,7 @@ export async function setLineMatch(db: DB, ctx: Ctx, lineId: string, sovLineId: 
     summary: `Matched line ${line.itemNo ?? ''} ${line.description ?? ''} to ${label}`.replace(/\s+/g, ' '),
   });
   await runReconciliation(db, ctx.orgId, app.id, { actor: ctx });
-}
+});
 
 // ── Lien waivers ────────────────────────────────────────────────────────────
 
@@ -307,7 +309,7 @@ export type WaiverPatch = {
   signed?: Tri | null;
 };
 
-export async function updateWaiver(db: DB, ctx: Ctx, waiverId: string, patch: WaiverPatch): Promise<void> {
+export const updateWaiver = locked(async function updateWaiver(db: DB, ctx: Ctx, waiverId: string, patch: WaiverPatch): Promise<void> {
   assertCan(ctx, 'application:review');
   const [w] = await db.select().from(lienWaivers).where(and(eq(lienWaivers.orgId, ctx.orgId), eq(lienWaivers.id, waiverId)));
   if (!w) throw new UserError('Waiver not found.');
@@ -332,10 +334,10 @@ export async function updateWaiver(db: DB, ctx: Ctx, waiverId: string, patch: Wa
     data: { patch },
   });
   await runReconciliation(db, ctx.orgId, app.id, { actor: ctx });
-}
+});
 
 /** Record a waiver by hand, for a document that could not be read. */
-export async function addWaiver(db: DB, ctx: Ctx, appId: string, documentId: string, values: Required<Pick<WaiverPatch, 'waiverType'>> & WaiverPatch): Promise<string> {
+export const addWaiver = locked(async function addWaiver(db: DB, ctx: Ctx, appId: string, documentId: string, values: Required<Pick<WaiverPatch, 'waiverType'>> & WaiverPatch): Promise<string> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -373,7 +375,7 @@ export async function addWaiver(db: DB, ctx: Ctx, appId: string, documentId: str
   });
   await runReconciliation(db, ctx.orgId, appId, { actor: ctx });
   return id;
-}
+});
 
 // ── Findings ────────────────────────────────────────────────────────────────
 
@@ -384,7 +386,7 @@ export function canAcceptFinding(ctx: Ctx, f: { severity: string; needsQualified
   return can(ctx.role, 'application:review');
 }
 
-export async function acceptFinding(db: DB, ctx: Ctx, findingId: string, note: string, opts: { now?: Date } = {}): Promise<void> {
+export const acceptFinding = locked(async function acceptFinding(db: DB, ctx: Ctx, findingId: string, note: string, opts: { now?: Date } = {}): Promise<void> {
   const [f] = await db.select().from(findings).where(and(eq(findings.orgId, ctx.orgId), eq(findings.id, findingId)));
   if (!f) throw new UserError('Finding not found.');
   const app = await loadApp(db, ctx, f.payApplicationId);
@@ -407,9 +409,9 @@ export async function acceptFinding(db: DB, ctx: Ctx, findingId: string, note: s
     at: now,
   });
   await refreshCounts(db, app.id);
-}
+});
 
-export async function reopenFinding(db: DB, ctx: Ctx, findingId: string): Promise<void> {
+export const reopenFinding = locked(async function reopenFinding(db: DB, ctx: Ctx, findingId: string): Promise<void> {
   assertCan(ctx, 'application:review');
   const [f] = await db.select().from(findings).where(and(eq(findings.orgId, ctx.orgId), eq(findings.id, findingId)));
   if (!f) throw new UserError('Finding not found.');
@@ -427,13 +429,13 @@ export async function reopenFinding(db: DB, ctx: Ctx, findingId: string): Promis
     summary: `Reopened “${f.title}”`,
   });
   await refreshCounts(db, app.id);
-}
+});
 
 async function refreshCounts(db: DB, appId: string): Promise<void> {
   const rows = await db.select({ status: findings.status, severity: findings.severity }).from(findings).where(eq(findings.payApplicationId, appId));
   await db
     .update(payApplications)
-    .set({
+    .set({ version: nextVersion,
       openBlocking: rows.filter((r) => r.status === 'open' && r.severity === 'blocking').length,
       openWarnings: rows.filter((r) => r.status === 'open' && r.severity === 'warning').length,
       updatedAt: new Date(),
@@ -443,7 +445,7 @@ async function refreshCounts(db: DB, appId: string): Promise<void> {
 
 // ── Matching and contract-level resolutions ─────────────────────────────────
 
-export async function assignContract(db: DB, ctx: Ctx, appId: string, contractId: string): Promise<void> {
+export const assignContract = locked(async function assignContract(db: DB, ctx: Ctx, appId: string, contractId: string): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -457,7 +459,7 @@ export async function assignContract(db: DB, ctx: Ctx, appId: string, contractId
   }
   await db
     .update(payApplications)
-    .set({ contractId, projectId: contract.projectId, subcontractorId: contract.subcontractorId, status: app.status === 'needs_matching' ? 'needs_review' : app.status, updatedAt: new Date() })
+    .set({ version: nextVersion, contractId, projectId: contract.projectId, subcontractorId: contract.subcontractorId, status: app.status === 'needs_matching' ? 'needs_review' : app.status, updatedAt: new Date() })
     .where(eq(payApplications.id, appId));
   await recordAudit(db, {
     orgId: ctx.orgId,
@@ -470,13 +472,13 @@ export async function assignContract(db: DB, ctx: Ctx, appId: string, contractId
     data: { contractId, previousContractId: app.contractId },
   });
   await runReconciliation(db, ctx.orgId, appId, { actor: ctx });
-}
+});
 
 /**
  * For a contract that was already being billed before it was set up here:
  * take this application's "previous" figures as the opening balances.
  */
-export async function setOpeningBalances(db: DB, ctx: Ctx, appId: string): Promise<void> {
+export const setOpeningBalances = locked(async function setOpeningBalances(db: DB, ctx: Ctx, appId: string): Promise<void> {
   assertCan(ctx, 'application:approve');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -513,10 +515,10 @@ export async function setOpeningBalances(db: DB, ctx: Ctx, appId: string): Promi
     data: { baseline },
   });
   await rereconcileContract(db, ctx.orgId, app.contractId, { actor: ctx });
-}
+});
 
 /** For a contract with no schedule of values yet: adopt the one on this application. */
-export async function adoptSchedule(db: DB, ctx: Ctx, appId: string): Promise<void> {
+export const adoptSchedule = locked(async function adoptSchedule(db: DB, ctx: Ctx, appId: string): Promise<void> {
   assertCan(ctx, 'records:write');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -541,11 +543,11 @@ export async function adoptSchedule(db: DB, ctx: Ctx, appId: string): Promise<vo
     summary: `Adopted the schedule of values from ${appLabel(app)} as the contract’s schedule (${usable.length} lines, ${formatMoney(usable.reduce((a, l) => a + l.scheduledValue!, 0))})`,
   });
   await rereconcileContract(db, ctx.orgId, app.contractId, { actor: ctx });
-}
+});
 
 // ── Workflow ────────────────────────────────────────────────────────────────
 
-export async function assignReviewer(db: DB, ctx: Ctx, appId: string, userId: string | null, opts: { now?: Date } = {}): Promise<void> {
+export const assignReviewer = locked(async function assignReviewer(db: DB, ctx: Ctx, appId: string, userId: string | null, opts: { now?: Date } = {}): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   let name = 'nobody';
@@ -559,20 +561,20 @@ export async function assignReviewer(db: DB, ctx: Ctx, appId: string, userId: st
     name = m.name;
   }
   const now = opts.now ?? new Date();
-  await db.update(payApplications).set({ assigneeId: userId, updatedAt: now }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, assigneeId: userId, updatedAt: now }).where(eq(payApplications.id, appId));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'application.assigned', entityType: 'pay_application', entityId: appId, payApplicationId: appId, summary: `Assigned to ${name}`, data: { assigneeId: userId }, at: now });
   if (userId && userId !== ctx.userId) {
     await notifyUsers(db, ctx.orgId, [userId], { type: 'application.assigned', title: `${ctx.userName} assigned you ${appLabel(app)}`, href: `/applications/${appId}` }, now);
   }
-}
+});
 
-export async function submitForApproval(db: DB, ctx: Ctx, appId: string, note?: string | null, opts: { now?: Date } = {}): Promise<void> {
+export const submitForApproval = locked(async function submitForApproval(db: DB, ctx: Ctx, appId: string, note?: string | null, opts: { now?: Date } = {}): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   if (app.status !== 'needs_review') throw new UserError('Only applications in review can be submitted for approval.');
   if (!app.contractId) throw new UserError('Match the application to a contract first.');
   const now = opts.now ?? new Date();
-  await db.update(payApplications).set({ status: 'pending_approval', submittedForApprovalAt: now, submittedForApprovalBy: ctx.userId, updatedAt: now }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, status: 'pending_approval', submittedForApprovalAt: now, submittedForApprovalBy: ctx.userId, updatedAt: now }).where(eq(payApplications.id, appId));
   await recordAudit(db, {
     orgId: ctx.orgId,
     actor: ctx,
@@ -585,11 +587,11 @@ export async function submitForApproval(db: DB, ctx: Ctx, appId: string, note?: 
     at: now,
   });
   await notifyPermission(db, ctx.orgId, 'application:approve', { type: 'application.pending_approval', title: `${appLabel(app)} is waiting for your approval`, body: `Submitted by ${ctx.userName} at ${formatMoney(app.verifiedAmount)}`, href: `/applications/${appId}` }, { except: ctx.userId, at: now });
-}
+});
 
 export type ApproveInput = { note?: string | null; acknowledgeWarnings?: boolean; now?: Date };
 
-export async function approveApplication(db: DB, ctx: Ctx, appId: string, input: ApproveInput = {}): Promise<ApprovedRecord> {
+export const approveApplication = locked(async function approveApplication(db: DB, ctx: Ctx, appId: string, input: ApproveInput = {}): Promise<ApprovedRecord> {
   assertCan(ctx, 'application:approve');
   const now = input.now ?? new Date();
   let app = await loadApp(db, ctx, appId);
@@ -672,7 +674,7 @@ export async function approveApplication(db: DB, ctx: Ctx, appId: string, input:
 
   await db
     .update(payApplications)
-    .set({
+    .set({ version: nextVersion,
       status: 'approved',
       decidedAt: now,
       decidedBy: ctx.userId,
@@ -708,34 +710,34 @@ export async function approveApplication(db: DB, ctx: Ctx, appId: string, input:
   // Later applications on this contract now have a new "previous" basis.
   await rereconcileContract(db, ctx.orgId, contract!.id, { actor: ctx, now, except: appId });
   return record;
-}
+});
 
-export async function rejectApplication(db: DB, ctx: Ctx, appId: string, reason: string, opts: { now?: Date } = {}): Promise<void> {
+export const rejectApplication = locked(async function rejectApplication(db: DB, ctx: Ctx, appId: string, reason: string, opts: { now?: Date } = {}): Promise<void> {
   assertCan(ctx, 'application:approve');
   const app = await loadApp(db, ctx, appId);
   if (!['needs_review', 'pending_approval', 'on_hold', 'needs_matching'].includes(app.status)) throw new UserError('This application cannot be rejected in its current state.');
   if (reason.trim().length < 5) throw new UserError('Give the reason for rejecting. It is kept with the record and can be sent to the subcontractor.');
   const now = opts.now ?? new Date();
-  await db.update(payApplications).set({ status: 'rejected', decidedAt: now, decidedBy: ctx.userId, decisionNote: reason.trim(), holdSince: null, updatedAt: now }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, status: 'rejected', decidedAt: now, decidedBy: ctx.userId, decisionNote: reason.trim(), holdSince: null, updatedAt: now }).where(eq(payApplications.id, appId));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'application.rejected', entityType: 'pay_application', entityId: appId, payApplicationId: appId, summary: `Rejected ${appLabel(app)} — ${reason.trim()}`, data: { reason: reason.trim() }, at: now });
   await notifyUsers(db, ctx.orgId, [app.assigneeId, app.submittedForApprovalBy, app.submittedBy].filter((u) => u !== ctx.userId), { type: 'application.rejected', title: `${appLabel(app)} rejected`, body: reason.trim(), href: `/applications/${appId}` }, now);
   if (app.contractId) await rereconcileContract(db, ctx.orgId, app.contractId, { actor: ctx, now, except: appId });
-}
+});
 
-export async function voidApplication(db: DB, ctx: Ctx, appId: string, reason: string): Promise<void> {
+export const voidApplication = locked(async function voidApplication(db: DB, ctx: Ctx, appId: string, reason: string): Promise<void> {
   assertCan(ctx, 'application:approve');
   const app = await loadApp(db, ctx, appId);
   if (app.status === 'approved') throw new UserError('An approved application cannot be voided. Reopen it first.');
   if (app.status === 'void') return;
   if (reason.trim().length < 5) throw new UserError('Give the reason for voiding.');
   const now = new Date();
-  await db.update(payApplications).set({ status: 'void', decidedAt: now, decidedBy: ctx.userId, decisionNote: reason.trim(), updatedAt: now }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, status: 'void', decidedAt: now, decidedBy: ctx.userId, decisionNote: reason.trim(), updatedAt: now }).where(eq(payApplications.id, appId));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'application.voided', entityType: 'pay_application', entityId: appId, payApplicationId: appId, summary: `Voided ${appLabel(app)} — ${reason.trim()}`, data: { reason: reason.trim() }, at: now });
   if (app.contractId) await rereconcileContract(db, ctx.orgId, app.contractId, { actor: ctx, now, except: appId });
-}
+});
 
 /** Undo a decision. Not allowed once later billing depends on it or it has been pushed to another system. */
-export async function reopenApplication(db: DB, ctx: Ctx, appId: string, reason: string): Promise<void> {
+export const reopenApplication = locked(async function reopenApplication(db: DB, ctx: Ctx, appId: string, reason: string): Promise<void> {
   assertCan(ctx, 'application:approve');
   const app = await loadApp(db, ctx, appId);
   if (!['approved', 'rejected', 'void'].includes(app.status)) throw new UserError('Only a decided application can be reopened.');
@@ -749,7 +751,7 @@ export async function reopenApplication(db: DB, ctx: Ctx, appId: string, reason:
   const now = new Date();
   await db
     .update(payApplications)
-    .set({ status: app.contractId ? 'needs_review' : 'needs_matching', decidedAt: null, decidedBy: null, decisionNote: null, approvedAmount: null, approvedRetainage: null, approvedRecord: null, transferStatus: 'none', submittedForApprovalAt: null, submittedForApprovalBy: null, updatedAt: now })
+    .set({ version: nextVersion, status: app.contractId ? 'needs_review' : 'needs_matching', decidedAt: null, decidedBy: null, decisionNote: null, approvedAmount: null, approvedRetainage: null, approvedRecord: null, transferStatus: 'none', submittedForApprovalAt: null, submittedForApprovalBy: null, updatedAt: now })
     .where(eq(payApplications.id, appId));
   await recordAudit(db, {
     orgId: ctx.orgId,
@@ -766,7 +768,7 @@ export async function reopenApplication(db: DB, ctx: Ctx, appId: string, reason:
     await runReconciliation(db, ctx.orgId, appId, { actor: ctx, now });
     await rereconcileContract(db, ctx.orgId, app.contractId, { actor: ctx, now, except: appId });
   }
-}
+});
 
 // ── Messages to the subcontractor ───────────────────────────────────────────
 
@@ -820,7 +822,7 @@ export async function sendSubcontractorMessage(db: DB, ctx: Ctx, appId: string, 
   });
 
   const hold = input.hold && (OPEN_STATUSES as string[]).includes(app.status) && app.status !== 'needs_matching';
-  if (hold) await db.update(payApplications).set({ status: 'on_hold', holdSince: now, updatedAt: now }).where(eq(payApplications.id, appId));
+  if (hold) await db.update(payApplications).set({ version: nextVersion, status: 'on_hold', holdSince: now, updatedAt: now }).where(eq(payApplications.id, appId));
 
   const delivery = result.status === 'sent' ? `Emailed ${to}` : result.status === 'failed' ? `Email to ${to} FAILED to send` : `Drafted a message to ${to} (not sent: email delivery is not configured)`;
   await recordAudit(db, {
@@ -840,16 +842,16 @@ export async function sendSubcontractorMessage(db: DB, ctx: Ctx, appId: string, 
   return { status: result.status, detail: result.status === 'failed' ? result.error : result.status === 'not_sent' ? result.reason : null };
 }
 
-export async function resumeReview(db: DB, ctx: Ctx, appId: string): Promise<void> {
+export const resumeReview = locked(async function resumeReview(db: DB, ctx: Ctx, appId: string): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   if (app.status !== 'on_hold' && app.status !== 'pending_approval') throw new UserError('This application is not on hold or pending approval.');
   const now = new Date();
-  await db.update(payApplications).set({ status: 'needs_review', holdSince: null, submittedForApprovalAt: null, submittedForApprovalBy: null, updatedAt: now }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, status: 'needs_review', holdSince: null, submittedForApprovalAt: null, submittedForApprovalBy: null, updatedAt: now }).where(eq(payApplications.id, appId));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'application.resumed', entityType: 'pay_application', entityId: appId, payApplicationId: appId, summary: app.status === 'on_hold' ? 'Took the application off hold and resumed review' : 'Returned the application to review', at: now });
-}
+});
 
-export async function addComment(db: DB, ctx: Ctx, appId: string, body: string): Promise<void> {
+export const addComment = locked(async function addComment(db: DB, ctx: Ctx, appId: string, body: string): Promise<void> {
   if (ctx.role === 'viewer') throw new PermissionError('application:upload');
   const app = await loadApp(db, ctx, appId);
   const text = body.trim();
@@ -859,4 +861,4 @@ export async function addComment(db: DB, ctx: Ctx, appId: string, body: string):
   await db.insert(comments).values({ id: newId('cmt'), orgId: ctx.orgId, payApplicationId: appId, userId: ctx.userId, body: text, createdAt: now });
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'comment.added', entityType: 'pay_application', entityId: appId, payApplicationId: appId, summary: `Commented: ${text.length > 140 ? `${text.slice(0, 140)}…` : text}`, at: now });
   await notifyUsers(db, ctx.orgId, [app.assigneeId, app.submittedForApprovalBy].filter((u) => u !== ctx.userId), { type: 'comment.added', title: `${ctx.userName} commented on ${appLabel(app)}`, body: text.slice(0, 200), href: `/applications/${appId}` }, now);
-}
+});

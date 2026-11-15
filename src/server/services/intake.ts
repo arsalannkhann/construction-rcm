@@ -9,7 +9,8 @@
 import path from 'node:path';
 import { and, asc, eq } from 'drizzle-orm';
 import type { DB } from '@/db';
-import { contracts, documents, extractions, lienWaivers, payAppLines, payApplications, projects, sovLines, subcontractors } from '@/db/schema';
+import { locked } from '@/db/tx';
+import { contracts, documents, extractions, lienWaivers, payAppLines, payApplications, projects, sovLines, subcontractors, nextVersion } from '@/db/schema';
 import { recordAudit, type AuditActor } from '@/server/audit';
 import { assertCan, UserError, type Ctx } from '@/server/auth/permissions';
 import { extractDocument, type ExtractOptions } from '@/server/documents/extract';
@@ -93,7 +94,7 @@ export type CreateApplicationInput = {
 };
 
 /** Record a new submission and queue it for processing. */
-export async function createApplication(db: DB, actor: IntakeActor, input: CreateApplicationInput): Promise<{ id: string }> {
+export const createApplication = locked(async function createApplication(db: DB, actor: IntakeActor, input: CreateApplicationInput): Promise<{ id: string }> {
   if (!isSystem(actor)) assertCan(actor, 'application:upload');
   validateFiles(input.files);
   const orgId = actor.orgId;
@@ -140,10 +141,10 @@ export async function createApplication(db: DB, actor: IntakeActor, input: Creat
 
   if (!input.defer) await enqueueJob(db, orgId, 'process_application', { applicationId: id });
   return { id };
-}
+});
 
 /** Attach further documents (for example a corrected resubmission) and re-read the whole package. */
-export async function addDocuments(db: DB, ctx: Ctx, appId: string, files: IncomingFile[], opts: { defer?: boolean; now?: Date } = {}): Promise<void> {
+export const addDocuments = locked(async function addDocuments(db: DB, ctx: Ctx, appId: string, files: IncomingFile[], opts: { defer?: boolean; now?: Date } = {}): Promise<void> {
   assertCan(ctx, 'application:upload');
   validateFiles(files);
   const [app] = await db.select().from(payApplications).where(and(eq(payApplications.orgId, ctx.orgId), eq(payApplications.id, appId)));
@@ -151,7 +152,7 @@ export async function addDocuments(db: DB, ctx: Ctx, appId: string, files: Incom
   if (['approved', 'rejected', 'void'].includes(app.status)) throw new UserError('This application has been decided. Reopen it before adding documents.');
   const at = opts.now ?? new Date();
   const stored = await storeDocuments(db, ctx.orgId, appId, files, 'upload', ctx.userId, at);
-  await db.update(payApplications).set({ status: 'processing', processingError: null, holdSince: null, updatedAt: at }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, status: 'processing', processingError: null, holdSince: null, updatedAt: at }).where(eq(payApplications.id, appId));
   await recordAudit(db, {
     orgId: ctx.orgId,
     actor: ctx,
@@ -164,9 +165,9 @@ export async function addDocuments(db: DB, ctx: Ctx, appId: string, files: Incom
     at,
   });
   if (!opts.defer) await enqueueJob(db, ctx.orgId, 'process_application', { applicationId: appId });
-}
+});
 
-export async function removeDocument(db: DB, ctx: Ctx, documentId: string, opts: { defer?: boolean } = {}): Promise<void> {
+export const removeDocument = locked(async function removeDocument(db: DB, ctx: Ctx, documentId: string, opts: { defer?: boolean } = {}): Promise<void> {
   assertCan(ctx, 'application:review');
   const [doc] = await db.select().from(documents).where(and(eq(documents.orgId, ctx.orgId), eq(documents.id, documentId)));
   if (!doc?.payApplicationId) throw new UserError('Document not found.');
@@ -176,7 +177,7 @@ export async function removeDocument(db: DB, ctx: Ctx, documentId: string, opts:
   if (remaining.length <= 1) throw new UserError('An application needs at least one document. Void the application instead.');
   // The stored original is kept (content-addressed); only its link to this application is removed.
   await db.delete(documents).where(eq(documents.id, documentId));
-  await db.update(payApplications).set({ status: 'processing', processingError: null, updatedAt: new Date() }).where(eq(payApplications.id, app.id));
+  await db.update(payApplications).set({ version: nextVersion, status: 'processing', processingError: null, updatedAt: new Date() }).where(eq(payApplications.id, app.id));
   await recordAudit(db, {
     orgId: ctx.orgId,
     actor: ctx,
@@ -188,7 +189,7 @@ export async function removeDocument(db: DB, ctx: Ctx, documentId: string, opts:
     data: { filename: doc.filename, sha256: doc.sha256 },
   });
   if (!opts.defer) await enqueueJob(db, ctx.orgId, 'process_application', { applicationId: app.id });
-}
+});
 
 // ── Processing ──────────────────────────────────────────────────────────────
 
@@ -363,7 +364,7 @@ export async function processApplication(db: DB, orgId: string, appId: string, o
     const status = contract ? 'needs_review' : 'needs_matching';
     await db
       .update(payApplications)
-      .set({
+      .set({ version: nextVersion,
         contractId: contract?.id ?? null,
         projectId: contract?.projectId ?? null,
         subcontractorId: contract?.subcontractorId ?? null,
@@ -435,7 +436,7 @@ export async function processApplication(db: DB, orgId: string, appId: string, o
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await db.update(payApplications).set({ processingError: message, updatedAt: new Date() }).where(eq(payApplications.id, appId));
+    await db.update(payApplications).set({ version: nextVersion, processingError: message, updatedAt: new Date() }).where(eq(payApplications.id, appId));
     throw err;
   }
 }
@@ -445,11 +446,11 @@ registerJobHandler('process_application', async (db, orgId, payload) => {
 });
 
 /** Put an application whose processing failed back on the queue. */
-export async function retryProcessing(db: DB, ctx: Ctx, appId: string): Promise<void> {
+export const retryProcessing = locked(async function retryProcessing(db: DB, ctx: Ctx, appId: string): Promise<void> {
   assertCan(ctx, 'application:upload');
   const [app] = await db.select().from(payApplications).where(and(eq(payApplications.orgId, ctx.orgId), eq(payApplications.id, appId)));
   if (!app) throw new UserError('Application not found.');
   if (app.status !== 'processing') throw new UserError('This application is not waiting on processing.');
-  await db.update(payApplications).set({ processingError: null, updatedAt: new Date() }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, processingError: null, updatedAt: new Date() }).where(eq(payApplications.id, appId));
   await enqueueJob(db, ctx.orgId, 'process_application', { applicationId: appId });
-}
+});
