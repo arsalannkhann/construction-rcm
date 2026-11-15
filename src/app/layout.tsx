@@ -5,7 +5,7 @@ import { Toaster } from 'sonner';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: { default: 'Construction RCM', template: '%s · Construction RCM' },
+  title: { default: 'Zephric', template: '%s · Zephric' },
   description: 'Subcontractor billing intake, verification and approval for general contractors.',
 };
 
