@@ -556,11 +556,12 @@ its documented API.
 
 ## What is and is not verified
 
-Status on 2026-11-15, branch `phase-2-pilot-readiness`.
+Status on 2026-11-15, `main`. The phase as a whole is summarised in
+[docs/phase-2-report.md](docs/phase-2-report.md).
 
-**Verified by automated tests.** `pnpm test`: 422 passed, 3 skipped (the
+**Verified by automated tests.** `pnpm test`: 426 passed, 3 skipped (the
 skipped tests need a PostgreSQL server). `pnpm test:pg` on PostgreSQL 18.6:
-425 passed. `pnpm typecheck` is clean and `pnpm build` succeeds, on Node 22.
+429 passed. `pnpm typecheck` is clean and `pnpm build` succeeds, on Node 22.
 Covered:
 
 - Money parsing and rounding; every reconciliation check, including stepped
@@ -627,7 +628,7 @@ were not available:**
 | Two-step, rejection and the schedule on the live site | Two-step verification and rejecting an application have not been run on the live deployment. The daily scheduled run has not been seen to fire. |
 | Claude reading real documents | Never called live (no API key). Accuracy on real pay applications is unmeasured. |
 | Real subcontractor documents | None available. The evaluation harness is ready (`pnpm eval:extraction`, `eval/real/README.md`); scores on the synthetic corpus are a regression signal only. How to measure it, the synthetic results and a pilot protocol: [docs/extraction-evaluation.md](docs/extraction-evaluation.md). |
-| Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`). |
+| Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`); the sandbox procedure is [docs/procore-validation.md](docs/procore-validation.md). Known defect: a push whose answer is lost is recorded as failed and can be sent again, which may create a second draft invoice. |
 | Outbound email (Resend) | Never sent. |
 | Inbound email | The webhook logic is tested; no provider has been pointed at it. |
 
@@ -659,7 +660,9 @@ were not available:**
   request limit; browser uploads are not limited this way.
 - **Procore push** covers contract line items on subcontracts imported from
   Procore. It does not push change-order billing or unit-price contracts, and
-  needs an existing Procore billing period.
+  needs an existing Procore billing period. It does not yet check Procore for
+  an existing invoice before creating one, so after a push whose answer was
+  lost, look in Procore before sending again.
 - **Payments are not tracked**, so "unconditional waiver for the previous
   payment" is a policy check, not a check against a payment.
 - **CSV export is generic**, not an import file for a specific accounting system.
@@ -709,7 +712,7 @@ supabase/                the same migrations for Supabase's GitHub integration (
 eval/                    extraction evaluation: synthetic gate, truth template, real documents (git-ignored)
 scripts/                 seed, reset-password, eval-extraction, samples, migration sync
 tests/                   Vitest
-docs/                    operations, authentication, conventions, extraction evaluation, Procore API notes
+docs/                    operations, authentication, conventions, extraction evaluation, Procore notes and validation, Phase 2 report
 vercel.json              region and scheduled run for Vercel
 ```
 
@@ -722,3 +725,5 @@ vercel.json              region and scheduled run for Vercel
 | [docs/extraction-evaluation.md](docs/extraction-evaluation.md) | Measuring reading accuracy, the truth format, the regression gate, synthetic results, the pilot protocol |
 | [docs/conventions.md](docs/conventions.md) | Code conventions for contributors |
 | [docs/procore-api-notes.md](docs/procore-api-notes.md) | What the Procore integration relies on in Procore's public API |
+| [docs/procore-validation.md](docs/procore-validation.md) | The procedure for validating the Procore integration against a developer sandbox |
+| [docs/phase-2-report.md](docs/phase-2-report.md) | Phase 2 report: issues found, changes, what is verified, remaining risks, pilot steps |
