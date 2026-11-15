@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, FormError, Input } from '@/components/ui/form';
@@ -20,7 +21,8 @@ export function LoginForm() {
         start(async () => {
           const result = await loginAction({ email, password });
           if (!result.ok) setError(result.error);
-          else window.location.assign('/');
+          // Into the app (which sends anyone who still has something to set up to the right page), or to the second step.
+          else window.location.assign(result.data === 'verify' ? '/login/verify' : '/overview');
         });
       }}
     >
@@ -28,9 +30,16 @@ export function LoginForm() {
       <Field label="Work email">
         <Input type="email" name="email" autoComplete="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} className="h-9" />
       </Field>
-      <Field label="Password">
-        <Input type="password" name="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="h-9" />
-      </Field>
+      <div>
+        <Field label="Password">
+          <Input type="password" name="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="h-9" />
+        </Field>
+        <div className="mt-1.5 text-right">
+          <Link href="/forgot-password" className="text-xs font-medium text-accent hover:underline">
+            Forgot password?
+          </Link>
+        </div>
+      </div>
       <Button type="submit" variant="primary" size="lg" loading={pending} className="w-full">
         Sign in
       </Button>
