@@ -197,9 +197,10 @@ fallback; set `RCM_EXTRACTION_FALLBACKS=off` to disable that.
 Status on 2026-11-15, branch `phase-2-pilot-readiness`.
 
 **Verified by automated tests.** `pnpm test` runs the suite on the embedded
-database (PGlite): 378 passed, 3 skipped (the skipped tests need a PostgreSQL
+database (PGlite): 391 passed, 3 skipped (the skipped tests need a PostgreSQL
 server). `pnpm test:pg` runs the same suite on a real PostgreSQL 18 server:
-381 passed. `pnpm typecheck` is clean. Covered:
+394 passed. `pnpm typecheck` is clean and `pnpm build` succeeds. These runs were
+made on a Linux host with Node 22. Covered:
 
 - Money parsing and rounding; every reconciliation check, including stepped
   retainage, releases and deductive change orders; waiver pre-screening and
@@ -218,6 +219,10 @@ server). `pnpm test:pg` runs the same suite on a real PostgreSQL 18 server:
 - Database connections: TLS verification against a real PostgreSQL server
   with a generated CA, and both migration modes.
 - Email intake (one processing per message, sender check); exports.
+- Serverless hosting: the request-driven queue and its time budget, the
+  scheduler endpoint's secret check, and large files sent in parts (joined in
+  order, retried parts, missing parts refused, parts invisible to other members
+  and organisations, expiry) (`tests/serverless.test.ts`).
 - The AI engine's parsing, grounding and failure handling, with a **stubbed**
   client. The Procore client, OAuth renewal and push, against a **local
   emulator** of the documented API.
@@ -239,7 +244,8 @@ another organisation, and the password prompt before two-step setup.
 
 | What | Result |
 |---|---|
-| Supabase project `construction-rcm` | Schema applied (migrations 0000–0003, recorded under the repository's versions). The Data API was probed from outside with both public keys and refuses every table. **The app itself has not yet connected to it**: that needs the database password in `.env.local` (see `docs/operations.md`, "Use Supabase as the database"). |
+| Supabase project `construction-rcm` | Schema applied (migrations 0000–0004, recorded under the repository's versions). The Data API was probed from outside with both public keys and refuses every table. **The app itself has not yet connected to it**: that needs the database password, which only the project owner has. |
+| Vercel project `construction-rcm` | Production deployment of this branch at https://construction-rcm.vercel.app, built on Node 22 and served from Singapore (sin1, next to the database). Checked live: the sign-in page loads; `/api/health` answers 503 and names the missing `DATABASE_URL`; `/api/jobs/run` refuses to run without `CRON_SECRET`. **Nothing that needs the database has run there yet**: `DATABASE_URL`, `DATABASE_CA_CERT`, `RCM_SECRET_KEY` and `CRON_SECRET` must be added by the owner (`docs/operations.md`, "Deploy on Vercel"). |
 | Docker image and Compose stack | Built and run to a healthy state on 2026-11-15, before that day's authentication changes; not rebuilt since. |
 
 **Not verified, because it needs credentials, documents or infrastructure that
@@ -252,7 +258,7 @@ were not available:**
 | Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`). |
 | Outbound email (Resend) | Never sent. |
 | Inbound email | The webhook logic is tested; no provider has been pointed at it. |
-| A production deployment | None made. |
+| The live deployment working end to end | Sign-up, two-step verification, uploads over 4 MB, processing and the daily scheduled run have not run on Vercel against Supabase (secrets not yet set). The TLS connection from Vercel to Supabase's pooler is untested. |
 
 ## Limitations and risks
 
