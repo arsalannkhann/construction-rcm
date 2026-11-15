@@ -42,7 +42,9 @@ export async function extractDocument(
   if (file.mimeType === 'application/pdf') {
     try {
       pdf = await readPdfText(file.bytes);
-    } catch {
+    } catch (err) {
+      // Usually the file, but also the reader itself failing to load: log the cause so the two can be told apart.
+      console.error(`[extract] could not open ${file.filename} as a PDF: ${err instanceof Error ? err.message : String(err)}`);
       return done({ status: 'failed', detail: 'This file could not be opened as a PDF. It may be damaged or password-protected.', result: null, engine: null, model: null, pageCount: null, hasTextLayer: null });
     }
   }
