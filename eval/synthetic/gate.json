@@ -1,0 +1,16 @@
+{
+  "text-layer": {
+    "maxConfidentlyWrong": 0,
+    "min": {
+      "pageType": 0.954,
+      "header": 0.906,
+      "identity": 0.931,
+      "lineRecall": 0.912,
+      "lineCells": 0.911,
+      "lineTotal": 0.917,
+      "waiver": 0.953,
+      "flags": 1,
+      "outcomes": 1
+    }
+  }
+}

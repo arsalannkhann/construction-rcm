@@ -90,6 +90,11 @@ describe('ground truth files', () => {
     expect(loaded.cases[0]!.file.bytes).toEqual(cases[0]!.file.bytes);
   });
 
+  it('the template people start from is itself a valid truth file', () => {
+    const file = path.resolve(__dirname, '../eval/truth-template.json');
+    expect(() => parseTruth(JSON.parse(fs.readFileSync(file, 'utf8')), 'eval/truth-template.json')).not.toThrow();
+  });
+
   it('every synthetic case has a valid truth file', async () => {
     for (const c of syntheticCases().slice(0, 12)) {
       const built = await c.build();

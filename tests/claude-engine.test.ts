@@ -205,6 +205,38 @@ describe('AI engine: turning a model answer into figures', () => {
     expect(due.page).toBe(1);
     expect(due.bbox ?? null).toBeNull();
     expect(due.confidence).toBe(0.95);
+    expect(r.pageNumbering).toBeUndefined();
+  });
+
+  const grandTotal = (o: ModelOutput, total = '225,000.00') => {
+    o.line_totals = { scheduled_value: '500,000.00', previous: '110,000.00', this_period: '105,000.00', stored: '10,000.00', total, balance: '275,000.00', retainage: '22,500.00' };
+  };
+
+  it('reports the printed grand-total row, placed on the page when the text layer has the same row', () => {
+    const r = fromModelOutput(answer((o) => grandTotal(o)), 'claude-opus-5-5', pdf);
+    expect(r.scheduleGrandTotal).toMatchObject({ page: 2, confidence: 0.97, values: { total: D(225000), thisPeriod: D(105000), retainage: D(22500) } });
+    expect(r.scheduleGrandTotal!.bbox).toHaveLength(4);
+    expect(r.lineTotals!.total).toBe(D(225000));
+  });
+
+  it('marks a grand total the text layer does not show, and never places it', () => {
+    const r = fromModelOutput(answer((o) => grandTotal(o, '252,000.00')), 'claude-opus-5-5', pdf);
+    expect(r.scheduleGrandTotal!.values.total).toBe(D(252000));
+    expect(r.scheduleGrandTotal!.confidence).toBeLessThan(0.5);
+    expect(r.scheduleGrandTotal!.bbox).toBeNull();
+    expect(r.notes.join(' ')).toMatch(/grand-total row differs from the text layer/);
+    // Without a text layer there is nothing to check it against: reported, below the review threshold.
+    expect(fromModelOutput(answer((o) => grandTotal(o)), 'claude-opus-5-5', null).scheduleGrandTotal!.confidence).toBe(0.7);
+  });
+
+  it('takes printed page numbers and conflicts from the text layer, not from the model', () => {
+    const r = fromModelOutput(answer(), 'claude-opus-5-5', pdf);
+    expect(r.pageNumbering?.map((p) => [p.page, p.number, p.of])).toEqual([
+      [1, 1, 2],
+      [2, 2, 2],
+    ]);
+    expect(r.conflicts).toBeUndefined();
+    expect(r.unreadablePages).toBeUndefined();
   });
 });
 

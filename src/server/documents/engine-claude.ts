@@ -29,7 +29,7 @@ import type {
   Tri,
 } from '@/server/types';
 import { CLAIMED_FIELDS, CLAIMED_FIELD_LABEL, DOC_TYPES, LINE_AMOUNT_FIELDS, WAIVER_TYPES } from '@/server/types';
-import { AMOUNT_LABELS, extractFromText, locateAmount } from './engine-text';
+import { AMOUNT_LABELS, extractFromText, locateAmount, pageFacts } from './engine-text';
 import type { PdfText } from './pdf-text';
 
 export const CLAUDE_ENGINE = 'claude';
@@ -338,6 +338,32 @@ export function fromModelOutput(out: ModelOutput, model: string, pdf: PdfText | 
         balance: lineAmount(t.balance),
         retainage: lineAmount(t.retainage),
       };
+      // The printed grand-total row, tied to its place on the page when the text layer has the same row.
+      const values = result.lineTotals;
+      const theirs = second?.scheduleGrandTotal;
+      const read = LINE_AMOUNT_FIELDS.filter((f) => values[f] !== null && values[f] !== undefined);
+      if (read.length > 0) {
+        const agrees = !!theirs && read.every((f) => theirs.values[f] === undefined || theirs.values[f] === null || theirs.values[f] === values[f]);
+        if (theirs && !agrees) notes.push('The AI reading of the schedule’s grand-total row differs from the text layer. Check the totals row against the sheet.');
+        result.scheduleGrandTotal = {
+          page: theirs?.page ?? null,
+          label: theirs?.label ?? null,
+          bbox: agrees ? (theirs?.bbox ?? null) : null,
+          confidence: !theirs ? (grounded ? 0.45 : 0.7) : agrees ? 0.97 : 0.45,
+          values,
+        };
+      }
+    }
+  }
+
+  // Facts only the text layer can establish: page numbers printed in the margins, and the same value printed
+  // differently in two places. The AI's reading of the page images is not asked for these.
+  if (grounded) {
+    const facts = pageFacts(grounded);
+    if (facts.pageNumbering.length > 0) result.pageNumbering = facts.pageNumbering;
+    if (second?.conflicts?.length) {
+      result.conflicts = second.conflicts;
+      notes.push(`The text layer shows ${second.conflicts.length === 1 ? 'a value' : 'values'} printed differently in two places (${second.conflicts.map((c) => c.kind.replace(/_/g, ' ')).join(', ')}). See the findings.`);
     }
   }
 

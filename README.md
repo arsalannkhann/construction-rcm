@@ -197,14 +197,21 @@ fallback; set `RCM_EXTRACTION_FALLBACKS=off` to disable that.
 Status on 2026-11-15, branch `phase-2-pilot-readiness`.
 
 **Verified by automated tests.** `pnpm test` runs the suite on the embedded
-database (PGlite): 391 passed, 3 skipped (the skipped tests need a PostgreSQL
+database (PGlite): 422 passed, 3 skipped (the skipped tests need a PostgreSQL
 server). `pnpm test:pg` runs the same suite on a real PostgreSQL 18 server:
-394 passed. `pnpm typecheck` is clean and `pnpm build` succeeds. These runs were
-made on a Linux host with Node 22. Covered:
+425 passed. `pnpm typecheck` is clean and `pnpm build` succeeds, on Node 22.
+Covered:
 
 - Money parsing and rounding; every reconciliation check, including stepped
   retainage, releases and deductive change orders; waiver pre-screening and
   statutory form recognition.
+- What the reading saw besides the figures: schedule rows against the printed
+  grand total (integer cents, column by column), gaps in the printed page
+  numbering, pages with no text layer, and the same figure or application
+  number printed differently in two places. Each blocks until a person looks.
+- The synthetic extraction gate: the whole generated corpus through the text
+  reader with no confidently wrong value allowed, plus pinned limitations
+  (handwritten corrections, European number formats, amounts in words only).
 - Reading generated Texas, California and Florida packages from real PDF bytes.
 - The full workflow (upload → read → match → reconcile → correct or override →
   approve → export), stale decisions refused, atomic writes that leave nothing
@@ -254,7 +261,7 @@ were not available:**
 | Area | State |
 |---|---|
 | Claude reading real documents | Never called live (no API key). Accuracy on real pay applications is unmeasured. |
-| Real subcontractor documents | None available. The evaluation harness is ready (`pnpm eval:extraction`, `eval/real/README.md`); scores on the synthetic corpus are a regression signal only. |
+| Real subcontractor documents | None available. The evaluation harness is ready (`pnpm eval:extraction`, `eval/real/README.md`); scores on the synthetic corpus are a regression signal only. How to measure it, the synthetic results and a pilot protocol: [docs/extraction-evaluation.md](docs/extraction-evaluation.md). |
 | Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`). |
 | Outbound email (Resend) | Never sent. |
 | Inbound email | The webhook logic is tested; no provider has been pointed at it. |
