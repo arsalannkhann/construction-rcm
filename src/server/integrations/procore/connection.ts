@@ -6,6 +6,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { DB } from '@/db';
 import { integrations, users } from '@/db/schema';
+import { withOrgLock } from '@/db/tx';
 import { recordAudit } from '@/server/audit';
 import { assertCan, UserError, type Ctx } from '@/server/auth/permissions';
 import { procoreConfig, type ProcoreEnv } from '@/server/config';
@@ -21,6 +22,7 @@ import {
   loadIntegration,
   NOT_CONFIGURED,
   NOT_CONNECTED,
+  patchConfig,
   ProcoreConnectionError,
   readTokens,
   RECONNECT,
@@ -94,7 +96,7 @@ export async function friendly<T>(fn: () => Promise<T>): Promise<T> {
 
 function clientFor(db: DB, orgId: string, companyId: string | null): ProcoreClient {
   const cfg = requireProcoreConfig();
-  return createProcoreClient({ apiBase: cfg.apiBase, companyId, token: (opts) => getAccessToken(db, orgId, opts) });
+  return createProcoreClient({ apiBase: cfg.apiBase, companyId, limiterKey: `${cfg.apiBase}|${orgId}`, token: (opts) => getAccessToken(db, orgId, opts) });
 }
 
 /** A client bound to the organisation's connection and chosen company. */
@@ -177,14 +179,25 @@ export async function completeConnect(db: DB, ctx: Ctx, code: string): Promise<v
     throw err;
   }
 
-  const previous = await loadIntegration(db, ctx.orgId);
-  // Reconnecting after an expired authorization keeps the company that imported records came from.
-  const previousConfig = previous ? integrationConfig(previous) : null;
-  const keepCompanyId = previousConfig && previousConfig.env === cfg.env ? previousConfig.companyId : null;
-  const values = { status: 'connected', config: { env: cfg.env, companyId: null, companyName: null }, credentials: encryptJson(tokens), lastError: null, connectedBy: ctx.userId };
-  const integrationId = previous?.id ?? newId('int');
-  if (previous) await updateIntegration(db, ctx.orgId, values);
-  else await db.insert(integrations).values({ id: integrationId, orgId: ctx.orgId, provider: 'procore', ...values });
+  // Store the new authorization before anything else can fail: the code is spent now.
+  const { integrationId, keepCompanyId } = await withOrgLock(db, ctx.orgId, async (tx) => {
+    const previous = await loadIntegration(tx, ctx.orgId);
+    // Reconnecting after an expired authorization keeps the company that imported records came from,
+    // and the record of earlier pushes, as long as it is the same Procore environment.
+    const previousConfig = previous ? integrationConfig(previous) : null;
+    const sameEnv = previousConfig?.env === cfg.env;
+    const values = {
+      status: 'connected',
+      config: patchConfig(sameEnv ? previous : null, { env: cfg.env, companyId: null, companyName: null }),
+      credentials: encryptJson(tokens),
+      lastError: null,
+      connectedBy: ctx.userId,
+    };
+    const id = previous?.id ?? newId('int');
+    if (previous) await updateIntegration(tx, ctx.orgId, values);
+    else await tx.insert(integrations).values({ id, orgId: ctx.orgId, provider: 'procore', ...values });
+    return { integrationId: id, keepCompanyId: sameEnv ? previousConfig!.companyId : null };
+  });
 
   let company: ProcoreCompany | null = null;
   let companyCount: number | null = null;
@@ -199,16 +212,19 @@ export async function completeConnect(db: DB, ctx: Ctx, code: string): Promise<v
     // The authorization is stored and good; the user can still pick a company once Procore answers.
     note = `Connected, but the list of Procore companies could not be loaded. ${message}`;
   }
-  await updateIntegration(db, ctx.orgId, { config: { env: cfg.env, companyId: company?.id ?? null, companyName: company?.name ?? null }, lastError: note });
 
-  await recordAudit(db, {
-    orgId: ctx.orgId,
-    actor: ctx,
-    action: 'integration.connected',
-    entityType: 'integration',
-    entityId: integrationId,
-    summary: `Connected Procore (${cfg.env})${company ? `, company ${company.name}` : companyCount === null ? '; companies could not be listed yet' : companyCount === 0 ? '; the Procore login has no active company' : `; ${companyCount} companies available, none chosen yet`}`,
-    data: { provider: 'procore', env: cfg.env, companyId: company?.id ?? null, companyName: company?.name ?? null },
+  await withOrgLock(db, ctx.orgId, async (tx) => {
+    const row = await loadIntegration(tx, ctx.orgId);
+    await updateIntegration(tx, ctx.orgId, { config: patchConfig(row, { env: cfg.env, companyId: company?.id ?? null, companyName: company?.name ?? null }), lastError: note });
+    await recordAudit(tx, {
+      orgId: ctx.orgId,
+      actor: ctx,
+      action: 'integration.connected',
+      entityType: 'integration',
+      entityId: integrationId,
+      summary: `Connected Procore (${cfg.env})${company ? `, company ${company.name}` : companyCount === null ? '; companies could not be listed yet' : companyCount === 0 ? '; the Procore login has no active company' : `; ${companyCount} companies available, none chosen yet`}`,
+      data: { provider: 'procore', env: cfg.env, companyId: company?.id ?? null, companyName: company?.name ?? null },
+    });
   });
 }
 
@@ -221,49 +237,75 @@ export async function selectCompany(db: DB, ctx: Ctx, companyId: string): Promis
   assertCan(ctx, 'integrations:manage');
   const id = procoreId(companyId);
   if (!id) throw new UserError('Choose a Procore company.');
-  // Only a company the connected login can actually see may be chosen.
+  // Only a company the connected login can actually see may be chosen. Asked before any lock is taken.
   const company = (await listCompanies(db, ctx)).find((c) => c.id === id);
   if (!company) throw new UserError('That company is not available to the connected Procore login.');
-  const row = await loadIntegration(db, ctx.orgId);
-  if (!row) throw new UserError(NOT_CONNECTED);
-  const previous = integrationConfig(row);
-  if (previous.companyId === company.id && previous.companyName === company.name) return;
-  await updateIntegration(db, ctx.orgId, { config: { env: previous.env, companyId: company.id, companyName: company.name } });
-  await recordAudit(db, {
-    orgId: ctx.orgId,
-    actor: ctx,
-    action: 'integration.company_selected',
-    entityType: 'integration',
-    entityId: row.id,
-    summary: `Set the Procore company to ${company.name}${previous.companyName && previous.companyId !== company.id ? ` (was ${previous.companyName})` : ''}`,
-    data: { provider: 'procore', companyId: company.id, companyName: company.name, previousCompanyId: previous.companyId },
+  await withOrgLock(db, ctx.orgId, async (tx) => {
+    const row = await loadIntegration(tx, ctx.orgId);
+    if (!row) throw new UserError(NOT_CONNECTED);
+    const previous = integrationConfig(row);
+    if (previous.companyId === company.id && previous.companyName === company.name) return;
+    await updateIntegration(tx, ctx.orgId, { config: patchConfig(row, { companyId: company.id, companyName: company.name }) });
+    await recordAudit(tx, {
+      orgId: ctx.orgId,
+      actor: ctx,
+      action: 'integration.company_selected',
+      entityType: 'integration',
+      entityId: row.id,
+      summary: `Set the Procore company to ${company.name}${previous.companyName && previous.companyId !== company.id ? ` (was ${previous.companyName})` : ''}`,
+      data: { provider: 'procore', companyId: company.id, companyName: company.name, previousCompanyId: previous.companyId },
+    });
   });
 }
 
-/** Revoke the authorization at Procore if we can, then forget it. Imported records are kept. */
+/**
+ * Revoke the authorization at Procore if we can, then forget it. Imported records are kept.
+ *
+ * Procore revokes the refresh token together with the access token, and answers
+ * 200 even for a token it does not recognise. So revocation counts as confirmed
+ * only when the token revoked was known to be valid. An expired one is renewed
+ * first.
+ */
 export async function disconnect(db: DB, ctx: Ctx): Promise<void> {
   assertCan(ctx, 'integrations:manage');
   const row = await loadIntegration(db, ctx.orgId);
   if (!row) return;
   const config = integrationConfig(row);
-  const tokens = readTokens(row);
+  const stored = readTokens(row);
 
   let revoked = false;
-  if (tokens && procoreConfig().configured) {
-    const results = await Promise.allSettled([revoke(tokens.accessToken), revoke(tokens.refreshToken)]);
-    revoked = results.every((r) => r.status === 'fulfilled');
+  let reason: string | null = null;
+  if (stored && procoreConfig().configured) {
+    let valid: string | null = null;
+    try {
+      valid = await getAccessToken(db, ctx.orgId);
+    } catch (err) {
+      reason = err instanceof UserError ? err.message : (describeProcoreError(err) ?? 'the authorization could not be renewed');
+    }
+    try {
+      await revoke(valid ?? stored.accessToken);
+      revoked = valid !== null;
+    } catch (err) {
+      reason = describeProcoreError(err) ?? 'the revocation request failed';
+    }
+  } else {
+    reason = stored ? NOT_CONFIGURED : 'no readable authorization was stored';
   }
-  await db.delete(integrations).where(and(eq(integrations.orgId, ctx.orgId), eq(integrations.provider, 'procore')));
 
-  await recordAudit(db, {
-    orgId: ctx.orgId,
-    actor: ctx,
-    action: 'integration.disconnected',
-    entityType: 'integration',
-    entityId: row.id,
-    summary:
-      `Disconnected Procore${config.companyName ? ` (company ${config.companyName})` : ''}. Records imported from Procore were kept. ` +
-      (revoked ? 'Procore confirmed the authorization was revoked.' : 'Procore did not confirm that the authorization was revoked; the stored tokens were deleted here. To be certain, remove this app’s access in Procore.'),
-    data: { provider: 'procore', env: config.env, companyId: config.companyId, revokedAtProcore: revoked },
+  await withOrgLock(db, ctx.orgId, async (tx) => {
+    await tx.delete(integrations).where(and(eq(integrations.orgId, ctx.orgId), eq(integrations.provider, 'procore')));
+    await recordAudit(tx, {
+      orgId: ctx.orgId,
+      actor: ctx,
+      action: 'integration.disconnected',
+      entityType: 'integration',
+      entityId: row.id,
+      summary:
+        `Disconnected Procore${config.companyName ? ` (company ${config.companyName})` : ''}. Records imported from Procore were kept. ` +
+        (revoked
+          ? 'Procore confirmed the authorization was revoked.'
+          : `Procore did not confirm that the authorization was revoked${reason ? ` (${reason.replace(/\.$/, '')})` : ''}; the stored tokens were deleted here. To be certain, remove this app’s access in Procore.`),
+      data: { provider: 'procore', env: config.env, companyId: config.companyId, revokedAtProcore: revoked },
+    });
   });
 }
