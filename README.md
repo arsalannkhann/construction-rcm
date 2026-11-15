@@ -613,13 +613,14 @@ another organisation, and the password prompt before two-step setup.
 | Vercel + Supabase production | https://construction-rcm.vercel.app, Node 22, region sin1, all secrets set. Checked live on 2026-11-15: `/api/health` returns `ok` with PostgreSQL reached through Supabase's session pooler and TLS **verified** against the configured CA, the Data API exposing no table and no table without RLS, documents stored in the database, and the queue empty. `/api/jobs/run` refuses no token and a wrong token (401) and, with `CRON_SECRET`, runs the queue against the live database (200). Signed-out pages redirect to sign-in; the sign-up page renders. |
 | Supabase project `construction-rcm` | Schema applied (migrations 0000–0004, recorded under the repository's versions). The Data API, probed from outside with both public keys, refuses every table. |
 | Docker image and Compose stack | Built and run to a healthy state on 2026-11-15, before that day's authentication changes; not rebuilt since. |
+| Signed-in use of the live site | On 2026-11-16 the owner signed up on the live site, and a project, a subcontractor and a subcontract with a three-line schedule of values ($500,000.00, retainage 10% / 10%) were created through the interface and confirmed in the Supabase database. |
 
 **Not verified, because it needs credentials, documents or infrastructure that
 were not available:**
 
 | Area | State |
 |---|---|
-| Signed-in use of the live site | Sign-up, two-step verification, an upload over 4 MB, processing and review on the live deployment wait for the owner to create the first account. The daily scheduled run has not fired yet. |
+| Uploads and review on the live site | Two-step verification, an upload over 4 MB (sent in parts), processing and review have not been run on the live deployment; the browser used could not attach files. The daily scheduled run has not been seen to fire. |
 | Claude reading real documents | Never called live (no API key). Accuracy on real pay applications is unmeasured. |
 | Real subcontractor documents | None available. The evaluation harness is ready (`pnpm eval:extraction`, `eval/real/README.md`); scores on the synthetic corpus are a regression signal only. How to measure it, the synthetic results and a pilot protocol: [docs/extraction-evaluation.md](docs/extraction-evaluation.md). |
 | Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`). |
