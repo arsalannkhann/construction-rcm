@@ -614,13 +614,14 @@ another organisation, and the password prompt before two-step setup.
 | Supabase project `construction-rcm` | Schema applied (migrations 0000–0004, recorded under the repository's versions). The Data API, probed from outside with both public keys, refuses every table. |
 | Docker image and Compose stack | Built and run to a healthy state on 2026-11-15, before that day's authentication changes; not rebuilt since. |
 | Signed-in use of the live site | On 2026-11-16 the owner signed up on the live site, and a project, a subcontractor and a subcontract with a three-line schedule of values ($500,000.00, retainage 10% / 10%) were created through the interface and confirmed in the Supabase database. |
+| Uploads and reading on the live site | On 2026-11-16 the five sample PDFs were uploaded as one package, including a 5.9 MB file sent in 4 MiB parts; every stored object matches its original byte for byte (SHA-256). The first reading failed for every file: pdf.js's worker was not in the deployed functions (fixed in [PR #2](https://github.com/arsalannkhann/construction-rcm/pull/2); see Limitations). After the fix, the four extra files were removed from the package through the interface ([PR #3](https://github.com/arsalannkhann/construction-rcm/pull/3)) and the package was read again: the 4-page file was split into pay application, schedule of values, lien waiver and one unreadable page; it was read as application #1 for the period to 2026-09-30, matched to SC-2301-16, with $99,000.00 requested and verified and $11,000.00 retainage, all equal to the generator's figures. The only open finding was the unreadable page (`doc.unreadable_pages`), with 26 checks passed. Each removal was audited and every background job succeeded on its first attempt. |
 
 **Not verified, because it needs credentials, documents or infrastructure that
 were not available:**
 
 | Area | State |
 |---|---|
-| Uploads and review on the live site | Two-step verification, an upload over 4 MB (sent in parts), processing and review have not been run on the live deployment; the browser used could not attach files. The daily scheduled run has not been seen to fire. |
+| Decisions and two-step on the live site | Two-step verification, approving, rejecting and exporting have not been run on the live deployment. The daily scheduled run has not been seen to fire. |
 | Claude reading real documents | Never called live (no API key). Accuracy on real pay applications is unmeasured. |
 | Real subcontractor documents | None available. The evaluation harness is ready (`pnpm eval:extraction`, `eval/real/README.md`); scores on the synthetic corpus are a regression signal only. How to measure it, the synthetic results and a pilot protocol: [docs/extraction-evaluation.md](docs/extraction-evaluation.md). |
 | Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`). |
@@ -645,6 +646,12 @@ were not available:**
 - **Tenant isolation is enforced in application code**, with tests. Row-level
   security only shuts out Supabase's public API roles; it does not separate
   organisations from each other.
+- **The health check does not open a PDF.** On the first live deployment
+  `/api/health` reported `ok` while no PDF could be read, because pdf.js's
+  worker had been left out of the deployed functions (fixed; the reader now
+  loads it itself, and `tests/pdf-worker.test.ts` reproduces the missing
+  file). A read of a small embedded PDF in the health check would catch a
+  regression of this kind.
 - **No separate worker or object storage.** Background work runs inside the
   app (a polling runner in each long-lived process, or on Vercel right after
   the request that queued it plus a scheduled run), and documents are stored
