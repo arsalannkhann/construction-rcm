@@ -1,7 +1,7 @@
 'use client';
 
 import { HandCoins, Plus } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge, EmptyState, Money, Panel, PanelHeader, Table, Td, Th } from '@/components/ui/data';

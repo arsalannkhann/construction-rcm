@@ -1,7 +1,7 @@
 'use client';
 
 import { FileText, Loader2, TriangleAlert } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { Button, buttonClass } from '@/components/ui/button';

@@ -1,5 +1,5 @@
 import { SearchX } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { buttonClass } from '@/components/ui/button';
 import { EmptyState, Page, Panel } from '@/components/ui/data';
 

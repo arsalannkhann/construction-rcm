@@ -1,5 +1,5 @@
 import { Download, History, SearchX, ShieldAlert, ShieldCheck } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { redirect } from 'next/navigation';
 import { getDb } from '@/db';
 import { Notice } from '@/components/settings/notice';

@@ -1,5 +1,5 @@
 import { CircleCheck, TriangleAlert } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { getDb } from '@/db';
 import { CopyField } from '@/components/settings/copy-field';
 import { Notice } from '@/components/settings/notice';

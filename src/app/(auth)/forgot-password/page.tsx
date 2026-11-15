@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { Notice } from '@/components/settings/notice';
 import { emailDeliveryConfigured } from '@/server/email';
 import { RESET_LINK_MINUTES } from '@/server/auth/password-reset';

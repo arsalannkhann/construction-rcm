@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { getDb } from '@/db';
 import { findPasswordReset } from '@/server/auth/password-reset';
 import { ResetForm } from './reset-form';

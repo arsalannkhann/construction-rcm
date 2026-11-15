@@ -1,5 +1,5 @@
 import { FileText, Inbox, Plus } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { notFound } from 'next/navigation';
 import { getDb } from '@/db';
 import { Figure, Figures, ProgressBar, RecordStatusBadge } from '@/components/records/figures';

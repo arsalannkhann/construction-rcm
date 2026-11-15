@@ -11,7 +11,7 @@
  *  - every mark has a hover/focus tooltip, and every chart carries a
  *    screen-reader table, so no value is reachable only by hovering.
  */
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { formatMoney, formatMoneyCompact } from '@/lib/money';
 import { cn, formatMonth } from '@/lib/utils';

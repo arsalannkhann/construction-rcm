@@ -1,7 +1,7 @@
 'use client';
 
 import { ArrowUpFromLine, Bell, Building2, Check, ChevronsUpDown, FlaskConical, History, Inbox, LayoutDashboard, LogOut, Plus, Send, Settings, Users } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { toast } from 'sonner';
