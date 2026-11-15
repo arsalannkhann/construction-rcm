@@ -39,7 +39,9 @@ run a pilot on it.
 | `APP_URL` | Yes | The public `https://` URL. Used in invitation and password links and OAuth redirects. Session cookies are marked `Secure` only when this starts with `https://`. |
 | `DATABASE_CA_CERT` | For Supabase | The database provider's CA certificate (PEM text, or a path to the file). Connections are then encrypted and the server's certificate and host name are checked. Needed because node-postgres treats `sslmode=require` as full verification against Node's built-in authorities, which do not include Supabase's, so `?sslmode=require` alone fails to connect. Do not switch verification off instead. |
 | `RCM_MIGRATIONS` | For Supabase | `external` when Supabase's GitHub integration applies `supabase/migrations`. The app then only checks the schema at start and refuses to run on an older one. Unset, the app applies `drizzle/` itself. |
-| `DATABASE_POOL_MAX` | No | Connections per app process (default 10). |
+| `DATABASE_POOL_MAX` | No | Connections per app process (default 10; 3 on Vercel, per instance). |
+| `CRON_SECRET` | On Vercel | Secret the scheduler sends to `/api/jobs/run` as `Authorization: Bearer …` (Vercel's cron does this by itself). Without it that endpoint refuses to run. `openssl rand -hex 32`. |
+| `RCM_JOB_RUNNER` | No | `poll` (a long-lived process runs the queue) or `request` (serverless: work runs after the request that queued it). Default: `request` on Vercel, `poll` elsewhere. Leave it unset. |
 | `RCM_STORAGE` | No | `database` (default with `DATABASE_URL`) or `disk`. Leave it unset. |
 | `ANTHROPIC_API_KEY`, `RCM_EXTRACTION_MODEL` | No | AI document reading. Without it, only PDFs with a text layer are read; scans are keyed by hand. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | No | Outbound email. Without them, messages are saved as drafts and clearly marked "not sent". |
@@ -185,6 +187,96 @@ app version must start only after that. If it starts first, it refuses to run
 has applied it, and then starts normally on the next restart. Migrations so
 far only add tables and columns, so the previous app version keeps working
 while they are applied.
+
+## Deploy on Vercel
+
+The web app and API run as Vercel Functions; the database and the documents
+stay in Supabase. Nothing else is needed.
+
+```
+browser ──HTTPS──▶ Vercel (Next.js functions, region sin1) ──TLS──▶ Supabase PostgreSQL (ap-southeast-1)
+                     └─ scheduled GET /api/jobs/run (vercel.json)
+```
+
+`vercel.json` pins the functions to `sin1` (Singapore), next to the Supabase
+project, because every page makes several database round trips.
+
+### What is different from a long-lived server
+
+- **Document processing.** Nothing runs between requests, so there is no queue
+  runner. A package is read right after the upload's response is sent (Next.js
+  `after()`), within the function's 300-second limit; a function stops taking
+  new jobs after 150 seconds so none is cut off half-way. Up to four documents
+  of a package are read at once. Whatever is left (a retry whose delay has
+  passed, a job abandoned when an instance was stopped) is picked up by the
+  next signed-in page view, by the processing screen's status checks, and by
+  the scheduled call to `/api/jobs/run`. System status shows the mode as
+  "On request".
+- **The schedule.** `vercel.json` calls `/api/jobs/run` daily at 03:00 UTC,
+  the most often the Hobby plan allows. On Pro, change the schedule to
+  `*/5 * * * *` so retries never wait for someone to open the app. The call
+  only runs with `CRON_SECRET` set.
+- **Uploads.** Vercel refuses a request body over 4.5 MB. The browser sends a
+  package of more than 4 MB as 4 MB parts first (`/api/uploads/<id>/parts/<n>`,
+  kept in `upload_parts` by migration 0004) and the upload then names them.
+  The limit of 25 MB per file is unchanged. Unclaimed parts are deleted after
+  six hours.
+- **Email intake.** Your email provider posts each message as one request, so
+  a message over 4.5 MB is refused by Vercel before it reaches the app. Ask
+  senders to split large packages, or upload them by hand.
+- **Database connections.** Each instance keeps at most 3 connections and
+  closes idle ones before Vercel suspends it.
+- **Client address.** Use `RCM_CLIENT_IP_HEADER=x-real-ip`. Vercel sets that
+  header itself and overwrites whatever a client sends.
+
+### Plan
+
+Vercel's Hobby plan is for non-commercial use. A pilot with a customer's real
+billing belongs on Pro (paid; that is a purchasing decision for whoever owns
+the Vercel team), which also allows the five-minute schedule above.
+
+### Environment variables
+
+Project Settings → Environment Variables, for Production. Variables take
+effect on the next deployment, so redeploy after changing them.
+
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | Supabase → **Connect** → **Session pooler** string, with the database password filled in |
+| `DATABASE_CA_CERT` | The text of the certificate from Supabase → Database settings → **SSL configuration** → **Download certificate** (paste the whole PEM) |
+| `RCM_SECRET_KEY` | `openssl rand -base64 48`. Permanent: a new key breaks everyone's second step |
+| `CRON_SECRET` | `openssl rand -hex 32` |
+| `APP_URL` | The production URL, `https://<project>.vercel.app` or your domain |
+| `RCM_MIGRATIONS` | `external` |
+| `RCM_CLIENT_IP_HEADER` | `x-real-ip` |
+
+Optional, as anywhere else: `ANTHROPIC_API_KEY`, `RESEND_API_KEY` and
+`EMAIL_FROM`, `INBOUND_EMAIL_SECRET`, `PROCORE_*`.
+
+The first four are secrets. Paste them into the Vercel dashboard yourself;
+nobody else needs to see them. You can paste several `KEY=value` lines into
+the first field at once.
+
+### Migrations and branches
+
+The Vercel project deploys `main` to production on every push, and Supabase's
+GitHub integration applies `supabase/migrations` when they reach `main`, so in
+normal operation code and schema arrive together. A deployment from another
+branch needs that branch's migrations applied to the database first; otherwise
+`/api/health` names the missing migration and the app refuses to serve. Do not
+push `main` to production while it is behind the branch running there: it
+would replace the running version with the older one.
+
+### Check it
+
+1. `https://<production URL>/api/health` returns `"status":"ok"`, with
+   `"tls":"verified"` and `"runner":{"mode":"request",…}`. Without
+   `DATABASE_URL` it returns 503 and says that `DATABASE_URL` is not set.
+2. Sign up, then open Settings → System status: Database *Supabase*,
+   encrypted and verified; Supabase Data API *Locked*; Document processing
+   *On request*.
+3. Upload a package over 4 MB and watch it being read.
+4. Vercel → the project → Settings → Cron Jobs lists `/api/jobs/run`.
 
 ## Without Docker
 
@@ -365,7 +457,10 @@ To roll back the code after a migration, restore the backup taken in step 1.
   on the API. Put the app behind a proxy or WAF with basic rate limiting.
 - The queue runner lives in the web process. At pilot volumes (tens of
   packages a day) that is enough; a separate worker is the change to make if
-  reading packages ever slows the web app down.
+  reading packages ever slows the web app down. On Vercel there is no runner:
+  see [Deploy on Vercel](#deploy-on-vercel).
+- On Vercel, one package has to be read within about five minutes (the
+  function limit), and email-intake messages over 4.5 MB are refused.
 - Tenant isolation is enforced in application code (every query is scoped to
   the signed-in organisation, with tests), not by database row-level security.
   The row-level security that migration 0002 turns on only keeps roles other

@@ -158,6 +158,9 @@ database to install. Documents are content-addressed by SHA-256 and checked
 against their hash on every read; with PostgreSQL they are stored in the
 database (one backup covers everything), with the embedded database on disk.
 Document processing runs on a database-backed queue inside the server process.
+On Vercel there is no long-lived process: work runs right after the request
+that queued it, and large uploads arrive in 4 MB parts (`docs/operations.md`,
+"Deploy on Vercel").
 
 Two versions are pinned for Node 20: `pdfjs-dist` 4.x and `vitest` 3.x. Their
 newer majors need Node 22.
@@ -175,7 +178,9 @@ Copy `.env.example` to `.env.local`. Everything is optional in development.
 | `PROCORE_CLIENT_ID`, `PROCORE_CLIENT_SECRET`, `PROCORE_ENV` | Procore can be connected | Shown as "Not configured"; file export only |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Invitations and messages to subcontractors are emailed | They are saved as drafts and labelled "not sent" |
 | `INBOUND_EMAIL_SECRET` | Opens the email-intake webhook | The webhook rejects every request |
-| `DATABASE_POOL_MAX` | Connections per process (default 10) | |
+| `DATABASE_POOL_MAX` | Connections per process | 10; 3 per instance on Vercel |
+| `CRON_SECRET` | Lets the scheduler run the queue at `/api/jobs/run` (needed on Vercel) | That endpoint refuses to run |
+| `RCM_JOB_RUNNER` | `poll` or `request` (see `docs/operations.md`, "Deploy on Vercel") | `request` on Vercel, `poll` elsewhere |
 | `DATABASE_CA_CERT` | The database provider's CA (PEM or path): encrypted, verified connection. Needed for Supabase | node-postgres's own TLS rules apply |
 | `RCM_MIGRATIONS` | `external`: the app checks the schema that Supabase's GitHub integration applied | The app applies `drizzle/` itself |
 | `RCM_CLIENT_IP_HEADER`, `RCM_TRUSTED_PROXY_HOPS` | Where the client address comes from, for the sign-in limits (see `docs/authentication.md`) | The address one proxy appended to `X-Forwarded-For` |
