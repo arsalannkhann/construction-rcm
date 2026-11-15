@@ -1,0 +1,8 @@
+node_modules
+.next
+.data
+.env*
+samples/out
+skill-observations
+.claude
+.git

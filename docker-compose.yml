@@ -1,0 +1,31 @@
+# Production-shaped stack: the app with PostgreSQL and a volume for documents.
+# Set RCM_SECRET_KEY (and APP_URL) before using this for anything real.
+services:
+  app:
+    build: .
+    ports: ['3000:3000']
+    environment:
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      DATABASE_URL: postgres://rcm:rcm@db:5432/rcm
+      RCM_SECRET_KEY: ${RCM_SECRET_KEY:?set RCM_SECRET_KEY to 32+ random bytes}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PROCORE_CLIENT_ID: ${PROCORE_CLIENT_ID:-}
+      PROCORE_CLIENT_SECRET: ${PROCORE_CLIENT_SECRET:-}
+      PROCORE_ENV: ${PROCORE_ENV:-sandbox}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      INBOUND_EMAIL_SECRET: ${INBOUND_EMAIL_SECRET:-}
+    volumes: ['documents:/data']
+    depends_on:
+      db: { condition: service_healthy }
+  db:
+    image: postgres:16
+    environment: { POSTGRES_USER: rcm, POSTGRES_PASSWORD: rcm, POSTGRES_DB: rcm }
+    volumes: ['pgdata:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U rcm']
+      interval: 5s
+      retries: 10
+volumes:
+  documents:
+  pgdata:

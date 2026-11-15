@@ -1,0 +1,1141 @@
+/**
+ * Financial reconciliation engine.
+ *
+ * A pure function: given what we know (contract, approved change orders,
+ * schedule of values, the last approved application) and what the
+ * subcontractor submitted (G702 summary + G703 lines), it
+ *
+ *   1. computes its own "verified" G702 from first principles, and
+ *   2. emits a check result for every relationship that should hold, each
+ *      explaining what is wrong, why it matters and what to do about it.
+ *
+ * It never trusts a number printed on the submission that it can derive
+ * itself. No I/O, no clock, no randomness — everything it needs is an input,
+ * which is what makes the financial behaviour exhaustively testable.
+ */
+import { applyBps, formatBps, formatMoney, sum } from '@/lib/money';
+import { formatDate, pluralize } from '@/lib/utils';
+import type {
+  ClaimedField,
+  ClaimedHeader,
+  DocumentSegment,
+  FindingCategory,
+  FindingData,
+  FindingRefs,
+  OrgSettings,
+  Severity,
+  Tri,
+  VerifiedHeader,
+  WaiverType,
+} from '@/server/types';
+import { CLAIMED_FIELD_LABEL, CLAIMED_FIELD_LINE } from '@/server/types';
+import { evaluateWaivers } from '@/server/compliance/waivers';
+
+// ── Inputs ──────────────────────────────────────────────────────────────────
+
+export type ReconLine = {
+  id: string;
+  sovLineId: string | null;
+  itemNo: string | null;
+  description: string | null;
+  scheduledValue: number | null;
+  previous: number | null;
+  thisPeriod: number | null;
+  stored: number | null;
+  total: number | null;
+  balance: number | null;
+  retainage: number | null;
+};
+
+export type ReconWaiver = {
+  id: string;
+  waiverType: WaiverType;
+  formState: string | null;
+  claimant: string | null;
+  throughDate: string | null;
+  amount: number | null;
+  exceptions: string | null;
+  signed: Tri | null;
+};
+
+export type ReconPrior = {
+  kind: 'application' | 'baseline';
+  applicationNumber: number;
+  periodTo: string | null;
+  totalEarnedLessRetainage: number;
+  retainageTotal: number | null;
+  currentPaymentDue: number | null;
+  /** Work completed to date (columns D + E) per schedule-of-values line, as approved. */
+  workToDate: Record<string, number>;
+};
+
+export type ReconInput = {
+  policy: OrgSettings;
+  today: string;
+  project: { name: string; state: string | null };
+  subcontractor: { name: string };
+  contract: { number: string; originalAmount: number; retainageWorkBps: number; retainageStoredBps: number };
+  changeOrders: Array<{ id: string; number: string; title: string; amount: number; status: string }>;
+  sov: Array<{ id: string; itemNo: string; description: string; scheduledValue: number }>;
+  prior: ReconPrior | null;
+  /** Every other application on this contract that is not void. */
+  siblings: Array<{ id: string; applicationNumber: number | null; periodTo: string | null; status: string }>;
+  app: {
+    id: string;
+    applicationNumber: number | null;
+    periodTo: string | null;
+    claimed: ClaimedHeader;
+    signed: Tri | null;
+    signatureConfirmed: boolean;
+    notarized: Tri | null;
+    /** Extraction confidence per evidence key. */
+    confidence: Record<string, number>;
+  };
+  lines: ReconLine[];
+  documents: Array<{
+    id: string;
+    filename: string;
+    status: string;
+    statusDetail: string | null;
+    segments: DocumentSegment[];
+    duplicateOf: { applicationNumber: number | null; filename: string } | null;
+  }>;
+  waivers: ReconWaiver[];
+};
+
+// ── Outputs ─────────────────────────────────────────────────────────────────
+
+export type CheckResult = {
+  code: string;
+  /** Distinguishes several results of one check, e.g. the line id. */
+  subjectKey: string;
+  category: FindingCategory;
+  severity: Severity;
+  outcome: 'pass' | 'fail';
+  title: string;
+  detail: string;
+  action?: string;
+  needsQualifiedReview?: boolean;
+  data?: FindingData;
+  refs?: FindingRefs;
+};
+
+export type VerifiedLine = {
+  sovLineId: string;
+  lineId: string | null;
+  itemNo: string;
+  description: string;
+  scheduledValue: number;
+  previous: number;
+  thisPeriod: number;
+  stored: number;
+  total: number;
+  balance: number;
+  retainage: number;
+};
+
+export type ReconOutput = {
+  verified: VerifiedHeader;
+  lines: VerifiedLine[];
+  checks: CheckResult[];
+};
+
+const OPEN_SIBLING = new Set(['processing', 'needs_matching', 'needs_review', 'pending_approval', 'on_hold']);
+
+// ── Engine ──────────────────────────────────────────────────────────────────
+
+export function reconcile(input: ReconInput): ReconOutput {
+  const { policy, contract, prior, app } = input;
+  const tol = policy.toleranceCents;
+  const claimed = app.claimed;
+  const checks: CheckResult[] = [];
+  const near = (a: number, b: number) => Math.abs(a - b) <= tol;
+  const $ = (n: number | null | undefined) => formatMoney(n);
+  const lineLabel = (l: { itemNo: string | null; description: string | null }) =>
+    [l.itemNo ? `Item ${l.itemNo}` : null, l.description].filter(Boolean).join(' · ') || 'Unlabelled line';
+
+  // ── 1. Verified figures ────────────────────────────────────────────────────
+
+  const approvedCos = input.changeOrders.filter((c) => c.status === 'approved');
+  const pendingCos = input.changeOrders.filter((c) => c.status === 'pending');
+  const netChangeOrders = sum(approvedCos.map((c) => c.amount));
+  const contractSumToDate = contract.originalAmount + netChangeOrders;
+
+  const lineBySov = new Map<string, ReconLine>();
+  for (const line of input.lines) if (line.sovLineId) lineBySov.set(line.sovLineId, line);
+  const unmatched = input.lines.filter((l) => !l.sovLineId);
+
+  // Verified totals run over the contract's schedule of values, not over the
+  // submitted sheet: a line the subcontractor left off still carries its prior
+  // billing, and a line that is not in the contract contributes nothing.
+  const verifiedLines: VerifiedLine[] = input.sov.map((s) => {
+    const line = lineBySov.get(s.id) ?? null;
+    const previous = prior?.workToDate[s.id] ?? 0;
+    const thisPeriod = line?.thisPeriod ?? 0;
+    const stored = line?.stored ?? 0;
+    const total = previous + thisPeriod + stored;
+    return {
+      sovLineId: s.id,
+      lineId: line?.id ?? null,
+      itemNo: s.itemNo,
+      description: s.description,
+      scheduledValue: s.scheduledValue,
+      previous,
+      thisPeriod,
+      stored,
+      total,
+      balance: s.scheduledValue - total,
+      retainage: applyBps(previous + thisPeriod, contract.retainageWorkBps) + applyBps(stored, contract.retainageStoredBps),
+    };
+  });
+
+  const workToDate = sum(verifiedLines.map((l) => l.previous + l.thisPeriod));
+  const storedToDate = sum(verifiedLines.map((l) => l.stored));
+  const totalCompletedStored = workToDate + storedToDate;
+  // Retainage is computed on the totals (as the G702 does), not summed from per-line rounding.
+  const retainageWork = applyBps(workToDate, contract.retainageWorkBps);
+  const retainageStored = applyBps(storedToDate, contract.retainageStoredBps);
+  const retainageTotal = retainageWork + retainageStored;
+  const totalEarnedLessRetainage = totalCompletedStored - retainageTotal;
+  const lessPreviousCertificates = prior?.totalEarnedLessRetainage ?? 0;
+  const currentPaymentDue = totalEarnedLessRetainage - lessPreviousCertificates;
+
+  const verified: VerifiedHeader = {
+    originalContractSum: contract.originalAmount,
+    netChangeOrders,
+    contractSumToDate,
+    totalCompletedStored,
+    retainageWork,
+    retainageStored,
+    retainageTotal,
+    totalEarnedLessRetainage,
+    lessPreviousCertificates,
+    currentPaymentDue,
+    balanceToFinish: contractSumToDate - totalEarnedLessRetainage,
+    priorApplicationNumber: prior?.applicationNumber ?? null,
+    excludedLines: unmatched.length,
+  };
+
+  // The subcontractor reports earlier billing but we hold no history for this contract.
+  const statedPrevious = sum(input.lines.map((l) => l.previous));
+  const noHistory = !prior && (statedPrevious !== 0 || (claimed.lessPreviousCertificates ?? 0) !== 0);
+
+  // ── 2. Package completeness ────────────────────────────────────────────────
+
+  const segments = input.documents.flatMap((d) => d.segments.map((s) => ({ ...s, documentId: d.id })));
+  const hasType = (t: DocumentSegment['type']) => segments.some((s) => s.type === t);
+  const firstOf = (t: DocumentSegment['type']) => segments.find((s) => s.type === t);
+
+  const payAppSeg = firstOf('pay_application');
+  checks.push(
+    payAppSeg
+      ? {
+          code: 'doc.pay_application',
+          subjectKey: '',
+          category: 'documents',
+          severity: 'blocking',
+          outcome: 'pass',
+          title: 'Pay application received',
+          detail: 'The package includes an application and certificate for payment.',
+          refs: { documentId: payAppSeg.documentId, page: payAppSeg.pageStart, tab: 'documents' },
+        }
+      : {
+          code: 'doc.pay_application',
+          subjectKey: '',
+          category: 'documents',
+          severity: 'blocking',
+          outcome: 'fail',
+          title: 'No pay application in the package',
+          detail:
+            'None of the documents was recognised as an application and certificate for payment (G702 or equivalent). Without it there is no signed request for a specific amount.',
+          action: 'Add the pay application, or request it from the subcontractor.',
+          refs: { tab: 'documents' },
+        },
+  );
+
+  const sheetSeg = firstOf('continuation_sheet');
+  checks.push(
+    sheetSeg
+      ? {
+          code: 'doc.continuation_sheet',
+          subjectKey: '',
+          category: 'documents',
+          severity: 'blocking',
+          outcome: 'pass',
+          title: 'Schedule of values received',
+          detail: `The continuation sheet was read: ${pluralize(input.lines.length, 'line item')}.`,
+          refs: { documentId: sheetSeg.documentId, page: sheetSeg.pageStart, tab: 'documents' },
+        }
+      : {
+          code: 'doc.continuation_sheet',
+          subjectKey: '',
+          category: 'documents',
+          severity: 'blocking',
+          outcome: 'fail',
+          title: 'No schedule of values in the package',
+          detail:
+            'There is no continuation sheet (G703 or equivalent). Without line-by-line billing, the work claimed cannot be checked against the contract or against what was billed before.',
+          action: 'Add the continuation sheet, or key the line items by hand.',
+          refs: { tab: 'documents' },
+        },
+  );
+
+  if (sheetSeg && input.lines.length === 0) {
+    checks.push({
+      code: 'extract.no_lines',
+      subjectKey: '',
+      category: 'extraction',
+      severity: 'blocking',
+      outcome: 'fail',
+      title: 'Line items could not be read from the schedule of values',
+      detail: 'A continuation sheet is present but no line items were recognised on it.',
+      action: 'Add the line items by hand from the document, or request a clearer copy.',
+      refs: { documentId: sheetSeg.documentId, page: sheetSeg.pageStart, tab: 'lines' },
+    });
+  }
+
+  for (const doc of input.documents) {
+    if (doc.status === 'unreadable' || doc.status === 'failed') {
+      checks.push({
+        code: 'doc.unreadable',
+        subjectKey: doc.id,
+        category: 'extraction',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `“${doc.filename}” could not be read automatically`,
+        detail:
+          doc.statusDetail ??
+          'This file has no machine-readable text and automatic reading is not available for it.',
+        action:
+          'Open the document and key its values by hand, then accept this item to confirm you have accounted for it — or request a clearer copy.',
+        refs: { documentId: doc.id, page: 1, tab: 'documents' },
+      });
+    }
+    if (doc.duplicateOf) {
+      const where =
+        doc.duplicateOf.applicationNumber !== null
+          ? `application #${doc.duplicateOf.applicationNumber}`
+          : 'another submission';
+      checks.push({
+        code: 'doc.duplicate_file',
+        subjectKey: doc.id,
+        category: 'documents',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `“${doc.filename}” was already submitted`,
+        detail: `This exact file (byte-for-byte) was received before as “${doc.duplicateOf.filename}” on ${where}. Paying it again would be a duplicate payment.`,
+        action: 'Confirm this is not a duplicate submission. If it is, void this application.',
+        refs: { documentId: doc.id, page: 1, tab: 'documents' },
+      });
+    }
+  }
+
+  // Signature
+  if (payAppSeg && policy.requireSignature) {
+    const base = {
+      code: 'doc.signature',
+      subjectKey: '',
+      category: 'documents' as const,
+      severity: 'blocking' as const,
+      refs: { field: 'signed', tab: 'summary' as const },
+    };
+    if (app.signed === 'yes') {
+      checks.push({ ...base, outcome: 'pass', title: 'Pay application is signed', detail: 'A signature was detected in the contractor’s certification block.' });
+    } else if (app.signatureConfirmed) {
+      checks.push({ ...base, outcome: 'pass', title: 'Signature confirmed by reviewer', detail: 'A reviewer looked at the document and confirmed the signature is present.' });
+    } else if (app.signed === 'no') {
+      checks.push({
+        ...base,
+        outcome: 'fail',
+        title: 'Pay application is not signed',
+        detail: 'The contractor’s certification block appears to be blank. An unsigned application is not a certified request for payment.',
+        action: 'Request a signed copy. If the signature is there and was missed, confirm it.',
+      });
+    } else {
+      checks.push({
+        ...base,
+        outcome: 'fail',
+        title: 'Signature could not be confirmed automatically',
+        detail: 'The system could not tell whether the contractor’s certification is signed (for example a handwritten signature on a scan).',
+        action: 'Look at the signature block and confirm the signature if it is present.',
+      });
+    }
+  }
+  if (payAppSeg && policy.requireNotarization) {
+    const base = { code: 'doc.notarization', subjectKey: '', category: 'documents' as const, severity: 'warning' as const, refs: { field: 'signed', tab: 'summary' as const } };
+    checks.push(
+      app.notarized === 'yes'
+        ? { ...base, outcome: 'pass', title: 'Pay application is notarised', detail: 'A notary acknowledgement was detected.' }
+        : {
+            ...base,
+            outcome: 'fail',
+            title: app.notarized === 'no' ? 'Pay application is not notarised' : 'Notarisation could not be confirmed',
+            detail: 'Your policy requires pay applications to be notarised, and a completed notary block was not detected.',
+            action: 'Check the notary block on the document; request a notarised copy if it is blank.',
+          },
+    );
+  }
+
+  // ── 3. Identity & sequence ─────────────────────────────────────────────────
+
+  if (app.applicationNumber === null) {
+    checks.push({
+      code: 'seq.number_missing',
+      subjectKey: '',
+      category: 'prior_billing',
+      severity: 'blocking',
+      outcome: 'fail',
+      title: 'Application number is missing',
+      detail: 'No application number could be read. It is needed to place this billing in sequence and to detect duplicates.',
+      action: 'Enter the application number from the document.',
+      refs: { field: 'applicationNumber', tab: 'summary' },
+    });
+  }
+  if (app.periodTo === null) {
+    checks.push({
+      code: 'seq.period_missing',
+      subjectKey: '',
+      category: 'prior_billing',
+      severity: 'blocking',
+      outcome: 'fail',
+      title: 'Billing period is missing',
+      detail: 'No “period to” date could be read from the application.',
+      action: 'Enter the period end date from the document.',
+      refs: { field: 'periodTo', tab: 'summary' },
+    });
+  }
+
+  const live = input.siblings.filter((s) => s.status !== 'rejected' && s.status !== 'void');
+  if (app.applicationNumber !== null) {
+    const n = app.applicationNumber;
+    const sameNumber = live.filter((s) => s.applicationNumber === n);
+    const earlierOpen = live.filter((s) => s.applicationNumber !== null && s.applicationNumber < n && OPEN_SIBLING.has(s.status));
+    const laterApproved = live.filter((s) => s.applicationNumber !== null && s.applicationNumber > n && s.status === 'approved');
+    const base = prior?.applicationNumber ?? 0;
+
+    if (sameNumber.length > 0) {
+      checks.push({
+        code: 'seq.duplicate_number',
+        subjectKey: '',
+        category: 'prior_billing',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `Application #${n} already exists for this contract`,
+        detail: `Another application numbered ${n} is on file (${sameNumber.map((s) => s.status.replace('_', ' ')).join(', ')}). Approving both would pay the same billing twice.`,
+        action: 'If this is a corrected resubmission, void or reject the earlier one. If it is a duplicate, void this one.',
+        refs: { field: 'applicationNumber', tab: 'summary' },
+      });
+    } else if (laterApproved.length > 0) {
+      checks.push({
+        code: 'seq.duplicate_number',
+        subjectKey: '',
+        category: 'prior_billing',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `A later application (#${laterApproved[0]!.applicationNumber}) is already approved`,
+        detail: `Application #${n} comes before one that has already been approved. Its amounts would not be reflected in what was certified afterwards.`,
+        action: 'Check the application number. If this billing was missed, it has to be handled outside the normal sequence.',
+        refs: { field: 'applicationNumber', tab: 'summary' },
+      });
+    } else if (prior && n <= base) {
+      checks.push({
+        code: 'seq.duplicate_number',
+        subjectKey: '',
+        category: 'prior_billing',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `Application #${n} is not after the last approved application (#${base})`,
+        detail: 'The application number has already been used or superseded.',
+        action: 'Check the application number on the document.',
+        refs: { field: 'applicationNumber', tab: 'summary' },
+      });
+    } else {
+      checks.push({
+        code: 'seq.duplicate_number',
+        subjectKey: '',
+        category: 'prior_billing',
+        severity: 'blocking',
+        outcome: 'pass',
+        title: 'No duplicate application number',
+        detail: `No other application numbered ${n} exists for this contract.`,
+      });
+    }
+
+    if (earlierOpen.length > 0) {
+      const list = earlierOpen.map((s) => `#${s.applicationNumber}`).join(', ');
+      checks.push({
+        code: 'seq.prior_pending',
+        subjectKey: '',
+        category: 'prior_billing',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `Earlier application ${list} has not been decided`,
+        detail: `The “previous” amounts on this application depend on what gets approved for ${list}. Until then the verified figures here are provisional.`,
+        action: `Approve or reject ${list} first; this application will be re-checked automatically.`,
+        refs: { tab: 'summary' },
+      });
+    } else if (!noHistory && n > base + 1) {
+      const missing = n - base - 1;
+      checks.push({
+        code: 'seq.gap',
+        subjectKey: '',
+        category: 'prior_billing',
+        severity: 'warning',
+        outcome: 'fail',
+        title: `Application number jumps from #${base} to #${n}`,
+        detail: `${pluralize(missing, 'application')} between the last approved one and this one ${missing === 1 ? 'was' : 'were'} never approved here. Billing may be missing from the record.`,
+        action: 'Confirm with the subcontractor whether an application was skipped or never submitted.',
+        refs: { field: 'applicationNumber', tab: 'summary' },
+      });
+    } else if (!noHistory) {
+      checks.push({
+        code: 'seq.gap',
+        subjectKey: '',
+        category: 'prior_billing',
+        severity: 'warning',
+        outcome: 'pass',
+        title: 'Application is next in sequence',
+        detail: base === 0 ? 'This is the first application for the contract.' : `It follows application #${base}.`,
+      });
+    }
+  }
+
+  if (app.periodTo !== null) {
+    const samePeriod = live.filter((s) => s.periodTo === app.periodTo && s.applicationNumber !== app.applicationNumber);
+    if (samePeriod.length > 0) {
+      checks.push({
+        code: 'seq.duplicate_period',
+        subjectKey: '',
+        category: 'prior_billing',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `Another application covers the same period (to ${formatDate(app.periodTo)})`,
+        detail: `Application ${samePeriod.map((s) => `#${s.applicationNumber ?? '?'}`).join(', ')} has the same period end date. Two applications for one period usually means a duplicate or a revision.`,
+        action: 'Confirm which one is current and void the other.',
+        refs: { field: 'periodTo', tab: 'summary' },
+      });
+    }
+    if (prior?.periodTo && app.periodTo <= prior.periodTo) {
+      checks.push({
+        code: 'seq.period_order',
+        subjectKey: '',
+        category: 'prior_billing',
+        severity: 'warning',
+        outcome: 'fail',
+        title: 'Billing period does not advance',
+        detail: `This application’s period ends ${formatDate(app.periodTo)}, which is not after the previous approved period (${formatDate(prior.periodTo)}).`,
+        action: 'Check the period date on the document.',
+        refs: { field: 'periodTo', tab: 'summary' },
+      });
+    }
+    if (app.periodTo > addDays(input.today, 31)) {
+      checks.push({
+        code: 'seq.period_future',
+        subjectKey: '',
+        category: 'prior_billing',
+        severity: 'warning',
+        outcome: 'fail',
+        title: 'Billing period ends in the future',
+        detail: `The period end date (${formatDate(app.periodTo)}) is more than a month ahead. Work cannot be certified before it is performed.`,
+        action: 'Check the period date on the document.',
+        refs: { field: 'periodTo', tab: 'summary' },
+      });
+    }
+  }
+
+  // ── 4. Required values ─────────────────────────────────────────────────────
+
+  if (payAppSeg) {
+    const required: Array<[ClaimedField, Severity]> = [
+      ['originalContractSum', 'blocking'],
+      ['contractSumToDate', 'blocking'],
+      ['totalCompletedStored', 'blocking'],
+      ['currentPaymentDue', 'blocking'],
+      ['totalEarnedLessRetainage', 'warning'],
+      ['lessPreviousCertificates', 'warning'],
+    ];
+    for (const [field, severity] of required) {
+      if (claimed[field] === null) {
+        checks.push({
+          code: 'extract.missing_value',
+          subjectKey: field,
+          category: 'extraction',
+          severity,
+          outcome: 'fail',
+          title: `“${CLAIMED_FIELD_LABEL[field]}” was not found on the application`,
+          detail: `Line ${CLAIMED_FIELD_LINE[field]} of the pay application could not be read, so it cannot be compared with the verified figure (${$(verified[field])}).`,
+          action: 'Enter the value from the document. Leave it blank only if the document itself leaves it blank.',
+          refs: { field, tab: 'summary' },
+        });
+      }
+    }
+
+    // Signature confidence is handled by its own check above.
+    const shaky = Object.entries(app.confidence)
+      .filter(([key, c]) => key !== 'signed' && c < policy.lowConfidenceThreshold)
+      .map(([key]) => key);
+    if (shaky.length > 0) {
+      checks.push({
+        code: 'extract.low_confidence',
+        subjectKey: '',
+        category: 'extraction',
+        severity: 'warning',
+        outcome: 'fail',
+        title: `${pluralize(shaky.length, 'value')} read with low confidence`,
+        detail: `Check these against the document: ${shaky.map((k) => CLAIMED_FIELD_LABEL[k as ClaimedField] ?? humanKey(k)).join(', ')}.`,
+        action: 'Correct any that are wrong. Editing a value marks it as confirmed.',
+        data: { actualText: shaky.join(',') },
+        refs: { field: shaky[0], tab: 'summary' },
+      });
+    }
+  }
+
+  // ── 5. Arithmetic on the submitted figures ─────────────────────────────────
+
+  const arithmetic = (
+    code: string,
+    severity: Severity,
+    result: ClaimedField,
+    formula: string,
+    expected: number | null,
+    why: string,
+  ) => {
+    const actual = claimed[result];
+    if (actual === null || expected === null) return;
+    const ok = near(actual, expected);
+    checks.push({
+      code,
+      subjectKey: '',
+      category: 'math',
+      severity,
+      outcome: ok ? 'pass' : 'fail',
+      title: ok
+        ? `Line ${CLAIMED_FIELD_LINE[result]} adds up (${formula})`
+        : `Line ${CLAIMED_FIELD_LINE[result]} does not add up`,
+      detail: ok
+        ? `${CLAIMED_FIELD_LABEL[result]}: ${$(actual)}.`
+        : `${CLAIMED_FIELD_LABEL[result]} is stated as ${$(actual)}, but ${formula} using the application’s own figures gives ${$(expected)} — a difference of ${$(Math.abs(actual - expected))}. ${why}`,
+      action: ok ? undefined : 'Compare with the document. If the document itself is wrong, request a corrected application.',
+      data: { expected, actual, delta: actual - expected },
+      refs: { field: result, tab: 'summary' },
+    });
+  };
+  const c = claimed;
+  const both = (a: number | null, b: number | null, f: (x: number, y: number) => number) => (a === null || b === null ? null : f(a, b));
+
+  arithmetic('math.contract_sum', 'blocking', 'contractSumToDate', 'line 1 + line 2', both(c.originalContractSum, c.netChangeOrders ?? 0, (a, b) => a + b), 'The contract sum drives the balance to finish.');
+  const claimedRetainage = c.retainageTotal ?? (c.retainageWork !== null || c.retainageStored !== null ? (c.retainageWork ?? 0) + (c.retainageStored ?? 0) : null);
+  if (c.retainageTotal !== null && (c.retainageWork !== null || c.retainageStored !== null)) {
+    arithmetic('math.retainage_sum', 'warning', 'retainageTotal', 'line 5a + line 5b', (c.retainageWork ?? 0) + (c.retainageStored ?? 0), 'The parts of retainage should sum to the total withheld.');
+  }
+  arithmetic('math.earned', 'blocking', 'totalEarnedLessRetainage', 'line 4 − line 5', both(c.totalCompletedStored, claimedRetainage, (a, b) => a - b), 'An error here flows straight into the payment requested.');
+  arithmetic('math.current_due', 'blocking', 'currentPaymentDue', 'line 6 − line 7', both(c.totalEarnedLessRetainage, c.lessPreviousCertificates, (a, b) => a - b), 'This is the amount the subcontractor is asking to be paid.');
+  arithmetic('math.balance', 'warning', 'balanceToFinish', 'line 3 − line 6', both(c.contractSumToDate, c.totalEarnedLessRetainage, (a, b) => a - b), 'The balance to finish is what remains committed on the contract.');
+
+  // Line-level arithmetic
+  if (input.lines.length > 0) {
+    let badTotals = 0;
+    let badBalances = 0;
+    for (const line of input.lines) {
+      if (line.total !== null) {
+        const expected = (line.previous ?? 0) + (line.thisPeriod ?? 0) + (line.stored ?? 0);
+        if (!near(line.total, expected)) {
+          badTotals++;
+          checks.push({
+            code: 'math.line_total',
+            subjectKey: line.id,
+            category: 'math',
+            severity: 'blocking',
+            outcome: 'fail',
+            title: `${lineLabel(line)}: row total does not add up`,
+            detail: `Total completed and stored is stated as ${$(line.total)}, but previous ${$(line.previous ?? 0)} + this period ${$(line.thisPeriod ?? 0)} + stored ${$(line.stored ?? 0)} = ${$(expected)}.`,
+            action: 'Check the row against the document and correct any misread cell.',
+            data: { expected, actual: line.total, delta: line.total - expected },
+            refs: { lineId: line.id, tab: 'lines' },
+          });
+        }
+      }
+      if (line.balance !== null && line.scheduledValue !== null && line.total !== null) {
+        const expected = line.scheduledValue - line.total;
+        if (!near(line.balance, expected)) {
+          badBalances++;
+          checks.push({
+            code: 'math.line_balance',
+            subjectKey: line.id,
+            category: 'math',
+            severity: 'warning',
+            outcome: 'fail',
+            title: `${lineLabel(line)}: balance to finish does not add up`,
+            detail: `Balance is stated as ${$(line.balance)}, but scheduled value ${$(line.scheduledValue)} − total ${$(line.total)} = ${$(expected)}.`,
+            data: { expected, actual: line.balance, delta: line.balance - expected },
+            refs: { lineId: line.id, tab: 'lines' },
+          });
+        }
+      }
+    }
+    if (badTotals === 0 && badBalances === 0) {
+      checks.push({
+        code: 'math.line_total',
+        subjectKey: '',
+        category: 'math',
+        severity: 'blocking',
+        outcome: 'pass',
+        title: 'Every row on the schedule adds up',
+        detail: `Previous + this period + stored equals the row total on all ${pluralize(input.lines.length, 'line')}.`,
+        refs: { tab: 'lines' },
+      });
+    }
+
+    const sheetTotal = sum(input.lines.map((l) => l.total ?? (l.previous ?? 0) + (l.thisPeriod ?? 0) + (l.stored ?? 0)));
+    if (claimed.totalCompletedStored !== null) {
+      const ok = near(sheetTotal, claimed.totalCompletedStored);
+      checks.push({
+        code: 'math.sheet_total',
+        subjectKey: '',
+        category: 'math',
+        severity: 'blocking',
+        outcome: ok ? 'pass' : 'fail',
+        title: ok ? 'Schedule of values ties to line 4' : 'Schedule of values does not tie to line 4',
+        detail: ok
+          ? `The line items total ${$(sheetTotal)}, matching total completed and stored on the application.`
+          : `The line items add up to ${$(sheetTotal)}, but line 4 of the application says ${$(claimed.totalCompletedStored)} — ${$(Math.abs(sheetTotal - claimed.totalCompletedStored))} apart. One of the two documents is wrong.`,
+        action: ok ? undefined : 'Check for a line that was missed or misread; otherwise request a corrected application.',
+        data: { expected: sheetTotal, actual: claimed.totalCompletedStored, delta: claimed.totalCompletedStored - sheetTotal },
+        refs: { field: 'totalCompletedStored', tab: 'summary' },
+      });
+    }
+  }
+
+  // ── 6. Contract value & change orders ──────────────────────────────────────
+
+  if (claimed.originalContractSum !== null) {
+    const ok = near(claimed.originalContractSum, contract.originalAmount);
+    checks.push({
+      code: 'contract.original_sum',
+      subjectKey: '',
+      category: 'contract',
+      severity: 'blocking',
+      outcome: ok ? 'pass' : 'fail',
+      title: ok ? 'Original contract sum matches the contract' : 'Original contract sum does not match the contract',
+      detail: ok
+        ? `${$(contract.originalAmount)} on subcontract ${contract.number}.`
+        : `The application states ${$(claimed.originalContractSum)}; subcontract ${contract.number} is ${$(contract.originalAmount)} — ${$(Math.abs(claimed.originalContractSum - contract.originalAmount))} ${claimed.originalContractSum > contract.originalAmount ? 'higher' : 'lower'}.`,
+      action: ok ? undefined : 'Check that this application is matched to the right contract, and that the contract value on file is correct.',
+      data: { expected: contract.originalAmount, actual: claimed.originalContractSum, delta: claimed.originalContractSum - contract.originalAmount },
+      refs: { field: 'originalContractSum', tab: 'summary' },
+    });
+  }
+
+  {
+    const stated = claimed.netChangeOrders ?? 0;
+    const ok = near(stated, netChangeOrders);
+    let detail: string;
+    if (ok) {
+      detail =
+        approvedCos.length === 0
+          ? 'No change orders are approved on this contract and none are billed.'
+          : `${pluralize(approvedCos.length, 'approved change order')} totalling ${$(netChangeOrders)}.`;
+    } else {
+      const delta = stated - netChangeOrders;
+      const explain = explainWithPending(delta, pendingCos, tol);
+      detail =
+        `The application includes ${$(stated)} of change orders; approved change orders on file total ${$(netChangeOrders)}. ` +
+        (explain
+          ? `The ${$(Math.abs(delta))} difference equals ${explain}, which ${explain.includes(' and ') ? 'have' : 'has'} not been approved.`
+          : `The ${$(Math.abs(delta))} difference does not correspond to any change order on file.`);
+    }
+    if (claimed.netChangeOrders !== null || netChangeOrders !== 0) {
+      checks.push({
+        code: 'co.net_change',
+        subjectKey: '',
+        category: 'change_orders',
+        severity: 'blocking',
+        outcome: ok ? 'pass' : 'fail',
+        title: ok ? 'Change orders match approved change orders' : 'Change orders billed do not match approved change orders',
+        detail,
+        action: ok ? undefined : 'Approve the change order on the contract if it has been executed; otherwise the unapproved amount cannot be billed.',
+        data: { expected: netChangeOrders, actual: stated, delta: stated - netChangeOrders },
+        refs: { field: 'netChangeOrders', tab: 'summary' },
+      });
+    }
+  }
+
+  // ── 7. Schedule of values ──────────────────────────────────────────────────
+
+  if (input.sov.length === 0) {
+    checks.push({
+      code: 'sov.none_on_contract',
+      subjectKey: '',
+      category: 'schedule',
+      severity: 'blocking',
+      outcome: 'fail',
+      title: 'The contract has no schedule of values on file',
+      detail: 'Line items cannot be verified against the contract until its schedule of values is recorded.',
+      action: 'Adopt this application’s schedule as the contract’s schedule of values (after checking it), or enter it on the contract.',
+      refs: { tab: 'lines' },
+    });
+  } else {
+    const sovTotal = sum(input.sov.map((s) => s.scheduledValue));
+    if (!near(sovTotal, contractSumToDate)) {
+      checks.push({
+        code: 'sov.contract_total',
+        subjectKey: '',
+        category: 'schedule',
+        severity: 'warning',
+        outcome: 'fail',
+        title: 'Your schedule of values does not total the contract sum',
+        detail: `The schedule of values on file totals ${$(sovTotal)}, but the contract sum to date is ${$(contractSumToDate)} (original ${$(contract.originalAmount)} + approved change orders ${$(netChangeOrders)}). This is a problem in the contract record, not in the submission.`,
+        action: 'Correct the schedule of values or change orders on the contract.',
+        data: { expected: contractSumToDate, actual: sovTotal, delta: sovTotal - contractSumToDate },
+        refs: { tab: 'lines' },
+      });
+    }
+
+    for (const line of unmatched) {
+      const billed = (line.thisPeriod ?? 0) + (line.stored ?? 0);
+      checks.push({
+        code: 'sov.unknown_line',
+        subjectKey: line.id,
+        category: 'change_orders',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `${lineLabel(line)} is not on the contract`,
+        detail:
+          `This line (scheduled value ${$(line.scheduledValue)}) does not match anything on the contract’s schedule of values` +
+          (billed !== 0 ? `, and ${$(billed)} is billed against it this period` : '') +
+          '. It is usually a change order that has not been approved. It is excluded from the verified amount.',
+        action: 'If the change order has been executed, approve it on the contract and the line will match. Otherwise leave it excluded or request a corrected application.',
+        data: { actual: billed },
+        refs: { lineId: line.id, tab: 'lines' },
+      });
+    }
+
+    let mismatched = 0;
+    let over = 0;
+    let previousWrong = 0;
+    for (const s of input.sov) {
+      const line = lineBySov.get(s.id);
+      const v = verifiedLines.find((x) => x.sovLineId === s.id)!;
+      if (!line) continue;
+
+      if (line.scheduledValue !== null && !near(line.scheduledValue, s.scheduledValue)) {
+        mismatched++;
+        checks.push({
+          code: 'sov.scheduled_value',
+          subjectKey: line.id,
+          category: 'schedule',
+          severity: 'blocking',
+          outcome: 'fail',
+          title: `${lineLabel(line)}: scheduled value differs from the contract`,
+          detail: `The application shows ${$(line.scheduledValue)}; the contract’s schedule of values has ${$(s.scheduledValue)}. Scheduled values can only change through an approved change order.`,
+          action: 'Check the cell against the document. If the subcontractor has re-allocated values, that needs an approved change.',
+          data: { expected: s.scheduledValue, actual: line.scheduledValue, delta: line.scheduledValue - s.scheduledValue },
+          refs: { lineId: line.id, sovLineId: s.id, tab: 'lines' },
+        });
+      }
+
+      if (v.total > s.scheduledValue + tol) {
+        over++;
+        checks.push({
+          code: 'sov.overbilled',
+          subjectKey: line.id,
+          category: 'schedule',
+          severity: 'blocking',
+          outcome: 'fail',
+          title: `${lineLabel(line)}: billed beyond its scheduled value`,
+          detail: `Completed and stored to date would be ${$(v.total)} against a scheduled value of ${$(s.scheduledValue)} — ${$(v.total - s.scheduledValue)} over (${s.scheduledValue ? Math.round((v.total / s.scheduledValue) * 100) : '∞'}%).`,
+          action: 'Reduce this period’s amount to what is contractually billable, or request a corrected application.',
+          data: { expected: s.scheduledValue, actual: v.total, delta: v.total - s.scheduledValue },
+          refs: { lineId: line.id, sovLineId: s.id, tab: 'lines' },
+        });
+      }
+
+      if ((line.thisPeriod ?? 0) < 0 || (line.stored ?? 0) < 0) {
+        checks.push({
+          code: 'sov.negative_billing',
+          subjectKey: line.id,
+          category: 'schedule',
+          severity: 'warning',
+          outcome: 'fail',
+          title: `${lineLabel(line)}: negative amount this period`,
+          detail: `This period shows ${$(line.thisPeriod ?? 0)} of work and ${$(line.stored ?? 0)} of stored material. A negative amount reverses earlier billing.`,
+          action: 'Confirm the credit is intended.',
+          refs: { lineId: line.id, sovLineId: s.id, tab: 'lines' },
+        });
+      }
+
+      if (!noHistory && line.previous !== null && !near(line.previous, v.previous)) {
+        previousWrong++;
+        const delta = line.previous - v.previous;
+        checks.push({
+          code: 'prior.line_previous',
+          subjectKey: line.id,
+          category: 'prior_billing',
+          severity: 'blocking',
+          outcome: 'fail',
+          title: `${lineLabel(line)}: “previous” does not match what was approved`,
+          detail:
+            `The application carries ${$(line.previous)} forward as previously completed; ${prior ? `${$(v.previous)} was approved through application #${prior.applicationNumber}` : 'nothing has been approved on this line before'}. ` +
+            (delta > 0
+              ? `The extra ${$(delta)} was never approved, so it would be paid without ever having been reviewed.`
+              : `${$(-delta)} of approved work is missing, which understates what has already been certified.`),
+          action: 'The verified amount uses the approved history. Request a corrected application if the subcontractor’s records disagree.',
+          data: { expected: v.previous, actual: line.previous, delta },
+          refs: { lineId: line.id, sovLineId: s.id, tab: 'lines' },
+        });
+      }
+    }
+
+    const matchedCount = input.lines.length - unmatched.length;
+    if (matchedCount > 0 && mismatched === 0) {
+      checks.push({
+        code: 'sov.scheduled_value',
+        subjectKey: '',
+        category: 'schedule',
+        severity: 'blocking',
+        outcome: 'pass',
+        title: 'Scheduled values match the contract',
+        detail: `All ${pluralize(matchedCount, 'matched line')} carry the scheduled value on file.`,
+        refs: { tab: 'lines' },
+      });
+    }
+    if (matchedCount > 0 && over === 0) {
+      checks.push({
+        code: 'sov.overbilled',
+        subjectKey: '',
+        category: 'schedule',
+        severity: 'blocking',
+        outcome: 'pass',
+        title: 'No line is billed beyond its scheduled value',
+        detail: 'Completed and stored to date is within the scheduled value on every line.',
+        refs: { tab: 'lines' },
+      });
+    }
+    if (!noHistory && matchedCount > 0 && previousWrong === 0) {
+      checks.push({
+        code: 'prior.line_previous',
+        subjectKey: '',
+        category: 'prior_billing',
+        severity: 'blocking',
+        outcome: 'pass',
+        title: 'Previous amounts match approved history',
+        detail: prior
+          ? `Every line carries forward what was approved through application #${prior.applicationNumber}.`
+          : 'This is the first application; no line carries previous billing.',
+        refs: { tab: 'lines' },
+      });
+    }
+
+    if (input.lines.length > 0) {
+      const missing = input.sov.filter((s) => !lineBySov.has(s.id));
+      if (missing.length > 0) {
+        const withHistory = missing.filter((s) => (prior?.workToDate[s.id] ?? 0) !== 0);
+        checks.push({
+          code: 'sov.missing_lines',
+          subjectKey: '',
+          category: 'schedule',
+          severity: 'warning',
+          outcome: 'fail',
+          title: `${pluralize(missing.length, 'contract line')} missing from the application`,
+          detail:
+            `Not on the submitted schedule: ${missing.slice(0, 6).map((s) => `${s.itemNo} ${s.description}`).join('; ')}${missing.length > 6 ? '…' : ''}.` +
+            (withHistory.length > 0
+              ? ` ${pluralize(withHistory.length, 'of them has', 'of them have')} earlier approved billing, which the verified total still counts.`
+              : ''),
+          action: 'Confirm nothing was missed when the sheet was read; a complete schedule should list every contract line.',
+          refs: { tab: 'lines' },
+        });
+      }
+    }
+
+    if (totalCompletedStored > contractSumToDate + tol) {
+      checks.push({
+        code: 'sov.contract_overbilled',
+        subjectKey: '',
+        category: 'schedule',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: 'Total billed exceeds the contract sum',
+        detail: `Completed and stored to date (${$(totalCompletedStored)}) is ${$(totalCompletedStored - contractSumToDate)} more than the contract sum to date (${$(contractSumToDate)}).`,
+        action: 'Resolve the over-billed lines above.',
+        data: { expected: contractSumToDate, actual: totalCompletedStored, delta: totalCompletedStored - contractSumToDate },
+        refs: { field: 'totalCompletedStored', tab: 'summary' },
+      });
+    }
+  }
+
+  // ── 8. Prior billing ───────────────────────────────────────────────────────
+
+  if (noHistory) {
+    checks.push({
+      code: 'prior.no_history',
+      subjectKey: '',
+      category: 'prior_billing',
+      severity: 'blocking',
+      outcome: 'fail',
+      title: 'Earlier billing is reported, but there is no history on file',
+      detail: `The application reports ${$(statedPrevious)} of previously completed work and ${$(claimed.lessPreviousCertificates ?? 0)} of previous certificates, but no earlier application for this contract has been approved here. Until a starting point exists, “previous” amounts cannot be verified.`,
+      action: 'If this contract was already under way before you started using Construction RCM, set its opening balances from this application after checking them against your records. Otherwise investigate.',
+      data: { actual: claimed.lessPreviousCertificates ?? statedPrevious },
+      refs: { field: 'lessPreviousCertificates', tab: 'summary' },
+    });
+  } else if (claimed.lessPreviousCertificates !== null) {
+    const ok = near(claimed.lessPreviousCertificates, lessPreviousCertificates);
+    const delta = claimed.lessPreviousCertificates - lessPreviousCertificates;
+    checks.push({
+      code: 'prior.previous_certificates',
+      subjectKey: '',
+      category: 'prior_billing',
+      severity: 'blocking',
+      outcome: ok ? 'pass' : 'fail',
+      title: ok ? 'Previous certificates match what was approved' : 'Previous certificates do not match what was approved',
+      detail: ok
+        ? prior
+          ? `${$(lessPreviousCertificates)} certified through ${prior.kind === 'baseline' ? 'the opening balance' : `application #${prior.applicationNumber}`}.`
+          : 'Nothing has been certified before; line 7 is zero.'
+        : `Line 7 states ${$(claimed.lessPreviousCertificates)}; ${prior ? `${$(lessPreviousCertificates)} was certified through ${prior.kind === 'baseline' ? 'the opening balance' : `application #${prior.applicationNumber}`}` : 'nothing has been certified before'}. ` +
+          (delta < 0
+            ? `Deducting ${$(-delta)} too little would pay that amount a second time.`
+            : `It deducts ${$(delta)} more than was certified, which under-bills this period.`),
+      action: ok ? undefined : 'The verified payment uses the approved history. Request a corrected application if needed.',
+      data: { expected: lessPreviousCertificates, actual: claimed.lessPreviousCertificates, delta },
+      refs: { field: 'lessPreviousCertificates', tab: 'summary' },
+    });
+  }
+
+  // ── 9. Retainage ───────────────────────────────────────────────────────────
+
+  if (claimedRetainage !== null && !noHistory) {
+    // Test the RATE the subcontractor applied, on what they billed. Lines that are not on the
+    // contract are excluded from the verified payment, but that is a separate finding; folding
+    // it in here would make a correctly calculated retainage look wrong.
+    const basisWork = workToDate + sum(unmatched.map((l) => (l.previous ?? 0) + (l.thisPeriod ?? 0)));
+    const basisStored = storedToDate + sum(unmatched.map((l) => l.stored ?? 0));
+    const expectedRetainage = unmatched.length > 0 ? applyBps(basisWork, contract.retainageWorkBps) + applyBps(basisStored, contract.retainageStoredBps) : retainageTotal;
+    const ok = near(claimedRetainage, expectedRetainage);
+    const delta = claimedRetainage - expectedRetainage;
+    const basis =
+      `${formatBps(contract.retainageWorkBps)} of completed work (${$(basisWork)})` +
+      (basisStored !== 0 || contract.retainageStoredBps !== contract.retainageWorkBps
+        ? ` plus ${formatBps(contract.retainageStoredBps)} of stored material (${$(basisStored)})`
+        : '') +
+      (unmatched.length > 0 ? ', counting the lines that are not on the contract' : '');
+    checks.push({
+      code: 'ret.amount',
+      subjectKey: '',
+      category: 'retainage',
+      severity: 'blocking',
+      outcome: ok ? 'pass' : 'fail',
+      title: ok ? 'Retainage is calculated per the contract' : delta < 0 ? 'Too little retainage is withheld' : 'Retainage withheld is higher than the contract requires',
+      detail: ok
+        ? `${$(expectedRetainage)} — ${basis}.`
+        : `The contract requires ${basis} = ${$(expectedRetainage)}. The application withholds ${$(claimedRetainage)}, ${$(Math.abs(delta))} ${delta < 0 ? 'short. Under-withholding releases money the contract says to hold back.' : 'more than required.'}`,
+      action: ok ? undefined : 'The verified payment applies the contract rate. If a retainage reduction has been agreed, update the contract terms first.',
+      data: { expected: expectedRetainage, actual: claimedRetainage, delta },
+      refs: { field: 'retainageTotal', tab: 'summary' },
+    });
+
+    if (prior?.retainageTotal != null && claimedRetainage < prior.retainageTotal - tol) {
+      checks.push({
+        code: 'ret.release',
+        subjectKey: '',
+        category: 'retainage',
+        severity: 'warning',
+        outcome: 'fail',
+        title: 'Retainage held would go down',
+        detail: `Retainage was ${$(prior.retainageTotal)} after the last approved application and is ${$(claimedRetainage)} on this one. That bills ${$(prior.retainageTotal - claimedRetainage)} of previously withheld retainage.`,
+        action: 'Confirm a retainage release was authorised before approving.',
+        data: { expected: prior.retainageTotal, actual: claimedRetainage, delta: claimedRetainage - prior.retainageTotal },
+        refs: { field: 'retainageTotal', tab: 'summary' },
+      });
+    }
+  }
+
+  // ── 10. The bottom line ────────────────────────────────────────────────────
+
+  if (claimed.currentPaymentDue !== null && input.sov.length > 0 && !noHistory) {
+    const ok = near(claimed.currentPaymentDue, currentPaymentDue);
+    const delta = claimed.currentPaymentDue - currentPaymentDue;
+    checks.push({
+      code: 'pay.current_due',
+      subjectKey: '',
+      category: 'payment',
+      severity: 'blocking',
+      outcome: ok ? 'pass' : 'fail',
+      title: ok
+        ? 'Requested payment matches the verified amount'
+        : `Requested payment is ${$(Math.abs(delta))} ${delta > 0 ? 'more' : 'less'} than the verified amount`,
+      detail: ok
+        ? `${$(currentPaymentDue)} is due this period based on the contract, approved change orders and billing history.`
+        : `The subcontractor requests ${$(claimed.currentPaymentDue)}. Recomputed from the contract, approved change orders, approved billing history and this period’s line items, ${$(currentPaymentDue)} is due. The items above explain the difference.`,
+      action: ok ? undefined : 'Resolve the items above so the amounts agree, or accept this item to approve at the verified amount.',
+      data: { expected: currentPaymentDue, actual: claimed.currentPaymentDue, delta },
+      refs: { field: 'currentPaymentDue', tab: 'summary' },
+    });
+  }
+  if (input.sov.length > 0 && !noHistory && currentPaymentDue <= 0 && input.lines.length > 0) {
+    checks.push({
+      code: 'pay.not_positive',
+      subjectKey: '',
+      category: 'payment',
+      severity: 'warning',
+      outcome: 'fail',
+      title: currentPaymentDue === 0 ? 'Nothing is due on this application' : 'The verified amount is negative',
+      detail: `The verified payment is ${$(currentPaymentDue)}. ${currentPaymentDue < 0 ? 'More has been certified than has been earned to date.' : ''}`.trim(),
+      action: 'Confirm this is expected before approving.',
+      refs: { field: 'currentPaymentDue', tab: 'summary' },
+    });
+  }
+
+  // ── 11. Lien waivers ───────────────────────────────────────────────────────
+
+  checks.push(
+    ...evaluateWaivers({
+      policy,
+      projectState: input.project.state,
+      subcontractorName: input.subcontractor.name,
+      applicationNumber: app.applicationNumber,
+      periodTo: app.periodTo,
+      claimedPayment: claimed.currentPaymentDue,
+      verifiedPayment: input.sov.length > 0 && !noHistory ? currentPaymentDue : null,
+      priorPayment: prior?.kind === 'application' ? prior.currentPaymentDue : null,
+      hasWaiverDocument: hasType('lien_waiver'),
+      waivers: input.waivers,
+      tolerance: tol,
+    }),
+  );
+
+  return { verified, lines: verifiedLines, checks };
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function addDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function humanKey(key: string): string {
+  return key.replace(/([A-Z])/g, ' $1').toLowerCase();
+}
+
+/**
+ * If the gap between billed and approved change orders is exactly one or two
+ * pending change orders, name them — that is almost always the explanation.
+ */
+function explainWithPending(
+  delta: number,
+  pending: Array<{ number: string; title: string; amount: number }>,
+  tol: number,
+): string | null {
+  const label = (c: { number: string; title: string; amount: number }) =>
+    `pending change order ${c.number} “${c.title}” (${formatMoney(c.amount)})`;
+  for (const a of pending) if (Math.abs(a.amount - delta) <= tol) return label(a);
+  for (let i = 0; i < pending.length; i++) {
+    for (let j = i + 1; j < pending.length; j++) {
+      if (Math.abs(pending[i]!.amount + pending[j]!.amount - delta) <= tol) return `${label(pending[i]!)} and ${label(pending[j]!)}`;
+    }
+  }
+  return null;
+}

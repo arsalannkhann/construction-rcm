@@ -1,0 +1,545 @@
+/**
+ * Database schema.
+ *
+ * Conventions
+ * - Every tenant-owned row carries `orgId`; every query must filter on it.
+ * - Money is stored as integer cents (bigint). Rates are basis points (1% = 100).
+ * - `jsonb` columns hold either immutable snapshots (extractions, approved
+ *   records) or small structured blobs that are never aggregated in SQL.
+ */
+import {
+  bigint,
+  boolean,
+  date,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
+import type {
+  ApprovedRecord,
+  ClaimedHeader,
+  ContractBaseline,
+  DocumentSegment,
+  EvidenceMap,
+  ExtractionResult,
+  FindingData,
+  FindingRefs,
+  LineSnapshot,
+  MatchCandidate,
+  OrgSettings,
+  StatedParties,
+  VerifiedHeader,
+  WaiverSnapshot,
+} from '@/server/types';
+
+const cents = (name: string) => bigint(name, { mode: 'number' });
+const ts = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
+const createdAt = () => ts('created_at').notNull().defaultNow();
+
+// ── Identity & tenancy ──────────────────────────────────────────────────────
+
+export const organizations = pgTable('organizations', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  isDemo: boolean('is_demo').notNull().default(false),
+  /** Random token that addresses this org's inbound-email intake endpoint. */
+  intakeToken: text('intake_token').notNull().unique(),
+  settings: jsonb('settings').$type<OrgSettings>().notNull(),
+  createdAt: createdAt(),
+});
+
+export const users = pgTable('users', {
+  id: text('id').primaryKey(),
+  email: text('email').notNull().unique(),
+  name: text('name').notNull(),
+  passwordHash: text('password_hash').notNull(),
+  createdAt: createdAt(),
+  lastLoginAt: ts('last_login_at'),
+});
+
+export const memberships = pgTable(
+  'memberships',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    role: text('role').notNull(),
+    status: text('status').notNull().default('active'), // active | deactivated
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('memberships_org_user').on(t.orgId, t.userId)],
+);
+
+export const invitations = pgTable(
+  'invitations',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    role: text('role').notNull(),
+    tokenHash: text('token_hash').notNull().unique(),
+    invitedBy: text('invited_by').notNull().references(() => users.id),
+    expiresAt: ts('expires_at').notNull(),
+    acceptedAt: ts('accepted_at'),
+    revokedAt: ts('revoked_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('invitations_org').on(t.orgId)],
+);
+
+export const sessions = pgTable('sessions', {
+  /** sha256 of the cookie token; the raw token is never stored. */
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  orgId: text('org_id').references(() => organizations.id, { onDelete: 'set null' }),
+  createdAt: createdAt(),
+  expiresAt: ts('expires_at').notNull(),
+});
+
+// ── Projects, subcontractors, contracts ─────────────────────────────────────
+
+export const projects = pgTable(
+  'projects',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    number: text('number'),
+    address: text('address'),
+    city: text('city'),
+    /** Two-letter US state; drives jurisdiction-specific waiver pre-screening. */
+    state: text('state'),
+    ownerName: text('owner_name'),
+    status: text('status').notNull().default('active'), // active | closed
+    externalSource: text('external_source'),
+    externalId: text('external_id'),
+    createdBy: text('created_by'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('projects_org').on(t.orgId)],
+);
+
+export const subcontractors = pgTable(
+  'subcontractors',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    trade: text('trade'),
+    contactName: text('contact_name'),
+    contactEmail: text('contact_email'),
+    phone: text('phone'),
+    address: text('address'),
+    externalSource: text('external_source'),
+    externalId: text('external_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('subcontractors_org').on(t.orgId)],
+);
+
+export const contracts = pgTable(
+  'contracts',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    subcontractorId: text('subcontractor_id').notNull().references(() => subcontractors.id),
+    number: text('number').notNull(),
+    title: text('title').notNull(),
+    originalAmount: cents('original_amount').notNull(),
+    /** Retainage withheld on completed work, in basis points. */
+    retainageWorkBps: integer('retainage_work_bps').notNull().default(1000),
+    /** Retainage withheld on stored materials, in basis points. */
+    retainageStoredBps: integer('retainage_stored_bps').notNull().default(1000),
+    executedOn: date('executed_on'),
+    status: text('status').notNull().default('active'), // active | closed
+    /**
+     * Opening balances for a contract that was already being billed before it
+     * was set up here. Used as the "previous" basis until an application is approved.
+     */
+    baseline: jsonb('baseline').$type<ContractBaseline>(),
+    externalSource: text('external_source'),
+    externalId: text('external_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('contracts_org_project').on(t.orgId, t.projectId)],
+);
+
+export const changeOrders = pgTable(
+  'change_orders',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    contractId: text('contract_id').notNull().references(() => contracts.id, { onDelete: 'cascade' }),
+    number: text('number').notNull(),
+    title: text('title').notNull(),
+    amount: cents('amount').notNull(),
+    status: text('status').notNull().default('pending'), // pending | approved | rejected | void
+    approvedOn: date('approved_on'),
+    externalId: text('external_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('change_orders_contract').on(t.contractId)],
+);
+
+export const sovLines = pgTable(
+  'sov_lines',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    contractId: text('contract_id').notNull().references(() => contracts.id, { onDelete: 'cascade' }),
+    itemNo: text('item_no').notNull(),
+    description: text('description').notNull(),
+    scheduledValue: cents('scheduled_value').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    /** Set when this line exists because of an approved change order. */
+    changeOrderId: text('change_order_id').references(() => changeOrders.id, { onDelete: 'cascade' }),
+    externalId: text('external_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('sov_lines_contract').on(t.contractId)],
+);
+
+// ── Pay applications ────────────────────────────────────────────────────────
+
+export const payApplications = pgTable(
+  'pay_applications',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    projectId: text('project_id').references(() => projects.id),
+    contractId: text('contract_id').references(() => contracts.id),
+    subcontractorId: text('subcontractor_id').references(() => subcontractors.id),
+    applicationNumber: integer('application_number'),
+    periodTo: date('period_to'),
+    /** processing | needs_matching | needs_review | pending_approval | on_hold | approved | rejected | void */
+    status: text('status').notNull().default('processing'),
+    receivedAt: ts('received_at').notNull().defaultNow(),
+    receivedVia: text('received_via').notNull().default('upload'), // upload | email
+    senderEmail: text('sender_email'),
+    submittedBy: text('submitted_by').references(() => users.id),
+    assigneeId: text('assignee_id').references(() => users.id),
+
+    /** Which engine produced the current working values, and how many times we have extracted. */
+    engine: text('engine'),
+    revision: integer('revision').notNull().default(0),
+    processingError: text('processing_error'),
+
+    /** What the documents say about who/what this is (before matching to our records). */
+    stated: jsonb('stated').$type<StatedParties>(),
+    matchCandidates: jsonb('match_candidates').$type<MatchCandidate[]>(),
+
+    /** The G702 summary exactly as the subcontractor submitted it (after any extraction corrections). */
+    claimed: jsonb('claimed').$type<ClaimedHeader>().notNull(),
+    /** Field-level provenance for `claimed`: where on which page each value was read. */
+    evidence: jsonb('evidence').$type<EvidenceMap>().notNull(),
+    /** Our independent computation from contract, change orders, prior approvals and line items. */
+    verified: jsonb('verified').$type<VerifiedHeader>(),
+
+    signed: text('signed'), // yes | no | unclear
+    notarized: text('notarized'), // yes | no | unclear
+    signatureConfirmedBy: text('signature_confirmed_by').references(() => users.id),
+    signatureConfirmedAt: ts('signature_confirmed_at'),
+
+    // Denormalised for list views and dashboard aggregation.
+    claimedAmount: cents('claimed_amount'),
+    verifiedAmount: cents('verified_amount'),
+    openBlocking: integer('open_blocking').notNull().default(0),
+    openWarnings: integer('open_warnings').notNull().default(0),
+
+    submittedForApprovalAt: ts('submitted_for_approval_at'),
+    submittedForApprovalBy: text('submitted_for_approval_by').references(() => users.id),
+    holdSince: ts('hold_since'),
+
+    decidedAt: ts('decided_at'),
+    decidedBy: text('decided_by').references(() => users.id),
+    decisionNote: text('decision_note'),
+    approvedAmount: cents('approved_amount'),
+    approvedRetainage: cents('approved_retainage'),
+    /** Immutable snapshot written at approval; every export is rendered from this. */
+    approvedRecord: jsonb('approved_record').$type<ApprovedRecord>(),
+
+    transferStatus: text('transfer_status').notNull().default('none'), // none | exported | synced | failed
+
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('pay_apps_org_status').on(t.orgId, t.status),
+    index('pay_apps_contract').on(t.contractId),
+  ],
+);
+
+export const payAppLines = pgTable(
+  'pay_app_lines',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    payApplicationId: text('pay_application_id').notNull().references(() => payApplications.id, { onDelete: 'cascade' }),
+    sovLineId: text('sov_line_id').references(() => sovLines.id, { onDelete: 'set null' }),
+    sortOrder: integer('sort_order').notNull().default(0),
+    itemNo: text('item_no'),
+    description: text('description'),
+    scheduledValue: cents('scheduled_value'), // column C
+    previous: cents('previous'), // column D
+    thisPeriod: cents('this_period'), // column E
+    stored: cents('stored'), // column F
+    total: cents('total'), // column G as stated
+    balance: cents('balance'), // column H as stated
+    retainage: cents('retainage'), // column I as stated
+    /** Values exactly as extracted, with page/bbox evidence. Never mutated. */
+    extracted: jsonb('extracted').$type<LineSnapshot>(),
+    /** null | correction (document was misread) | adjustment (reviewer changed the approved amount) */
+    editKind: text('edit_kind'),
+    editNote: text('edit_note'),
+    editedBy: text('edited_by').references(() => users.id),
+    editedAt: ts('edited_at'),
+  },
+  (t) => [index('pay_app_lines_app').on(t.payApplicationId)],
+);
+
+export const documents = pgTable(
+  'documents',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    payApplicationId: text('pay_application_id').references(() => payApplications.id, { onDelete: 'cascade' }),
+    filename: text('filename').notNull(),
+    mimeType: text('mime_type').notNull(),
+    size: integer('size').notNull(),
+    sha256: text('sha256').notNull(),
+    storageKey: text('storage_key').notNull(),
+    pageCount: integer('page_count'),
+    hasTextLayer: boolean('has_text_layer'),
+    /** uploaded | processed | unreadable | failed */
+    status: text('status').notNull().default('uploaded'),
+    statusDetail: text('status_detail'),
+    segments: jsonb('segments').$type<DocumentSegment[]>().notNull(),
+    source: text('source').notNull().default('upload'), // upload | email
+    uploadedBy: text('uploaded_by').references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index('documents_app').on(t.payApplicationId), index('documents_org_sha').on(t.orgId, t.sha256)],
+);
+
+export const extractions = pgTable(
+  'extractions',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    documentId: text('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+    payApplicationId: text('pay_application_id').references(() => payApplications.id, { onDelete: 'cascade' }),
+    engine: text('engine').notNull(),
+    model: text('model'),
+    status: text('status').notNull(), // succeeded | failed
+    result: jsonb('result').$type<ExtractionResult>(),
+    error: text('error'),
+    durationMs: integer('duration_ms'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('extractions_document').on(t.documentId)],
+);
+
+export const lienWaivers = pgTable(
+  'lien_waivers',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    payApplicationId: text('pay_application_id').notNull().references(() => payApplications.id, { onDelete: 'cascade' }),
+    documentId: text('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+    page: integer('page').notNull().default(1),
+    /** conditional_progress | unconditional_progress | conditional_final | unconditional_final | unknown */
+    waiverType: text('waiver_type').notNull(),
+    /** State whose statutory form the document's wording resembles, if any. */
+    formState: text('form_state'),
+    title: text('title'),
+    claimant: text('claimant'),
+    customer: text('customer'),
+    owner: text('owner'),
+    jobDescription: text('job_description'),
+    throughDate: date('through_date'),
+    amount: cents('amount'),
+    exceptions: text('exceptions'),
+    signed: text('signed'), // yes | no | unclear
+    signerName: text('signer_name'),
+    signerTitle: text('signer_title'),
+    signedDate: date('signed_date'),
+    notarized: text('notarized'),
+    extracted: jsonb('extracted').$type<WaiverSnapshot>(),
+    editedBy: text('edited_by').references(() => users.id),
+    editedAt: ts('edited_at'),
+  },
+  (t) => [index('lien_waivers_app').on(t.payApplicationId)],
+);
+
+export const findings = pgTable(
+  'findings',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    payApplicationId: text('pay_application_id').notNull().references(() => payApplications.id, { onDelete: 'cascade' }),
+    code: text('code').notNull(),
+    /** Distinguishes multiple results of the same check (e.g. one per line). */
+    subjectKey: text('subject_key').notNull().default(''),
+    category: text('category').notNull(),
+    severity: text('severity').notNull(), // blocking | warning | info
+    /** open | passed | accepted */
+    status: text('status').notNull(),
+    title: text('title').notNull(),
+    detail: text('detail').notNull(),
+    action: text('action'),
+    /** True when resolving this is a legally consequential judgement call. */
+    needsQualifiedReview: boolean('needs_qualified_review').notNull().default(false),
+    data: jsonb('data').$type<FindingData>(),
+    refs: jsonb('refs').$type<FindingRefs>(),
+    /** Hash of the facts behind the finding. An accepted finding reopens if this changes. */
+    fingerprint: text('fingerprint').notNull(),
+    resolvedBy: text('resolved_by').references(() => users.id),
+    resolvedAt: ts('resolved_at'),
+    resolutionNote: text('resolution_note'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('findings_app_code_subject').on(t.payApplicationId, t.code, t.subjectKey),
+    index('findings_org_status').on(t.orgId, t.status),
+  ],
+);
+
+export const comments = pgTable(
+  'comments',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    payApplicationId: text('pay_application_id').notNull().references(() => payApplications.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull().references(() => users.id),
+    body: text('body').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('comments_app').on(t.payApplicationId)],
+);
+
+/** Messages to subcontractors. `status` is the literal delivery outcome, never optimistic. */
+export const communications = pgTable(
+  'communications',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    payApplicationId: text('pay_application_id').notNull().references(() => payApplications.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(), // correction_request | decision_notice | general
+    toEmail: text('to_email'),
+    subject: text('subject').notNull(),
+    body: text('body').notNull(),
+    /** sent (provider accepted) | not_sent (no provider configured; drafted only) | failed */
+    status: text('status').notNull(),
+    provider: text('provider'),
+    providerRef: text('provider_ref'),
+    error: text('error'),
+    createdBy: text('created_by').notNull().references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index('communications_app').on(t.payApplicationId)],
+);
+
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    title: text('title').notNull(),
+    body: text('body'),
+    href: text('href'),
+    readAt: ts('read_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('notifications_user').on(t.orgId, t.userId, t.readAt)],
+);
+
+/** Append-only, hash-chained per organisation. Never updated or deleted by application code. */
+export const auditEvents = pgTable(
+  'audit_events',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    actorType: text('actor_type').notNull(), // user | system
+    actorId: text('actor_id'),
+    actorName: text('actor_name').notNull(),
+    action: text('action').notNull(),
+    entityType: text('entity_type').notNull(),
+    entityId: text('entity_id'),
+    payApplicationId: text('pay_application_id'),
+    summary: text('summary').notNull(),
+    data: jsonb('data').$type<Record<string, unknown>>(),
+    prevHash: text('prev_hash').notNull(),
+    hash: text('hash').notNull(),
+    createdAt: ts('created_at').notNull(),
+  },
+  (t) => [
+    uniqueIndex('audit_org_seq').on(t.orgId, t.seq),
+    index('audit_app').on(t.payApplicationId),
+  ],
+);
+
+export const integrations = pgTable(
+  'integrations',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull(), // procore
+    status: text('status').notNull(), // connected | error
+    config: jsonb('config').$type<Record<string, unknown>>().notNull(),
+    /** AES-256-GCM encrypted JSON (tokens). */
+    credentials: text('credentials'),
+    lastSyncAt: ts('last_sync_at'),
+    lastError: text('last_error'),
+    connectedBy: text('connected_by').references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('integrations_org_provider').on(t.orgId, t.provider)],
+);
+
+/** One row per export or integration push of an approved application. */
+export const transfers = pgTable(
+  'transfers',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    payApplicationId: text('pay_application_id').notNull().references(() => payApplications.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(), // csv | json | pdf | procore
+    status: text('status').notNull(), // completed | failed
+    filename: text('filename'),
+    storageKey: text('storage_key'),
+    sha256: text('sha256'),
+    externalRef: text('external_ref'),
+    error: text('error'),
+    createdBy: text('created_by').references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index('transfers_org').on(t.orgId), index('transfers_app').on(t.payApplicationId)],
+);
+
+/** Durable work queue for document processing. */
+export const jobs = pgTable(
+  'jobs',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull(),
+    type: text('type').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+    status: text('status').notNull().default('queued'), // queued | running | succeeded | failed
+    attempts: integer('attempts').notNull().default(0),
+    error: text('error'),
+    createdAt: createdAt(),
+    startedAt: ts('started_at'),
+    finishedAt: ts('finished_at'),
+  },
+  (t) => [index('jobs_status').on(t.status)],
+);

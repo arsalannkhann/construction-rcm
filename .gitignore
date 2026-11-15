@@ -1,0 +1,25 @@
+node_modules
+.next
+out
+dist
+coverage
+*.tsbuildinfo
+next-env.d.ts
+
+# local runtime data: embedded database + stored documents
+.data
+.data-*
+
+# environment
+.env
+.env.local
+.env.*.local
+
+# generated
+public/pdfjs
+samples/out
+
+# tooling / OS
+.DS_Store
+.claude
+skill-observations
