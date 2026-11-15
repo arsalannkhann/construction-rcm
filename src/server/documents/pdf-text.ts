@@ -73,10 +73,26 @@ function toFrame(r: Rotation, W: number, H: number, x: number, y: number): [numb
   }
 }
 
-export async function readPdfText(bytes: Uint8Array): Promise<PdfText> {
+/**
+ * pdf.js, with its worker already in hand.
+ *
+ * Under Node, pdf.js runs its worker in-process, and unless it is given one it
+ * loads it with import() of a path computed at run time. A build cannot trace
+ * that, so hosts that deploy only traced files (Vercel) leave the worker out and
+ * no PDF opens. Importing it here makes the build include it, and pdf.js uses
+ * the module it finds on `globalThis.pdfjsWorker` instead of importing one.
+ */
+async function loadPdfjs() {
   // The legacy build is the one pdf.js supports under Node. Pinned to 4.x: later
   // majors need Node 22 built-ins (Promise.withResolvers, Iterator helpers).
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const [pdfjs, worker] = await Promise.all([import('pdfjs-dist/legacy/build/pdf.mjs'), import('pdfjs-dist/legacy/build/pdf.worker.mjs')]);
+  const g = globalThis as { pdfjsWorker?: { WorkerMessageHandler?: unknown } };
+  if (!g.pdfjsWorker?.WorkerMessageHandler) g.pdfjsWorker = worker;
+  return pdfjs;
+}
+
+export async function readPdfText(bytes: Uint8Array): Promise<PdfText> {
+  const pdfjs = await loadPdfjs();
   // pdf.js takes ownership of the buffer it is given, so hand it a copy.
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(bytes), useSystemFonts: true, isEvalSupported: false, isOffscreenCanvasSupported: false, verbosity: 0 }).promise;
   const OPS = pdfjs.OPS as Record<string, number>;
