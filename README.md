@@ -169,13 +169,16 @@ Copy `.env.example` to `.env.local`. Everything is optional in development.
 | Variable | Effect when set | When not set |
 |---|---|---|
 | `DATABASE_URL` | Uses PostgreSQL | Embedded database under `RCM_DATA_DIR` (`./.data`) |
-| `RCM_SECRET_KEY` | Encrypts stored integration tokens | Required in production; a local key file is generated in development |
+| `RCM_SECRET_KEY` | Encrypts integration tokens and authenticator keys; keys the hashes of recovery codes and remembered browsers | Required in production; a local key file is generated in development. Treat it as permanent |
 | `APP_URL` | Base URL for invite links and OAuth redirects | `http://localhost:3000` |
 | `ANTHROPIC_API_KEY` | AI document reading (`RCM_EXTRACTION_MODEL`, default `claude-opus-5-5`) | Text-layer reader only; scans are keyed by hand |
 | `PROCORE_CLIENT_ID`, `PROCORE_CLIENT_SECRET`, `PROCORE_ENV` | Procore can be connected | Shown as "Not configured"; file export only |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Invitations and messages to subcontractors are emailed | They are saved as drafts and labelled "not sent" |
 | `INBOUND_EMAIL_SECRET` | Opens the email-intake webhook | The webhook rejects every request |
 | `DATABASE_POOL_MAX` | Connections per process (default 10) | |
+| `DATABASE_CA_CERT` | The database provider's CA (PEM or path): encrypted, verified connection. Needed for Supabase | node-postgres's own TLS rules apply |
+| `RCM_MIGRATIONS` | `external`: the app checks the schema that Supabase's GitHub integration applied | The app applies `drizzle/` itself |
+| `RCM_CLIENT_IP_HEADER`, `RCM_TRUSTED_PROXY_HOPS` | Where the client address comes from, for the sign-in limits (see `docs/authentication.md`) | The address one proxy appended to `X-Forwarded-For` |
 | `RCM_STORAGE` | `database` or `disk` for documents | `database` with `DATABASE_URL`, otherwise `disk` |
 
 Settings → Organisation shows which of these are active on a running
@@ -186,67 +189,93 @@ fallback; set `RCM_EXTRACTION_FALLBACKS=off` to disable that.
 
 ## What is and is not verified
 
-**Verified by automated tests** (`pnpm test`, 208 tests, against in-memory
-Postgres):
+Status on 2026-11-15, branch `phase-2-pilot-readiness`.
 
-- Money parsing and rounding; every reconciliation check; waiver pre-screening
-  and statutory form recognition.
-- Reading generated Texas, California and Florida packages from real PDF bytes,
-  including multi-page schedules and combined files.
-- The full service workflow: upload → read → match → reconcile → correct or
-  override → approve → export, plus sequencing, duplicates, opening balances,
-  change orders, reopening, role enforcement and tenant isolation.
+**Verified by automated tests.** `pnpm test` runs the suite on the embedded
+database (PGlite): 378 passed, 3 skipped (the skipped tests need a PostgreSQL
+server). `pnpm test:pg` runs the same suite on a real PostgreSQL 18 server:
+381 passed. `pnpm typecheck` is clean. Covered:
+
+- Money parsing and rounding; every reconciliation check, including stepped
+  retainage, releases and deductive change orders; waiver pre-screening and
+  statutory form recognition.
+- Reading generated Texas, California and Florida packages from real PDF bytes.
+- The full workflow (upload → read → match → reconcile → correct or override →
+  approve → export), stale decisions refused, atomic writes that leave nothing
+  behind on failure, the job queue under concurrency and restart, role
+  enforcement and tenant isolation.
 - The audit chain, including detection of an edited event.
-- The demo workspace build (about forty packages through the real pipeline).
-- Team invitations, roles and policy; exports (CSV, JSON, PDF); email intake.
-- The AI engine's parsing, grounding, cross-checking and failure handling,
-  with a **stubbed** client.
-- The Procore client, OAuth with token rotation, import and push, against a
-  **local emulator** of the documented API.
+- Authentication: TOTP against the RFC test vectors, password reset, two-step
+  sign-in and recovery codes, sessions, the database-backed throttle across two
+  connection pools, remembered browsers, the organisation's two-step
+  requirement, administrator recovery rules, and one regression test per
+  security-review finding written as the attack (`tests/auth-hardening.test.ts`).
+- Database connections: TLS verification against a real PostgreSQL server
+  with a generated CA, and both migration modes.
+- Email intake (one processing per message, sender check); exports.
+- The AI engine's parsing, grounding and failure handling, with a **stubbed**
+  client. The Procore client, OAuth renewal and push, against a **local
+  emulator** of the documented API.
 
-**Verified by hand in a browser** on 2026-11-15: sign-up; creating and deleting
-the demo workspace; the dashboard; the queue; upload, processing and automatic
-matching; the review workspace (evidence highlighting, all tabs, inline edit);
-overriding findings; approval with acknowledged warnings; the correction
-request; the unmatched-package screen; creating a project, subcontractor and
-subcontract with a pasted schedule and running two packages through them in a
-non-demo organisation; transfers; activity; settings. The production build
-(`pnpm build`) and `pnpm start` were smoke-tested.
+**Verified by hand in a browser**, on the embedded database: the Phase 1
+workflow (sign-up, demo workspace, queue, upload, review with evidence
+highlighting, overrides, approval, correction requests, records, transfers,
+settings), and on 2026-11-15: turning on two-step verification with codes
+computed by an independent implementation, recovery codes shown once, signing
+in with a code and with a recovery code, wrong-code counting, password reset
+through an operator link (confirmation on the sign-in page, account signed out,
+second step still required), "Forgot password?" saying plainly that no email
+is set up, system status, accepting an invitation with an account that has
+two-step verification (joined only after the code, signed in to the inviting
+organisation), an owner refused when recovering a member who belongs to
+another organisation, and the password prompt before two-step setup.
 
-**Not verified, because it needs credentials or infrastructure that was not
-available:**
+**Verified against real infrastructure:**
+
+| What | Result |
+|---|---|
+| Supabase project `construction-rcm` | Schema applied (migrations 0000–0003, recorded under the repository's versions). The Data API was probed from outside with both public keys and refuses every table. **The app itself has not yet connected to it**: that needs the database password in `.env.local` (see `docs/operations.md`, "Use Supabase as the database"). |
+| Docker image and Compose stack | Built and run to a healthy state on 2026-11-15, before that day's authentication changes; not rebuilt since. |
+
+**Not verified, because it needs credentials, documents or infrastructure that
+were not available:**
 
 | Area | State |
 |---|---|
-| Claude reading real documents | Never called live. Accuracy on real pay applications is unmeasured. |
-| Procore | Never run against a Procore account. Built from the public API documentation (`docs/procore-api-notes.md`). |
+| Claude reading real documents | Never called live (no API key). Accuracy on real pay applications is unmeasured. |
+| Real subcontractor documents | None available. The evaluation harness is ready (`pnpm eval:extraction`, `eval/real/README.md`); scores on the synthetic corpus are a regression signal only. |
+| Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`). |
 | Outbound email (Resend) | Never sent. |
 | Inbound email | The webhook logic is tested; no provider has been pointed at it. |
-| PostgreSQL via `DATABASE_URL` | Not run. The same migrations and queries run on PGlite, which is Postgres, but the `pg` driver path is untested. |
-| Docker image | `Dockerfile` and `docker-compose.yml` are provided and have not been built. |
-| Real subcontractor documents | Only generated documents have been read. The text-layer reader's tolerance for other layouts is unmeasured. |
+| A production deployment | None made. |
 
 ## Limitations and risks
 
-- **Retainage is a flat rate** on completed work and on stored material. Stepped
-  retainage and scheduled releases are not modelled; a reduction is flagged for
-  a person to confirm.
-- **No password reset and no SSO or MFA.** A user who forgets their password
-  cannot recover the account without database access. This must be fixed before
-  real users are onboarded.
-- **Tenant isolation is enforced in application code**, with tests, and not by
-  database row-level security.
-- **Single node.** The embedded database opens in one process, the job runner is
-  in-process, and documents are on local disk. Fine for evaluation and a first
-  customer; it needs Postgres, object storage and a separate worker to scale.
-- **The sign-in throttle is in memory** and there is no general rate limiting.
+- **Legal validity is never decided by the software.** Waiver checks are a
+  pre-screen; anything uncertain goes to a person.
+- **Retainage** supports a flat rate, a reduced rate past a percent-complete
+  threshold, and recorded releases. Other contract terms are flagged for a
+  person to confirm.
+- **No SSO.** Passwords, TOTP two-step verification with recovery codes and an
+  organisation-wide requirement are in place; SSO is evaluated in
+  `docs/authentication.md` and left until a customer requires it.
+- **Accounts are not confirmed by email**, and sign-up says when an address
+  already has an account (limited per address).
+- **Members of more than one organisation** cannot be recovered by an
+  organisation's admins; they reset their own password by email, or the
+  operator helps (`pnpm reset-password`).
+- **Tenant isolation is enforced in application code**, with tests. Row-level
+  security only shuts out Supabase's public API roles; it does not separate
+  organisations from each other.
+- **One process does everything.** The job runner runs inside each app process
+  (claims are atomic, so several instances can share a database), and there is
+  no separate worker or object storage.
 - **Procore push** covers contract line items on subcontracts imported from
   Procore. It does not push change-order billing or unit-price contracts, and
   needs an existing Procore billing period.
 - **Payments are not tracked**, so "unconditional waiver for the previous
   payment" is a policy check, not a check against a payment.
-- **CSV export is generic.** It is not an import file for a specific accounting
-  system.
+- **CSV export is generic**, not an import file for a specific accounting system.
 - **Lien waiver knowledge covers three states**, and only form recognition.
   Other states get completeness and consistency checks only.
 - Times are shown in the viewer's locale; billing dates are calendar dates
@@ -258,8 +287,8 @@ available:**
    and measure reading accuracy field by field. This decides how much of the
    deterministic reader to keep.
 2. Connect a Procore sandbox and correct whatever the emulator got wrong.
-3. Account recovery, SSO and MFA.
-4. Retainage schedules and releases, and final payment applications.
+3. SSO (OIDC, Entra ID first) when a customer makes it a condition of purchase.
+4. Final payment applications and billing for retainage releases.
 5. A named accounting export (Sage 300 CRE, Vista or CMiC, whichever the first
    customers use) in place of the generic CSV.
 6. Subcontractor-facing resubmission, so corrections do not go through email.
@@ -279,6 +308,9 @@ src/server
   samples/         generates billing PDFs for the demo and the tests
 src/db             schema and database access
 drizzle/           SQL migrations (`pnpm db:generate` after a schema change)
+supabase/          the same migrations for Supabase's GitHub integration (`pnpm db:supabase`)
+eval/              extraction evaluation: synthetic corpus gate, real documents (git-ignored)
+scripts/           seed, reset-password, eval-extraction, migration sync
 tests/             Vitest
-docs/              conventions, Procore API notes
+docs/              operations, authentication, conventions, Procore API notes
 ```

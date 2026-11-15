@@ -213,6 +213,10 @@ Migrations in `drizzle/` run automatically when the process starts, unless
    the owner of a new organisation.
 3. Settings → System status shows the database, document storage and the
    processing queue. All three should be green.
+4. Settings → Profile → Signed-in devices shows the address of your own
+   session. It must be your public address. If it shows the proxy's internal
+   address, or nothing, set `RCM_TRUSTED_PROXY_HOPS` or `RCM_CLIENT_IP_HEADER`
+   (see Configuration): the sign-in limits per address depend on it.
 
 Anyone who can reach the sign-up page can create a separate organisation of
 their own. Organisations cannot see each other's records, but if that is not
@@ -226,6 +230,12 @@ real billing, one project first.
 
 1. **Organisation.** The controller signs up and names the organisation after
    the company. Settings → Organisation.
+   **Two-step verification.** The controller turns it on (Settings → Profile),
+   saves the recovery codes, then requires it for everyone (Settings → Review
+   policy → Security). Each member is asked to set it up at their first
+   sign-in. A member who loses their phone and their codes is reset by an
+   owner or admin (Settings → Team), or by you with `pnpm reset-password` if
+   they also belong to another organisation (`docs/authentication.md`).
 2. **Team.** Settings → Team → invite people by email with the right role:
    owner/admin (manage everything), controller (approve, override blocking
    findings, sign off waivers), project accountant (review, correct, submit
