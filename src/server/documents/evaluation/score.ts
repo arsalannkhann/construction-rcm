@@ -13,6 +13,7 @@
  * are raised as "read with low confidence" findings during reconciliation.
  */
 import type { ExtractOutcome } from '@/server/documents/extract';
+import { printedPageGaps, type NumberingGap } from '@/server/documents/integrity';
 import { CLAIMED_FIELDS, DEFAULT_ORG_SETTINGS, LINE_AMOUNT_FIELDS, type ExtractedLine, type ExtractedWaiver, type ExtractionResult, type LineAmountField } from '@/server/types';
 import { expectedOutcome, matchesAbstain, type Flag, type Outcome, type Truth, type TruthLine, type TruthWaiver } from './truth';
 
@@ -209,19 +210,9 @@ function scoreWaivers(ctx: Ctx, truth: TruthWaiver[] | undefined, read: Extracte
 // ── Flags ───────────────────────────────────────────────────────────────────
 
 /** Page-number gaps visible in the result: for each "of y", numbers 1..y that were not seen. */
-export function numberingGaps(result: ExtractionResult | null): Array<{ of: number; missing: number[] }> {
-  const groups = new Map<number, Set<number>>();
-  for (const p of result?.pageNumbering ?? []) {
-    if (!p.of) continue;
-    if (!groups.has(p.of)) groups.set(p.of, new Set());
-    groups.get(p.of)!.add(p.number);
-  }
-  const out: Array<{ of: number; missing: number[] }> = [];
-  for (const [of, seen] of groups) {
-    const missing = Array.from({ length: of }, (_, i) => i + 1).filter((n) => !seen.has(n));
-    if (missing.length > 0 && missing.length < of) out.push({ of, missing });
-  }
-  return out;
+/** Gaps in the printed page numbering, by the same rule reconciliation uses. */
+export function numberingGaps(result: ExtractionResult | null): NumberingGap[] {
+  return printedPageGaps(result?.pageNumbering ?? []);
 }
 
 function checkFlag(flag: Flag, outcome: ExtractOutcome): FlagCheck {
