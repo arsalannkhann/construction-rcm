@@ -2,7 +2,7 @@
 import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { sum } from '@/lib/money';
 import type { DB } from '@/db';
-import { changeOrders, contracts, memberships, payApplications, projects, sovLines, subcontractors, users } from '@/db/schema';
+import { changeOrders, contracts, memberships, payApplications, projects, retainageReleases, sovLines, subcontractors, users } from '@/db/schema';
 import type { Ctx } from '@/server/auth/permissions';
 import { OPEN_STATUSES } from '@/server/types';
 
@@ -275,6 +275,7 @@ export async function getContractDetail(db: DB, ctx: Ctx, id: string) {
       claimedAmount: payApplications.claimedAmount,
       approvedAmount: payApplications.approvedAmount,
       approvedRetainage: payApplications.approvedRetainage,
+      decidedAt: payApplications.decidedAt,
     })
     .from(payApplications)
     .where(and(eq(payApplications.orgId, ctx.orgId), eq(payApplications.contractId, id)))
@@ -312,11 +313,59 @@ export async function getContractDetail(db: DB, ctx: Ctx, id: string) {
     };
   }
 
+  // Retainage releases. One is "billed" once an approval has counted it: the same rule that stops it being cancelled.
+  const releaseRows = await db
+    .select({
+      id: retainageReleases.id,
+      amount: retainageReleases.amount,
+      effectiveOn: retainageReleases.effectiveOn,
+      note: retainageReleases.note,
+      status: retainageReleases.status,
+      createdAt: retainageReleases.createdAt,
+      createdBy: retainageReleases.createdBy,
+      voidedBy: retainageReleases.voidedBy,
+      voidedAt: retainageReleases.voidedAt,
+    })
+    .from(retainageReleases)
+    .where(and(eq(retainageReleases.orgId, ctx.orgId), eq(retainageReleases.contractId, id)))
+    .orderBy(desc(retainageReleases.effectiveOn), desc(retainageReleases.createdAt));
+  const releasePeople = [...new Set(releaseRows.flatMap((r) => [r.createdBy, r.voidedBy]).filter((x): x is string => !!x))];
+  const names = releasePeople.length
+    ? new Map(
+        (
+          await db
+            .select({ id: users.id, name: users.name })
+            .from(users)
+            .innerJoin(memberships, and(eq(memberships.userId, users.id), eq(memberships.orgId, ctx.orgId)))
+            .where(inArray(users.id, releasePeople))
+        ).map((u) => [u.id, u.name]),
+      )
+    : new Map<string, string>();
+  const approvedApps = history.filter((a) => a.status === 'approved');
+  const releases = releaseRows.map((r) => {
+    const countedIn = r.status === 'approved' ? approvedApps.find((a) => a.periodTo !== null && a.periodTo >= r.effectiveOn && a.decidedAt !== null && a.decidedAt >= r.createdAt) : undefined;
+    return {
+      id: r.id,
+      amount: r.amount,
+      effectiveOn: r.effectiveOn,
+      note: r.note,
+      status: r.status,
+      createdAt: r.createdAt.toISOString(),
+      createdByName: r.createdBy ? (names.get(r.createdBy) ?? null) : null,
+      voidedByName: r.voidedBy ? (names.get(r.voidedBy) ?? null) : null,
+      voidedAt: r.voidedAt ? r.voidedAt.toISOString() : null,
+      countedIn: countedIn ? { id: countedIn.id, applicationNumber: countedIn.applicationNumber } : null,
+    };
+  });
+  const releasePending = sum(releases.filter((r) => r.status === 'approved' && !r.countedIn).map((r) => r.amount));
+
   return {
     contract,
     project,
     subcontractor,
     position,
+    releases,
+    releasePending,
     schedule,
     scheduleTotal: sum(schedule.map((l) => l.scheduledValue)),
     changeOrders: cos,

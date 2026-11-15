@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, FormError, Input } from '@/components/ui/form';
+import { PASSWORD_HINT } from '@/server/auth/password-rules';
 import { acceptInviteAction } from '../../actions';
 
 export function InviteForm({ token, email, hasAccount }: { token: string; email: string; hasAccount: boolean }) {
@@ -20,7 +21,8 @@ export function InviteForm({ token, email, hasAccount }: { token: string; email:
         start(async () => {
           const result = await acceptInviteAction(token, { name, password });
           if (!result.ok) setError(result.error);
-          else window.location.assign('/overview');
+          // An existing account with two-step verification still owes its code.
+          else window.location.assign(result.data === 'verify' ? '/login/verify' : '/overview');
         });
       }}
     >
@@ -33,7 +35,7 @@ export function InviteForm({ token, email, hasAccount }: { token: string; email:
           <Input name="name" autoComplete="name" required autoFocus value={name} onChange={(e) => setName(e.target.value)} className="h-9" />
         </Field>
       )}
-      <Field label={hasAccount ? 'Your password' : 'Choose a password'} hint={hasAccount ? 'You already have an account with this email. Enter its password to join.' : 'At least 10 characters.'}>
+      <Field label={hasAccount ? 'Your password' : 'Choose a password'} hint={hasAccount ? 'You already have an account with this email. Enter its password to join.' : PASSWORD_HINT}>
         <Input type="password" name="password" autoComplete={hasAccount ? 'current-password' : 'new-password'} required value={password} onChange={(e) => setPassword(e.target.value)} className="h-9" />
       </Field>
       <Button type="submit" variant="primary" size="lg" loading={pending} className="w-full">

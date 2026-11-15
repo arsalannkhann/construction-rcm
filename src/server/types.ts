@@ -23,6 +23,13 @@ export type OrgSettings = {
   requireNotarization: boolean;
   /** Extracted values below this confidence are flagged for a human look. */
   lowConfidenceThreshold: number;
+  /** Every member must set up two-step verification before they can work in this organisation. */
+  requireMfa: boolean;
+  /**
+   * Email from an address that is not on file for a subcontractor or a team member:
+   * `flag` accepts it with a blocking finding, `reject` turns it away.
+   */
+  unknownSenderPolicy: 'flag' | 'reject';
 };
 
 export const DEFAULT_ORG_SETTINGS: OrgSettings = {
@@ -32,7 +39,29 @@ export const DEFAULT_ORG_SETTINGS: OrgSettings = {
   requireSignature: true,
   requireNotarization: false,
   lowConfidenceThreshold: 0.75,
+  requireMfa: false,
+  unknownSenderPolicy: 'flag',
 };
+
+/** Settings saved before a field existed do not have it; always read through this. */
+export function resolveSettings(stored: Partial<OrgSettings> | null | undefined): OrgSettings {
+  return { ...DEFAULT_ORG_SETTINGS, ...(stored ?? {}) };
+}
+
+/** Agreed changes to the retainage rate on completed work as the contract progresses. */
+export type RetainageTerms = {
+  reduction: {
+    /** Share of the contract sum to date that must be complete (work in place, not stored material) before the rate changes, in basis points. */
+    atPercentBps: number;
+    /** The rate on completed work from that point on, in basis points. */
+    toBps: number;
+    /** `future_work`: only work beyond the threshold is at the new rate. `all_work`: the new rate applies to everything, releasing the difference. */
+    appliesTo: 'future_work' | 'all_work';
+  } | null;
+};
+
+/** For each corrected summary value: what was read from the document and what the reviewer changed it to. */
+export type HeaderCorrections = Record<string, { from: number | string | null; to: number | string | null }>;
 
 // ── Documents & extraction ──────────────────────────────────────────────────
 
@@ -133,6 +162,10 @@ export type VerifiedHeader = Record<ClaimedField, number> & {
   priorApplicationNumber: number | null;
   /** Line items excluded from the verified totals because they match nothing in the contract. */
   excludedLines: number;
+  /** Recorded retainage releases applied in arriving at the retainage held. Absent on records from before releases existed. */
+  retainageReleased?: number;
+  /** How the retainage held was calculated, in words. */
+  retainageBasis?: string;
 };
 
 export const EMPTY_CLAIMED: ClaimedHeader = {
@@ -237,6 +270,55 @@ export type ExtractedWaiver = {
 
 export type WaiverSnapshot = ExtractedWaiver & { documentId: string };
 
+/** The grand-total row printed at the foot of a schedule of values, as printed (never computed). */
+export type ScheduleGrandTotal = {
+  /** Page of the file the row is printed on. Null when the engine could not tie it to a page. */
+  page: number | null;
+  /** The row label as printed, e.g. "GRAND TOTAL". */
+  label: string | null;
+  bbox?: BBox | null;
+  confidence: number;
+  /** One entry per column the row has a figure in. A column that is blank or unreadable is null. */
+  values: Partial<Record<LineAmountField, number | null>>;
+};
+
+/** A "page x of y" marking printed on a page. */
+export type PrintedPageNumber = {
+  /** Page of the file (1-based) the marking is printed on. */
+  page: number;
+  /** x in "page x of y". */
+  number: number;
+  /** y in "page x of y"; null when only "page x" is printed. */
+  of: number | null;
+  source: string;
+  bbox?: BBox | null;
+};
+
+export type ConflictingValue = {
+  /** Cents for amounts, the number itself for application numbers. Null when it could not be read. */
+  value: number | null;
+  page: number | null;
+  docType: DocType;
+  source?: string | null;
+  bbox?: BBox | null;
+};
+
+/** The same fact printed more than once in a file with different values, or a second application in the file. */
+export type ExtractionConflict = {
+  /**
+   * `application_number`: the pay application and another page (usually the schedule header) state different application numbers.
+   * `total`: a total on the pay application differs from the same total printed on the schedule.
+   * `second_pay_application`: the file holds another pay application besides the one reported in `payApp`.
+   */
+  kind: 'application_number' | 'total' | 'second_pay_application';
+  /** `applicationNumber`, or the claimed field the totals belong to (e.g. `totalCompletedStored`). */
+  field: string;
+  /** The value reported in the main result, and where it is printed. */
+  reported: ConflictingValue;
+  /** The other value(s) printed in the file. */
+  others: ConflictingValue[];
+};
+
 export type ExtractionResult = {
   engine: string;
   model?: string;
@@ -248,6 +330,17 @@ export type ExtractionResult = {
   waivers?: ExtractedWaiver[];
   /** Anything the engine could not read or was unsure about, in plain language. */
   notes: string[];
+  /**
+   * The printed grand-total row of the schedule with its location. Carries the same figures as
+   * `lineTotals`; a check can compare it with the sum of `lines` to detect a missing row or page.
+   */
+  scheduleGrandTotal?: ScheduleGrandTotal;
+  /** Every "page x of y" marking seen, in file order, so a gap in the printed sequence can be detected. */
+  pageNumbering?: PrintedPageNumber[];
+  /** Second or conflicting application numbers and totals found in the file. Absent when there are none. */
+  conflicts?: ExtractionConflict[];
+  /** Pages of the file with no machine-readable text (blank, or a scanned image) that this engine could not read. */
+  unreadablePages?: number[];
 };
 
 export type Evidence = {
@@ -365,8 +458,12 @@ export type ApprovedRecord = {
     originalAmount: number;
     retainageWorkBps: number;
     retainageStoredBps: number;
+    /** Stepped-rate terms in force at approval, if any. */
+    retainageTerms?: RetainageTerms | null;
     externalId: string | null;
   };
+  /** Retainage releases that were counted in this approval. */
+  retainageReleases?: { amount: number; effectiveOn: string; note: string | null }[];
   application: { id: string; number: number; periodTo: string; receivedAt: string };
   claimed: ClaimedHeader;
   approved: VerifiedHeader;

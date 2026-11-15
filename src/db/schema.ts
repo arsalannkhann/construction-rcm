@@ -10,15 +10,18 @@
 import {
   bigint,
   boolean,
+  customType,
   date,
   index,
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import type {
   ApprovedRecord,
   ClaimedHeader,
@@ -28,9 +31,11 @@ import type {
   ExtractionResult,
   FindingData,
   FindingRefs,
+  HeaderCorrections,
   LineSnapshot,
   MatchCandidate,
   OrgSettings,
+  RetainageTerms,
   StatedParties,
   VerifiedHeader,
   WaiverSnapshot,
@@ -39,6 +44,12 @@ import type {
 const cents = (name: string) => bigint(name, { mode: 'number' });
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 const createdAt = () => ts('created_at').notNull().defaultNow();
+/** Raw bytes. node-postgres hands back a Buffer, PGlite a Uint8Array; both come out as a Buffer. */
+const bytea = customType<{ data: Uint8Array; driverData: Uint8Array | string }>({
+  dataType: () => 'bytea',
+  toDriver: (value) => Buffer.from(value),
+  fromDriver: (value) => (typeof value === 'string' ? Buffer.from(value.replace(/^\\x/, ''), 'hex') : Buffer.from(value)),
+});
 
 // ── Identity & tenancy ──────────────────────────────────────────────────────
 
@@ -57,6 +68,14 @@ export const users = pgTable('users', {
   email: text('email').notNull().unique(),
   name: text('name').notNull(),
   passwordHash: text('password_hash').notNull(),
+  passwordChangedAt: ts('password_changed_at'),
+  /** Two-step verification (TOTP). The secret is AES-256-GCM encrypted; it is only "on" once mfaEnabledAt is set. */
+  mfaSecret: text('mfa_secret'),
+  mfaEnabledAt: ts('mfa_enabled_at'),
+  /** sha256 hashes of the unused one-time recovery codes. */
+  mfaRecoveryCodes: jsonb('mfa_recovery_codes').$type<string[]>(),
+  /** The last TOTP time-step that was accepted, so a code cannot be replayed. */
+  mfaLastCounter: integer('mfa_last_counter'),
   createdAt: createdAt(),
   lastLoginAt: ts('last_login_at'),
 });
@@ -98,7 +117,57 @@ export const sessions = pgTable('sessions', {
   orgId: text('org_id').references(() => organizations.id, { onDelete: 'set null' }),
   createdAt: createdAt(),
   expiresAt: ts('expires_at').notNull(),
+  lastSeenAt: ts('last_seen_at'),
+  userAgent: text('user_agent'),
+  ipAddress: text('ip_address'),
+  /** Set when this session passed two-step verification. */
+  mfaVerifiedAt: ts('mfa_verified_at'),
 });
+
+/** A password was accepted and a second step is still owed. Short-lived; the id is the sha256 of the cookie token. */
+export const loginChallenges = pgTable('login_challenges', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  /**
+   * Set when the sign-in is accepting an invitation for an account with
+   * two-step verification: the membership is only created once the second
+   * step passes, never on the password alone.
+   */
+  invitationId: text('invitation_id').references(() => invitations.id, { onDelete: 'cascade' }),
+  attempts: integer('attempts').notNull().default(0),
+  expiresAt: ts('expires_at').notNull(),
+  createdAt: createdAt(),
+});
+
+/** One-time links for setting a new password. Only the hash of the token is stored. */
+export const passwordResets = pgTable(
+  'password_resets',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    /** The administrator who issued the link, or null when the user asked for it themselves. */
+    issuedBy: text('issued_by').references(() => users.id, { onDelete: 'set null' }),
+    expiresAt: ts('expires_at').notNull(),
+    usedAt: ts('used_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('password_resets_user').on(t.userId)],
+);
+
+/** Sign-in, second-step and reset attempts, kept so throttling survives restarts and works across instances. */
+export const authAttempts = pgTable(
+  'auth_attempts',
+  {
+    id: text('id').primaryKey(),
+    /** What is being throttled: a lower-cased email address, `ip:<address>`, `<email>|ip:<address>` or `<email>|reauth`. */
+    subject: text('subject').notNull(),
+    kind: text('kind').notNull(), // password | mfa | reset | signup
+    succeeded: boolean('succeeded').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('auth_attempts_subject').on(t.subject, t.createdAt)],
+);
 
 // ── Projects, subcontractors, contracts ─────────────────────────────────────
 
@@ -155,6 +224,8 @@ export const contracts = pgTable(
     retainageWorkBps: integer('retainage_work_bps').notNull().default(1000),
     /** Retainage withheld on stored materials, in basis points. */
     retainageStoredBps: integer('retainage_stored_bps').notNull().default(1000),
+    /** Agreed changes to the rate as the work progresses (for example 10% until 50% complete, then none). */
+    retainageTerms: jsonb('retainage_terms').$type<RetainageTerms>(),
     executedOn: date('executed_on'),
     status: text('status').notNull().default('active'), // active | closed
     /**
@@ -184,6 +255,26 @@ export const changeOrders = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('change_orders_contract').on(t.contractId)],
+);
+
+/** Retainage the contractor has agreed to pay out early. Reduces the retainage held from `effectiveOn` onward. */
+export const retainageReleases = pgTable(
+  'retainage_releases',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    contractId: text('contract_id').notNull().references(() => contracts.id, { onDelete: 'cascade' }),
+    amount: cents('amount').notNull(),
+    /** Applies to applications whose period ends on or after this date. */
+    effectiveOn: date('effective_on').notNull(),
+    note: text('note'),
+    status: text('status').notNull().default('approved'), // approved | void
+    createdBy: text('created_by').references(() => users.id),
+    voidedBy: text('voided_by').references(() => users.id),
+    voidedAt: ts('voided_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('retainage_releases_contract').on(t.contractId)],
 );
 
 export const sovLines = pgTable(
@@ -228,6 +319,15 @@ export const payApplications = pgTable(
     engine: text('engine'),
     revision: integer('revision').notNull().default(0),
     processingError: text('processing_error'),
+    /**
+     * Incremented by every change to the application, its lines, waivers or findings.
+     * A decision carries the version the person was looking at, so nobody approves figures they have not seen.
+     */
+    version: integer('version').notNull().default(0),
+    /** Summary values a reviewer corrected, with what was originally read, so a re-read can keep them. */
+    headerCorrections: jsonb('header_corrections').$type<HeaderCorrections>(),
+    /** Set on an application that was replaced by a corrected resubmission. */
+    supersededById: text('superseded_by_id'),
 
     /** What the documents say about who/what this is (before matching to our records). */
     stated: jsonb('stated').$type<StatedParties>(),
@@ -273,6 +373,9 @@ export const payApplications = pgTable(
     index('pay_apps_contract').on(t.contractId),
   ],
 );
+
+/** `set({ version: nextVersion })` on any change to an application or what hangs off it. */
+export const nextVersion = sql<number>`${payApplications.version} + 1`;
 
 export const payAppLines = pgTable(
   'pay_app_lines',
@@ -537,9 +640,75 @@ export const jobs = pgTable(
     status: text('status').notNull().default('queued'), // queued | running | succeeded | failed
     attempts: integer('attempts').notNull().default(0),
     error: text('error'),
+    /** Not before this time (set when a failed attempt is waiting to be retried). */
+    runAfter: ts('run_after'),
+    /** Which runner claimed it, for diagnosing a job stuck in `running`. */
+    lockedBy: text('locked_by'),
     createdAt: createdAt(),
     startedAt: ts('started_at'),
     finishedAt: ts('finished_at'),
   },
-  (t) => [index('jobs_status').on(t.status)],
+  (t) => [index('jobs_status').on(t.status), index('jobs_org').on(t.orgId)],
+);
+
+/**
+ * Document and export bytes, when they are kept in the database instead of on
+ * local disk. Content-addressed: the key ends in the sha256 of the bytes.
+ */
+export const storedObjects = pgTable(
+  'stored_objects',
+  {
+    key: text('key').primaryKey(),
+    orgId: text('org_id').notNull(),
+    sha256: text('sha256').notNull(),
+    size: integer('size').notNull(),
+    bytes: bytea('bytes').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('stored_objects_org').on(t.orgId)],
+);
+
+/**
+ * Pieces of a file on its way in, for hosting that caps the size of a single
+ * request (Vercel: 4.5 MB). The browser sends a large file in parts; the
+ * request that creates the application, or adds documents to one, joins them,
+ * checks that they add up, and deletes them. Parts nobody claimed are removed
+ * after a few hours. Each part belongs to the member who sent it.
+ */
+export const uploadParts = pgTable(
+  'upload_parts',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    orgId: text('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    /** Chosen by the browser: random, and only meaningful together with the user. */
+    uploadId: text('upload_id').notNull(),
+    part: integer('part').notNull(),
+    bytes: bytea('bytes').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.uploadId, t.part] }), index('upload_parts_created').on(t.createdAt)],
+);
+
+/** Every message that reached the email-intake address, including the ones that were turned away. */
+export const inboundMessages = pgTable(
+  'inbound_messages',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    /** The Message-ID header, or a hash of the content when the message has none. */
+    messageId: text('message_id').notNull(),
+    fromEmail: text('from_email'),
+    subject: text('subject'),
+    /** accepted | duplicate | rejected */
+    outcome: text('outcome').notNull(),
+    reason: text('reason'),
+    attachments: integer('attachments').notNull().default(0),
+    payApplicationId: text('pay_application_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('inbound_messages_org_message').on(t.orgId, t.messageId), index('inbound_messages_org_created').on(t.orgId, t.createdAt)],
 );

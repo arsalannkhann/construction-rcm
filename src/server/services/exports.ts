@@ -10,7 +10,8 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf
 import { centsToDecimalString, formatBps, formatMoney, percentOf } from '@/lib/money';
 import { formatDate } from '@/lib/utils';
 import type { DB } from '@/db';
-import { payApplications, transfers, users } from '@/db/schema';
+import { locked } from '@/db/tx';
+import { payApplications, transfers, users, nextVersion } from '@/db/schema';
 import { recordAudit } from '@/server/audit';
 import { assertCan, UserError, type Ctx } from '@/server/auth/permissions';
 import { newId } from '@/server/ids';
@@ -360,7 +361,7 @@ async function recordTransfers(db: DB, ctx: Ctx, apps: Array<typeof payApplicati
     const id = newId('trf');
     ids.push(id);
     await db.insert(transfers).values({ id, orgId: ctx.orgId, payApplicationId: app.id, kind, status: 'completed', filename, storageKey: stored.key, sha256: stored.sha256, createdBy: ctx.userId, createdAt: at });
-    if (app.transferStatus === 'none' || app.transferStatus === 'failed') await db.update(payApplications).set({ transferStatus: 'exported', updatedAt: at }).where(eq(payApplications.id, app.id));
+    if (app.transferStatus === 'none' || app.transferStatus === 'failed') await db.update(payApplications).set({ version: nextVersion, transferStatus: 'exported', updatedAt: at }).where(eq(payApplications.id, app.id));
     await recordAudit(db, {
       orgId: ctx.orgId,
       actor: ctx,
@@ -377,7 +378,7 @@ async function recordTransfers(db: DB, ctx: Ctx, apps: Array<typeof payApplicati
 }
 
 /** Export one approved application in the chosen format. */
-export async function createExport(db: DB, ctx: Ctx, appId: string, kind: ExportKind, opts: { now?: Date } = {}): Promise<{ transferId: string; filename: string }> {
+export const createExport = locked(async function createExport(db: DB, ctx: Ctx, appId: string, kind: ExportKind, opts: { now?: Date } = {}): Promise<{ transferId: string; filename: string }> {
   assertCan(ctx, 'export:run');
   const [app] = await approvedApps(db, ctx, [appId]);
   const record = app!.approvedRecord!;
@@ -386,10 +387,10 @@ export async function createExport(db: DB, ctx: Ctx, appId: string, kind: Export
   const filename = `${base}${kind === 'pdf' ? '-approval-record' : kind === 'csv' ? '-lines' : ''}.${kind}`;
   const [transferId] = await recordTransfers(db, ctx, [app!], kind, filename, bytes, opts.now ?? new Date());
   return { transferId: transferId!, filename };
-}
+});
 
 /** Export several approved applications as one accounts-payable summary CSV. */
-export async function createBatchExport(db: DB, ctx: Ctx, appIds: string[], opts: { now?: Date } = {}): Promise<{ transferId: string; filename: string; count: number }> {
+export const createBatchExport = locked(async function createBatchExport(db: DB, ctx: Ctx, appIds: string[], opts: { now?: Date } = {}): Promise<{ transferId: string; filename: string; count: number }> {
   assertCan(ctx, 'export:run');
   const apps = await approvedApps(db, ctx, appIds);
   const at = opts.now ?? new Date();
@@ -397,7 +398,7 @@ export async function createBatchExport(db: DB, ctx: Ctx, appIds: string[], opts
   const bytes = new TextEncoder().encode(renderSummaryCsv(apps.map((a) => a.approvedRecord!)));
   const ids = await recordTransfers(db, ctx, apps, 'csv', filename, bytes, at);
   return { transferId: ids[0]!, filename, count: apps.length };
-}
+});
 
 export async function getTransferFile(db: DB, ctx: Ctx, transferId: string): Promise<{ filename: string; contentType: string; bytes: Buffer }> {
   const [t] = await db.select().from(transfers).where(and(eq(transfers.orgId, ctx.orgId), eq(transfers.id, transferId)));

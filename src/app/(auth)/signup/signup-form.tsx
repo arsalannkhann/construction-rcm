@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, FormError, Input } from '@/components/ui/form';
+import { PASSWORD_HINT } from '@/server/auth/password-rules';
 import { signupAction } from '../actions';
 
 export function SignupForm() {
@@ -34,7 +35,7 @@ export function SignupForm() {
       <Field label="Work email">
         <Input type="email" name="email" autoComplete="email" required value={form.email} onChange={set('email')} className="h-9" />
       </Field>
-      <Field label="Password" hint="At least 10 characters.">
+      <Field label="Password" hint={PASSWORD_HINT}>
         <Input type="password" name="new-password" autoComplete="new-password" required minLength={10} value={form.password} onChange={set('password')} className="h-9" />
       </Field>
       <Button type="submit" variant="primary" size="lg" loading={pending} className="w-full">

@@ -1,0 +1,2 @@
+ALTER TABLE "login_challenges" ADD COLUMN "invitation_id" text;--> statement-breakpoint
+ALTER TABLE "login_challenges" ADD CONSTRAINT "login_challenges_invitation_id_invitations_id_fk" FOREIGN KEY ("invitation_id") REFERENCES "public"."invitations"("id") ON DELETE cascade ON UPDATE no action;

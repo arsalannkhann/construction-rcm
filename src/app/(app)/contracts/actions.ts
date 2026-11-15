@@ -7,6 +7,8 @@ import { requireCtx } from '@/server/auth/session';
 import {
   createChangeOrder,
   createContract,
+  createRetainageRelease,
+  voidRetainageRelease,
   parseScheduleText,
   saveSchedule,
   updateChangeOrder,
@@ -14,6 +16,7 @@ import {
   type ChangeOrderInput,
   type ContractInput,
   type ContractPatch,
+  type RetainageReleaseInput,
   type ScheduleLineInput,
 } from '@/server/services/records';
 
@@ -62,6 +65,22 @@ export async function updateChangeOrderAction(id: string, input: ChangeOrderInpu
   return run(async () => {
     const ctx = await requireCtx();
     await updateChangeOrder(await getDb(), ctx, id, input);
+    return undefined;
+  });
+}
+
+/** Record that part of the retainage held on a contract is to be paid out. Approvers only. */
+export async function createRetainageReleaseAction(contractId: string, input: RetainageReleaseInput): Promise<ActionResult<{ id: string }>> {
+  return run(async () => {
+    const ctx = await requireCtx();
+    return { id: await createRetainageRelease(await getDb(), ctx, contractId, { amount: Number(input.amount), effectiveOn: String(input.effectiveOn ?? ''), note: String(input.note ?? '') }) };
+  });
+}
+
+export async function voidRetainageReleaseAction(releaseId: string, reason: string): Promise<ActionResult> {
+  return run(async () => {
+    const ctx = await requireCtx();
+    await voidRetainageRelease(await getDb(), ctx, releaseId, String(reason ?? ''));
     return undefined;
   });
 }

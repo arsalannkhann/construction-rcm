@@ -5,12 +5,14 @@
  * to the application, a change to its contract, change orders or schedule of
  * values, and a decision on an earlier application on the same contract.
  */
-import { and, asc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { DB } from '@/db';
+import { locked } from '@/db/tx';
 import {
   changeOrders,
   contracts,
   documents,
+  extractions,
   findings,
   lienWaivers,
   organizations,
@@ -19,22 +21,63 @@ import {
   projects,
   sovLines,
   subcontractors,
+  nextVersion,
+  memberships,
+  retainageReleases,
+  users,
 } from '@/db/schema';
 import { recordAudit, type AuditActor } from '@/server/audit';
 import { newId, sha256Hex } from '@/server/ids';
-import { reconcile, type CheckResult, type ReconInput, type ReconOutput, type ReconPrior } from '@/server/recon/engine';
-import type { ApprovedRecord, ContractBaseline, FindingCategory, Tri, WaiverType } from '@/server/types';
-import { FINDING_CATEGORIES, OPEN_STATUSES } from '@/server/types';
+import { reconcile, type CheckResult, type DocumentIntegrity, type ReconInput, type ReconOutput, type ReconPrior } from '@/server/recon/engine';
+import type { ApprovedRecord, ContractBaseline, ExtractionResult, FindingCategory, LineAmountField, Tri, WaiverType } from '@/server/types';
+import { FINDING_CATEGORIES, LINE_AMOUNT_FIELDS, OPEN_STATUSES, resolveSettings } from '@/server/types';
 import { notifyPermission } from './notify';
 
 export type ReconSummary = { opened: number; openBlocking: number; openWarnings: number; passed: number };
 
 const SEVERITY_ORDER = { blocking: 0, warning: 1, info: 2 } as const;
 
+/** JSON with keys in a fixed order, for comparing a stored value (jsonb reorders keys) with a fresh one. */
+function stable(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value ?? null);
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  return `{${Object.keys(obj)
+    .filter((k) => obj[k] !== undefined)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${stable(obj[k])}`)
+    .join(',')}}`;
+}
+
 function fingerprint(c: CheckResult): string {
   return sha256Hex(
     JSON.stringify([c.severity, c.title, c.data?.expected ?? null, c.data?.actual ?? null, c.data?.expectedText ?? null, c.data?.actualText ?? null]),
   ).slice(0, 32);
+}
+
+/** The parts of a stored reading the checks use. Absent and null fields come from older readings. */
+type ExtractionFacts = {
+  pageNumbering?: ExtractionResult['pageNumbering'] | null;
+  scheduleGrandTotal?: ExtractionResult['scheduleGrandTotal'] | null;
+  conflicts?: ExtractionResult['conflicts'] | null;
+  unreadablePages?: ExtractionResult['unreadablePages'] | null;
+  applicationNumber?: number | null;
+};
+
+/** What a reading saw besides the figures, in the shape the engine checks. */
+export function integrityOf(facts: ExtractionFacts | null): DocumentIntegrity | null {
+  if (!facts) return null;
+  return {
+    pageNumbering: facts.pageNumbering ?? [],
+    scheduleGrandTotal: facts.scheduleGrandTotal ?? null,
+    conflicts: facts.conflicts ?? [],
+    unreadablePages: facts.unreadablePages ?? [],
+    payApplicationNumber: typeof facts.applicationNumber === 'number' ? facts.applicationNumber : null,
+  };
+}
+
+function printedAmounts(line: Record<LineAmountField, number | null>): Record<LineAmountField, number | null> {
+  return Object.fromEntries(LINE_AMOUNT_FIELDS.map((f) => [f, line[f]])) as Record<LineAmountField, number | null>;
 }
 
 export function priorFromApproved(record: ApprovedRecord): ReconPrior {
@@ -65,6 +108,24 @@ function priorFromBaseline(b: ContractBaseline): ReconPrior {
   };
 }
 
+/** Mail providers anyone can sign up to. Sharing one of these domains with the contact on file proves nothing. */
+const PUBLIC_MAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com',
+  'proton.me', 'protonmail.com', 'gmx.com', 'mail.com', 'zoho.com', 'comcast.net', 'att.net', 'sbcglobal.net', 'bellsouth.net', 'verizon.net', 'cox.net', 'charter.net',
+]);
+
+/** Who an emailed package came from, relative to what is on file. */
+export function classifySender(senderEmail: string | null, contactEmail: string | null, teamEmails: string[]): 'contact' | 'domain' | 'team' | 'unknown' {
+  const sender = senderEmail?.trim().toLowerCase() ?? '';
+  if (!sender.includes('@')) return 'unknown';
+  const contact = contactEmail?.trim().toLowerCase() ?? '';
+  if (contact && sender === contact) return 'contact';
+  if (teamEmails.some((e) => e.trim().toLowerCase() === sender)) return 'team';
+  const domain = sender.slice(sender.lastIndexOf('@') + 1);
+  if (contact && domain === contact.slice(contact.lastIndexOf('@') + 1) && !PUBLIC_MAIL_DOMAINS.has(domain)) return 'domain';
+  return 'unknown';
+}
+
 /** Assemble everything the engine needs for one application. Returns null if it is not matched to a contract. */
 export async function loadReconInput(db: DB, orgId: string, appId: string, today: string): Promise<{ input: ReconInput; app: typeof payApplications.$inferSelect } | null> {
   const [app] = await db.select().from(payApplications).where(and(eq(payApplications.orgId, orgId), eq(payApplications.id, appId)));
@@ -77,10 +138,32 @@ export async function loadReconInput(db: DB, orgId: string, appId: string, today
   const [sub] = await db.select().from(subcontractors).where(eq(subcontractors.id, contract.subcontractorId));
 
   const cos = await db.select().from(changeOrders).where(eq(changeOrders.contractId, contract.id));
+  const releases = await db.select().from(retainageReleases).where(and(eq(retainageReleases.contractId, contract.id), eq(retainageReleases.status, 'approved')));
+  const team =
+    app.receivedVia === 'email'
+      ? await db.select({ email: users.email }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.orgId, orgId), eq(memberships.status, 'active')))
+      : [];
   const sov = await db.select().from(sovLines).where(eq(sovLines.contractId, contract.id)).orderBy(asc(sovLines.sortOrder));
   const lines = await db.select().from(payAppLines).where(eq(payAppLines.payApplicationId, appId)).orderBy(asc(payAppLines.sortOrder));
   const waivers = await db.select().from(lienWaivers).where(eq(lienWaivers.payApplicationId, appId));
   const docs = await db.select().from(documents).where(eq(documents.payApplicationId, appId)).orderBy(asc(documents.createdAt));
+  // The reading each file's figures came from: its latest successful extraction. Only the parts
+  // the checks use are fetched; the rows and notes stay in the database.
+  const res = extractions.result;
+  const readings = docs.length
+    ? await db
+        .select({
+          documentId: extractions.documentId,
+          result: sql<ExtractionFacts | null>`jsonb_build_object('pageNumbering', ${res}->'pageNumbering', 'scheduleGrandTotal', ${res}->'scheduleGrandTotal', 'conflicts', ${res}->'conflicts', 'unreadablePages', ${res}->'unreadablePages', 'applicationNumber', ${res}#>'{payApp,applicationNumber,value}')`.mapWith(
+            (v: unknown) => (typeof v === 'string' ? JSON.parse(v) : v) as ExtractionFacts | null,
+          ),
+        })
+        .from(extractions)
+        .where(and(eq(extractions.orgId, orgId), inArray(extractions.documentId, docs.map((d) => d.id)), eq(extractions.status, 'succeeded')))
+        .orderBy(asc(extractions.createdAt))
+    : [];
+  const latestReading = new Map<string, ExtractionFacts | null>();
+  for (const r of readings) latestReading.set(r.documentId, r.result);
 
   const others = await db
     .select()
@@ -112,7 +195,7 @@ export async function loadReconInput(db: DB, orgId: string, appId: string, today
   for (const [key, ev] of Object.entries(app.evidence ?? {})) confidence[key] = ev.confidence;
 
   const input: ReconInput = {
-    policy: org.settings,
+    policy: resolveSettings(org.settings),
     today,
     project: { name: project?.name ?? '', state: project?.state ?? null },
     subcontractor: { name: sub?.name ?? '' },
@@ -121,7 +204,10 @@ export async function loadReconInput(db: DB, orgId: string, appId: string, today
       originalAmount: contract.originalAmount,
       retainageWorkBps: contract.retainageWorkBps,
       retainageStoredBps: contract.retainageStoredBps,
+      retainageTerms: contract.retainageTerms,
     },
+    retainageReleases: releases.map((r) => ({ id: r.id, amount: r.amount, effectiveOn: r.effectiveOn, note: r.note })),
+    intake: { via: app.receivedVia === 'email' ? 'email' : 'upload', senderEmail: app.senderEmail, sender: classifySender(app.senderEmail, sub?.contactEmail ?? null, team.map((t) => t.email)) },
     changeOrders: cos.map((c) => ({ id: c.id, number: c.number, title: c.title, amount: c.amount, status: c.status })),
     sov: sov.map((s) => ({ id: s.id, itemNo: s.itemNo, description: s.description, scheduledValue: s.scheduledValue })),
     prior,
@@ -138,6 +224,8 @@ export async function loadReconInput(db: DB, orgId: string, appId: string, today
     },
     lines: lines.map((l) => ({
       id: l.id,
+      documentId: l.extracted?.documentId ?? null,
+      printed: l.editKind === 'adjustment' && l.extracted ? printedAmounts(l.extracted) : null,
       sovLineId: l.sovLineId,
       itemNo: l.itemNo,
       description: l.description,
@@ -158,6 +246,7 @@ export async function loadReconInput(db: DB, orgId: string, appId: string, today
         statusDetail: d.statusDetail,
         segments: d.segments,
         duplicateOf: twin ? { applicationNumber: twin.number, filename: twin.filename } : null,
+        integrity: integrityOf(latestReading.get(d.id) ?? null),
       };
     }),
     waivers: waivers.map((w) => ({
@@ -183,14 +272,14 @@ export async function computeReconciliation(db: DB, orgId: string, appId: string
  * Recompute and store findings + verified figures for one application.
  * A finding a person accepted stays accepted only while the facts behind it are unchanged.
  */
-export async function runReconciliation(db: DB, orgId: string, appId: string, opts: { now?: Date; actor?: AuditActor } = {}): Promise<ReconSummary | null> {
+export const runReconciliation = locked(async function runReconciliation(db: DB, orgId: string, appId: string, opts: { now?: Date; actor?: AuditActor } = {}): Promise<ReconSummary | null> {
   const now = opts.now ?? new Date();
   const loaded = await loadReconInput(db, orgId, appId, now.toISOString().slice(0, 10));
   if (!loaded) {
     await db.delete(findings).where(and(eq(findings.orgId, orgId), eq(findings.payApplicationId, appId)));
     await db
       .update(payApplications)
-      .set({ verified: null, verifiedAmount: null, openBlocking: 0, openWarnings: 0, updatedAt: now })
+      .set({ version: nextVersion, verified: null, verifiedAmount: null, openBlocking: 0, openWarnings: 0, updatedAt: now })
       .where(and(eq(payApplications.orgId, orgId), eq(payApplications.id, appId)));
     return null;
   }
@@ -202,6 +291,9 @@ export async function runReconciliation(db: DB, orgId: string, appId: string, op
   const seen = new Set<string>();
   let opened = 0;
   let reopened = 0;
+  // Did anything a reviewer or approver would see actually change? If not, the application's
+  // version stays put, so someone part-way through a decision is not told to start again for nothing.
+  let changed = false;
 
   const ordered = [...out.checks].sort(
     (a, b) =>
@@ -217,6 +309,7 @@ export async function runReconciliation(db: DB, orgId: string, appId: string, op
     const fp = fingerprint(check);
     const keepAccepted = check.outcome === 'fail' && prev?.status === 'accepted' && prev.fingerprint === fp;
     const status = check.outcome === 'pass' ? 'passed' : keepAccepted ? 'accepted' : 'open';
+    if (!prev || prev.status !== status || prev.fingerprint !== fp || prev.detail !== check.detail) changed = true;
     if (status === 'open' && prev?.status !== 'open') {
       opened++;
       if (prev?.status === 'accepted') reopened++;
@@ -244,7 +337,10 @@ export async function runReconciliation(db: DB, orgId: string, appId: string, op
   }
 
   const stale = existing.filter((f) => !seen.has(`${f.code}|${f.subjectKey}`));
-  if (stale.length > 0) await db.delete(findings).where(inArray(findings.id, stale.map((f) => f.id)));
+  if (stale.length > 0) {
+    await db.delete(findings).where(inArray(findings.id, stale.map((f) => f.id)));
+    changed = true;
+  }
 
   const current = await db.select({ status: findings.status, severity: findings.severity }).from(findings).where(eq(findings.payApplicationId, appId));
   const openBlocking = current.filter((f) => f.status === 'open' && f.severity === 'blocking').length;
@@ -253,18 +349,30 @@ export async function runReconciliation(db: DB, orgId: string, appId: string, op
 
   // An application already waiting for approval goes back to review if something new blocks it.
   const bounce = app.status === 'pending_approval' && openBlocking > 0 && opened > 0;
-  await db
-    .update(payApplications)
-    .set({
-      verified: out.verified,
-      verifiedAmount: out.verified.currentPaymentDue,
-      claimedAmount: app.claimed.currentPaymentDue,
-      openBlocking,
-      openWarnings,
-      updatedAt: now,
-      ...(bounce ? { status: 'needs_review', submittedForApprovalAt: null, submittedForApprovalBy: null } : {}),
-    })
-    .where(eq(payApplications.id, appId));
+  if (
+    bounce ||
+    app.openBlocking !== openBlocking ||
+    app.openWarnings !== openWarnings ||
+    app.claimedAmount !== app.claimed.currentPaymentDue ||
+    stable(app.verified) !== stable(out.verified)
+  ) {
+    changed = true;
+  }
+  if (changed) {
+    await db
+      .update(payApplications)
+      .set({
+        version: nextVersion,
+        verified: out.verified,
+        verifiedAmount: out.verified.currentPaymentDue,
+        claimedAmount: app.claimed.currentPaymentDue,
+        openBlocking,
+        openWarnings,
+        updatedAt: now,
+        ...(bounce ? { status: 'needs_review', submittedForApprovalAt: null, submittedForApprovalBy: null } : {}),
+      })
+      .where(eq(payApplications.id, appId));
+  }
 
   if (reopened > 0) {
     await recordAudit(db, {
@@ -298,10 +406,10 @@ export async function runReconciliation(db: DB, orgId: string, appId: string, op
   }
 
   return { opened, openBlocking, openWarnings, passed };
-}
+});
 
 /** Re-check every undecided application on a contract, oldest first. */
-export async function rereconcileContract(db: DB, orgId: string, contractId: string, opts: { now?: Date; actor?: AuditActor; except?: string } = {}): Promise<void> {
+export const rereconcileContract = locked(async function rereconcileContract(db: DB, orgId: string, contractId: string, opts: { now?: Date; actor?: AuditActor; except?: string } = {}): Promise<void> {
   const open = await db
     .select({ id: payApplications.id, n: payApplications.applicationNumber })
     .from(payApplications)
@@ -311,4 +419,4 @@ export async function rereconcileContract(db: DB, orgId: string, contractId: str
     if (row.id === opts.except) continue;
     await runReconciliation(db, orgId, row.id, opts);
   }
-}
+});

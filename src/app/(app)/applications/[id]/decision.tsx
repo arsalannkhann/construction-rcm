@@ -8,7 +8,9 @@ import { Button } from '@/components/ui/button';
 import { Badge, Money } from '@/components/ui/data';
 import { Checkbox, Field, Input, Select, Textarea } from '@/components/ui/form';
 import { Dialog, Menu, MenuItem, MenuLabel, MenuSeparator, Tooltip } from '@/components/ui/overlay';
+import { messageWordingProblem } from '@/lib/message-wording';
 import { formatMoney } from '@/lib/money';
+import { buildUploadForm, UploadError } from '@/lib/upload-form';
 import { useAction } from '@/lib/use-action';
 import { can, ROLE_LABEL } from '@/server/auth/permissions';
 import type { Role } from '@/server/types';
@@ -48,8 +50,7 @@ export function DecisionBar() {
     if (!files || files.length === 0) return;
     setUploading(true);
     try {
-      const form = new FormData();
-      for (const f of Array.from(files)) form.append('files', f);
+      const form = await buildUploadForm(Array.from(files));
       const res = await fetch(`/api/applications/${app.id}/documents`, { method: 'POST', body: form });
       const json = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) toast.error(json.error ?? 'The documents could not be added.');
@@ -57,8 +58,8 @@ export function DecisionBar() {
         toast.success('Documents added. Reading the package again.');
         router.refresh();
       }
-    } catch {
-      toast.error('The upload did not complete. Check your connection and try again.');
+    } catch (err) {
+      toast.error(err instanceof UploadError ? err.message : 'The upload did not complete. Check your connection and try again.');
     } finally {
       setUploading(false);
       if (fileInput.current) fileInput.current.value = '';
@@ -215,7 +216,7 @@ export function DecisionBar() {
         placeholder="What is wrong with it? Kept with the record."
         confirm="Reject application"
         danger
-        action={(reason) => rejectAction(app.id, reason)}
+        action={(reason) => rejectAction(app.id, reason, app.version)}
         success="Application rejected"
       />
       <ReasonDialog
@@ -286,7 +287,14 @@ function ApproveDialog({ open, onClose }: { open: boolean; onClose: () => void }
             variant="primary"
             loading={pending}
             disabled={blocking.length > 0 || missing || (warnings.length > 0 && !ack)}
-            onClick={() => run(() => approveAction(app.id, { note: note.trim() || null, acknowledgeWarnings: ack }), { success: `Approved for ${formatMoney(app.verifiedAmount)}`, onSuccess: onClose })}
+            onClick={() =>
+              run(() => approveAction(app.id, { note: note.trim() || null, acknowledgeWarnings: ack, expectedVersion: app.version, expectedAmount: app.verifiedAmount }), {
+                success: `Approved for ${formatMoney(app.verifiedAmount)}`,
+                onSuccess: onClose,
+                // The figures moved under the approver: the dialog now shows the new ones, so ask again.
+                onError: (conflict) => (conflict ? setAck(false) : undefined),
+              })
+            }
           >
             <Check className="size-3.5" />
             Approve {formatMoney(app.verifiedAmount)}
@@ -423,7 +431,7 @@ function SubmitDialog({ open, onClose }: { open: boolean; onClose: () => void })
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" loading={pending} onClick={() => run(() => submitForApprovalAction(app.id, note.trim() || null), { success: 'Submitted for approval', onSuccess: onClose })}>
+          <Button variant="primary" loading={pending} onClick={() => run(() => submitForApprovalAction(app.id, note.trim() || null, app.version), { success: 'Submitted for approval', onSuccess: onClose })}>
             Submit for approval
           </Button>
         </>
@@ -483,13 +491,16 @@ function CorrectionDialog({ open, onClose }: { open: boolean; onClose: () => voi
   const { app } = data;
   const [form, setForm] = useState({ to: '', subject: '', body: '' });
   const [hold, setHold] = useState(true);
+  const [vouch, setVouch] = useState(false);
   const [loading, setLoading] = useState(false);
   const { pending, run } = useAction();
+  const wording = messageWordingProblem(app.status, `${form.subject}\n${form.body}`);
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
+    setVouch(false);
     setHold(app.status !== 'on_hold');
     draftCorrectionAction(app.id).then((r) => {
       if (cancelled) return;
@@ -517,9 +528,9 @@ function CorrectionDialog({ open, onClose }: { open: boolean; onClose: () => voi
           <Button
             variant="primary"
             loading={pending}
-            disabled={loading || !form.to.trim() || !form.body.trim()}
+            disabled={loading || !form.to.trim() || !form.body.trim() || wording?.level === 'block' || (wording?.level === 'confirm' && !vouch)}
             onClick={() =>
-              run(() => sendMessageAction(app.id, { ...form, hold }), {
+              run(() => sendMessageAction(app.id, { ...form, hold, acknowledgeWording: wording?.level === 'confirm' && vouch }), {
                 onSuccess: (r) => {
                   if (r.status === 'sent') toast.success(`Sent to ${form.to}`);
                   else if (r.status === 'failed') toast.error(`The email failed to send: ${r.detail ?? 'unknown error'}. The message is saved under Activity.`);
@@ -557,6 +568,13 @@ function CorrectionDialog({ open, onClose }: { open: boolean; onClose: () => voi
         <Field label="Message">
           <Textarea value={form.body} onChange={(e) => setForm((f) => ({ ...f, body: e.target.value }))} className="min-h-[260px] font-mono text-xs leading-[18px]" disabled={loading} />
         </Field>
+        {wording?.level === 'block' ? <Notice tone="block" title="This wording cannot be sent" items={[wording.reason]} /> : null}
+        {wording?.level === 'confirm' ? (
+          <div>
+            <Notice tone="warn" title="The message talks about a payment" items={[wording.reason]} />
+            <Checkbox className="mt-2.5" checked={vouch} onChange={(e) => setVouch(e.target.checked)} label="I have confirmed this payment statement in our accounting system" description="Recorded with the message under your name." />
+          </div>
+        ) : null}
         <Checkbox checked={hold} onChange={(e) => setHold(e.target.checked)} label="Put the application on hold until they reply" description="It moves to “Awaiting subcontractor”. Add their revised documents to pick it up again." />
       </div>
     </Dialog>

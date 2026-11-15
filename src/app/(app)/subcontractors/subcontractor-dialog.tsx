@@ -11,7 +11,7 @@ import { createSubcontractorAction, updateSubcontractorAction } from './actions'
 type Values = { name: string; trade: string | null; contactName: string | null; contactEmail: string | null; phone: string | null; address: string | null };
 const EMPTY: Values = { name: '', trade: null, contactName: null, contactEmail: null, phone: null, address: null };
 
-export function SubcontractorDialogButton(props: { mode: 'create'; variant?: 'primary' | 'secondary' } | { mode: 'edit'; subcontractor: Values & { id: string } }) {
+export function SubcontractorDialogButton(props: { mode: 'create'; variant?: 'primary' | 'secondary' } | { mode: 'edit'; subcontractor: Values & { id: string }; label?: string }) {
   const [open, setOpen] = useState(false);
   const initial = props.mode === 'edit' ? props.subcontractor : EMPTY;
   const [form, setForm] = useState<Values>(initial);
@@ -38,6 +38,17 @@ export function SubcontractorDialogButton(props: { mode: 'create'; variant?: 'pr
         >
           <Plus className="size-3.5" />
           Add subcontractor
+        </Button>
+      ) : props.label ? (
+        <Button
+          size="sm"
+          onClick={() => {
+            setForm(initial);
+            setOpen(true);
+          }}
+        >
+          <Pencil className="size-3.5" />
+          {props.label}
         </Button>
       ) : (
         <Button

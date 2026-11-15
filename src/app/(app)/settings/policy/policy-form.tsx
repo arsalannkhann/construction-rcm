@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/data';
-import { Checkbox, Input, MoneyInput } from '@/components/ui/form';
+import { Checkbox, Input, MoneyInput, Select } from '@/components/ui/form';
 import { useAction } from '@/lib/use-action';
 import type { OrgSettings } from '@/server/types';
 import { updatePolicyAction } from './actions';
@@ -48,13 +48,14 @@ export function PolicyForm({ initial, canEdit }: { initial: OrgSettings; canEdit
     requireNotarization: initial.requireNotarization,
   });
   const [percent, setPercent] = useState(initialPercent);
+  const [senderPolicy, setSenderPolicy] = useState<OrgSettings['unknownSenderPolicy']>(initial.unknownSenderPolicy);
   const { pending, run } = useAction();
 
   const percentChanged = percent.trim() !== initialPercent;
   const parsedPercent = parsePercent(percent);
   const toleranceOk = tolerance >= 0 && tolerance <= MAX_TOLERANCE_CENTS;
   const percentOk = !percentChanged || parsedPercent !== null;
-  const dirty = tolerance !== initial.toleranceCents || percentChanged || (Object.keys(toggles) as Toggle[]).some((k) => toggles[k] !== initial[k]);
+  const dirty = tolerance !== initial.toleranceCents || percentChanged || senderPolicy !== initial.unknownSenderPolicy || (Object.keys(toggles) as Toggle[]).some((k) => toggles[k] !== initial[k]);
   const disabled = !canEdit || pending;
 
   const discard = () => {
@@ -66,6 +67,7 @@ export function PolicyForm({ initial, canEdit }: { initial: OrgSettings; canEdit
       requireNotarization: initial.requireNotarization,
     });
     setPercent(initialPercent);
+    setSenderPolicy(initial.unknownSenderPolicy);
   };
 
   const save = () => {
@@ -75,6 +77,7 @@ export function PolicyForm({ initial, canEdit }: { initial: OrgSettings; canEdit
         updatePolicyAction({
           toleranceCents: tolerance,
           ...toggles,
+          unknownSenderPolicy: senderPolicy,
           // Left exactly as stored unless it was edited, so a save never nudges it by rounding.
           lowConfidenceThreshold: percentChanged && parsedPercent !== null ? parsedPercent / 100 : initial.lowConfidenceThreshold,
         }),
@@ -137,6 +140,19 @@ export function PolicyForm({ initial, canEdit }: { initial: OrgSettings; canEdit
           'An application whose certification is unsigned, or whose signature cannot be confirmed, gets a blocking finding until a signed copy arrives or a reviewer confirms the signature.',
         )}
         {toggle('requireNotarization', 'Require notarisation', 'Warning', 'An application without a completed notary block gets a warning, which the approver has to acknowledge.')}
+
+        <Row
+          title="Packages emailed from an unknown address"
+          htmlFor="policy-sender"
+          explanation="A package emailed from an address that is not the subcontractor’s contact on file, their email domain, or someone on your team. Anyone who knows the intake address can send to it, and sender addresses can be forged."
+        >
+          <div className="w-64">
+            <Select id="policy-sender" value={senderPolicy} disabled={disabled} onChange={(e) => setSenderPolicy(e.target.value === 'reject' ? 'reject' : 'flag')}>
+              <option value="flag">Accept, with a blocking finding</option>
+              <option value="reject">Turn away, and notify reviewers</option>
+            </Select>
+          </div>
+        </Row>
 
         <Row
           title="Low-confidence threshold"

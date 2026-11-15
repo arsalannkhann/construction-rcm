@@ -14,10 +14,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { dataDir, isInMemory } from '@/server/config';
+import { connectPool, isSupabaseHost, missingDatabaseUrl, type TlsMode } from './connection';
+import { assertMigrationsApplied, assertSchemaNotAppliedExternally, migrationMode } from './migrations';
 
 export type DB = PgDatabase<PgQueryResultHKT, Record<string, never>>;
 
-type Handle = { db: DB; close: () => Promise<void>; driver: 'pglite' | 'postgres' };
+type Handle = { db: DB; close: () => Promise<void>; driver: 'pglite' | 'postgres'; tls: TlsMode | null; supabase: boolean };
 
 const g = globalThis as unknown as { __rcmDb?: Promise<Handle> };
 
@@ -61,15 +63,38 @@ function acquireLock(dir: string): () => void {
 async function open(): Promise<Handle> {
   const url = process.env.DATABASE_URL;
   if (url) {
-    const pg = await import('pg');
     const { drizzle } = await import('drizzle-orm/node-postgres');
     const { migrate } = await import('drizzle-orm/node-postgres/migrator');
-    const pool = new pg.default.Pool({ connectionString: url, max: 10 });
+    const { pool, client, tls } = await connectPool(url);
+    if (tls === 'off' && isSupabaseHost(url)) console.warn('[db] the connection to Supabase is not encrypted. Set DATABASE_CA_CERT; see docs/operations.md.');
+    try {
+      const query = (text: string) => client.query(text);
+      if (migrationMode() === 'external') {
+        // Supabase's GitHub integration applies them; refuse to run on a schema older than this code.
+        await assertMigrationsApplied(query, migrationsFolder());
+      } else {
+        await assertSchemaNotAppliedExternally(query, migrationsFolder());
+        // Several app instances starting together must not apply the same migration twice.
+        // A session-level lock: connect through a direct connection or a session-mode pooler, not a transaction-mode one.
+        await client.query('select pg_advisory_lock(hashtext($1))', ['rcm:migrations']);
+        try {
+          await migrate(drizzle(client), { migrationsFolder: migrationsFolder() });
+        } finally {
+          await client.query('select pg_advisory_unlock(hashtext($1))', ['rcm:migrations']).catch(() => {});
+        }
+      }
+    } catch (err) {
+      client.release();
+      await pool.end().catch(() => {});
+      throw err;
+    }
+    client.release();
     const db = drizzle(pool);
-    await migrate(db, { migrationsFolder: migrationsFolder() });
-    return { db: db as unknown as DB, close: () => pool.end(), driver: 'postgres' };
+    return { db: db as unknown as DB, close: () => pool.end(), driver: 'postgres', tls, supabase: isSupabaseHost(url) };
   }
 
+  const missing = missingDatabaseUrl();
+  if (missing) throw missing;
   const { PGlite } = await import('@electric-sql/pglite');
   const { drizzle } = await import('drizzle-orm/pglite');
   const { migrate } = await import('drizzle-orm/pglite/migrator');
@@ -87,6 +112,8 @@ async function open(): Promise<Handle> {
   return {
     db: db as unknown as DB,
     driver: 'pglite',
+    tls: null,
+    supabase: false,
     close: async () => {
       await client.close();
       release();
@@ -107,6 +134,13 @@ export async function getDb(): Promise<DB> {
 export async function dbDriver(): Promise<'pglite' | 'postgres'> {
   await getDb();
   return (await g.__rcmDb!).driver;
+}
+
+/** How this process is connected: which driver, whether the connection is encrypted, and whether it is a Supabase host. */
+export async function dbConnection(): Promise<{ driver: 'pglite' | 'postgres'; tls: TlsMode | null; supabase: boolean }> {
+  await getDb();
+  const { driver, tls, supabase } = await g.__rcmDb!;
+  return { driver, tls, supabase };
 }
 
 /** Close the connection. Used by scripts and tests. */

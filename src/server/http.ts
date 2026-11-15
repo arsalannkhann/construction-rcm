@@ -1,4 +1,5 @@
 /** Small helpers for route handlers. */
+import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { PermissionError, UserError, type Ctx } from '@/server/auth/permissions';
 import { getSession } from '@/server/auth/session';
@@ -31,4 +32,16 @@ export function sameOrigin(request: Request): boolean {
 export function contentDisposition(kind: 'inline' | 'attachment', filename: string): string {
   const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
   return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+/**
+ * Whether an Authorization header carries `Bearer <secret>`, compared in
+ * constant time. null when no secret is configured, so the caller can refuse
+ * instead of letting everyone in.
+ */
+export function bearerMatches(header: string | null, secret: string | undefined): boolean | null {
+  if (!secret) return null;
+  const given = Buffer.from(header ?? '');
+  const want = Buffer.from(`Bearer ${secret}`);
+  return given.length === want.length && timingSafeEqual(given, want);
 }

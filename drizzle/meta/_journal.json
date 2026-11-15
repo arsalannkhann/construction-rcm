@@ -8,6 +8,34 @@
       "when": 1794695033593,
       "tag": "0000_abandoned_vapor",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794725828388,
+      "tag": "0001_lush_morgan_stark",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794742052664,
+      "tag": "0002_deny_data_api",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794744261212,
+      "tag": "0003_invitation_second_step",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794746306572,
+      "tag": "0004_upload_parts",
+      "breakpoints": true
     }
   ]
 }

@@ -23,8 +23,11 @@ export async function verifyPassword(password: string, stored: string): Promise<
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-export function passwordProblem(password: string): string | null {
-  if (password.length < 10) return 'Use at least 10 characters.';
-  if (password.length > 200) return 'That password is too long.';
-  return null;
-}
+/**
+ * A well-formed hash of nothing in particular. Checking a password against it
+ * takes as long as checking a real one, so a sign-in attempt for an address
+ * with no account does not come back faster than one for an address with one.
+ */
+export const DUMMY_PASSWORD_HASH = `scrypt$${N}$AAAAAAAAAAAAAAAAAAAAAA$${'A'.repeat(86)}`;
+
+export { passwordProblem } from './password-rules';

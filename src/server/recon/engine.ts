@@ -18,23 +18,34 @@ import { formatDate, pluralize } from '@/lib/utils';
 import type {
   ClaimedField,
   ClaimedHeader,
+  DocType,
   DocumentSegment,
+  ExtractionConflict,
   FindingCategory,
   FindingData,
   FindingRefs,
+  LineAmountField,
   OrgSettings,
+  PrintedPageNumber,
+  RetainageTerms,
+  ScheduleGrandTotal,
   Severity,
   Tri,
   VerifiedHeader,
   WaiverType,
 } from '@/server/types';
-import { CLAIMED_FIELD_LABEL, CLAIMED_FIELD_LINE } from '@/server/types';
+import { CLAIMED_FIELD_LABEL, CLAIMED_FIELD_LINE, DOC_TYPE_LABEL, LINE_AMOUNT_FIELDS } from '@/server/types';
 import { evaluateWaivers } from '@/server/compliance/waivers';
+import { printedPageGaps, sumColumn } from '@/server/documents/integrity';
 
 // ── Inputs ──────────────────────────────────────────────────────────────────
 
 export type ReconLine = {
   id: string;
+  /** The file the row was read from; null for a row keyed by hand. */
+  documentId?: string | null;
+  /** The amounts as the document prints them, when a reviewer has adjusted the row for approval. */
+  printed?: Partial<Record<LineAmountField, number | null>> | null;
   sovLineId: string | null;
   itemNo: string | null;
   description: string | null;
@@ -74,7 +85,11 @@ export type ReconInput = {
   today: string;
   project: { name: string; state: string | null };
   subcontractor: { name: string };
-  contract: { number: string; originalAmount: number; retainageWorkBps: number; retainageStoredBps: number };
+  contract: { number: string; originalAmount: number; retainageWorkBps: number; retainageStoredBps: number; retainageTerms?: RetainageTerms | null };
+  /** Retainage releases recorded on the contract that are in force (not void). */
+  retainageReleases?: Array<{ id: string; amount: number; effectiveOn: string; note: string | null }>;
+  /** How the package arrived. Only email carries a sender to vouch for. */
+  intake?: { via: 'upload' | 'email'; senderEmail: string | null; sender: 'contact' | 'domain' | 'team' | 'unknown' };
   changeOrders: Array<{ id: string; number: string; title: string; amount: number; status: string }>;
   sov: Array<{ id: string; itemNo: string; description: string; scheduledValue: number }>;
   prior: ReconPrior | null;
@@ -99,8 +114,24 @@ export type ReconInput = {
     statusDetail: string | null;
     segments: DocumentSegment[];
     duplicateOf: { applicationNumber: number | null; filename: string } | null;
+    /** What the latest successful reading of the file saw besides the figures. Absent when it was not read. */
+    integrity?: DocumentIntegrity | null;
   }>;
   waivers: ReconWaiver[];
+};
+
+/** Printed facts about a file that tell whether everything in it was read. */
+export type DocumentIntegrity = {
+  /** Every "page x of y" marking, in file order. */
+  pageNumbering: PrintedPageNumber[];
+  /** The schedule's printed grand-total row. */
+  scheduleGrandTotal: ScheduleGrandTotal | null;
+  /** The same fact printed with different values, or a second application in the file. */
+  conflicts: ExtractionConflict[];
+  /** Pages with no machine-readable text that the reader could not read. */
+  unreadablePages: number[];
+  /** Number of the pay application read from this file, when it holds one. */
+  payApplicationNumber: number | null;
 };
 
 // ── Outputs ─────────────────────────────────────────────────────────────────
@@ -141,6 +172,97 @@ export type ReconOutput = {
 };
 
 const OPEN_SIBLING = new Set(['processing', 'needs_matching', 'needs_review', 'pending_approval', 'on_hold']);
+
+// ── Retainage ───────────────────────────────────────────────────────────────
+
+export type RetainageResult = {
+  work: number;
+  stored: number;
+  total: number;
+  /** Portion of recorded releases that was applied (never more than there is to release). */
+  released: number;
+  /** How the figure was arrived at, in words. */
+  basis: string;
+  /** True when the contract's terms or a release change the answer from the flat rate. */
+  special: boolean;
+};
+
+/**
+ * Retainage to hold on a given amount of completed work and stored material.
+ *
+ *   flat          base rate × completed work
+ *   future_work   base rate up to the threshold, the reduced rate on work beyond it
+ *   all_work      base rate until the threshold is reached, then the reduced rate on everything
+ *
+ * The threshold is a share of the contract sum to date, measured on completed
+ * work (not stored material), so the answer depends only on the totals and not
+ * on the order in which the work was billed. Releases come off last and can
+ * never take retainage below zero.
+ */
+export function computeRetainage(args: {
+  work: number;
+  stored: number;
+  contractSum: number;
+  workBps: number;
+  storedBps: number;
+  terms?: RetainageTerms | null;
+  released?: number;
+}): RetainageResult {
+  const { work, stored, contractSum, workBps, storedBps } = args;
+  const reduction = args.terms?.reduction ?? null;
+  const $ = (n: number) => formatMoney(n);
+  let onWork: number;
+  let basis: string;
+  if (!reduction || work <= 0) {
+    onWork = applyBps(work, workBps);
+    basis = `${formatBps(workBps)} of completed work (${$(work)})`;
+  } else {
+    const threshold = applyBps(contractSum, reduction.atPercentBps);
+    const at = `${formatBps(reduction.atPercentBps)} of the contract sum (${$(threshold)})`;
+    if (reduction.appliesTo === 'future_work') {
+      const below = Math.min(work, threshold);
+      const beyond = Math.max(work - threshold, 0);
+      onWork = applyBps(below, workBps) + applyBps(beyond, reduction.toBps);
+      basis =
+        beyond > 0
+          ? `${formatBps(workBps)} of completed work up to ${at}, plus ${formatBps(reduction.toBps)} of the ${$(beyond)} beyond it`
+          : `${formatBps(workBps)} of completed work (${$(work)}); the rate changes to ${formatBps(reduction.toBps)} for work beyond ${at}`;
+    } else if (work >= threshold) {
+      onWork = applyBps(work, reduction.toBps);
+      basis = `${formatBps(reduction.toBps)} of completed work (${$(work)}), the reduced rate that applies once ${at} is complete`;
+    } else {
+      onWork = applyBps(work, workBps);
+      basis = `${formatBps(workBps)} of completed work (${$(work)}); the rate drops to ${formatBps(reduction.toBps)} on all work once ${at} is complete`;
+    }
+  }
+  const onStored = applyBps(stored, storedBps);
+  if (stored !== 0 || storedBps !== workBps) basis += ` plus ${formatBps(storedBps)} of stored material (${$(stored)})`;
+
+  const gross = onWork + onStored;
+  const released = Math.min(Math.max(args.released ?? 0, 0), Math.max(gross, 0));
+  if (released > 0) basis += `, less ${$(released)} released`;
+  // A release comes out of retainage on completed work first.
+  const workAfter = Math.max(onWork - released, 0);
+  const total = gross - released;
+  return { work: workAfter, stored: total - workAfter, total, released, basis, special: !!reduction || released > 0 };
+}
+
+/** Split `total` across `weights` in proportion, in whole cents, so the parts add up exactly. */
+export function allocate(total: number, weights: number[]): number[] {
+  const whole = sum(weights);
+  if (whole === 0 || total === 0) return weights.map(() => 0);
+  const exact = weights.map((w) => (total * w) / whole);
+  const parts = exact.map((x) => Math.trunc(x));
+  let remainder = total - sum(parts);
+  const step = remainder >= 0 ? 1 : -1;
+  // Hand the leftover cents to the parts that lost the most to truncation.
+  const order = exact.map((x, i) => ({ i, lost: Math.abs(x - Math.trunc(x)) })).sort((a, b) => b.lost - a.lost || a.i - b.i);
+  for (let k = 0; remainder !== 0; k = (k + 1) % order.length) {
+    parts[order[k]!.i]! += step;
+    remainder -= step;
+  }
+  return parts;
+}
 
 // ── Engine ──────────────────────────────────────────────────────────────────
 
@@ -192,10 +314,21 @@ export function reconcile(input: ReconInput): ReconOutput {
   const workToDate = sum(verifiedLines.map((l) => l.previous + l.thisPeriod));
   const storedToDate = sum(verifiedLines.map((l) => l.stored));
   const totalCompletedStored = workToDate + storedToDate;
+  // A release counts from the period it takes effect in. With no period read yet, count them all.
+  const releasesInForce = (input.retainageReleases ?? []).filter((r) => !app.periodTo || r.effectiveOn <= app.periodTo);
+  const releasedToDate = sum(releasesInForce.map((r) => r.amount));
+  const retainageFor = (work: number, stored: number) =>
+    computeRetainage({ work, stored, contractSum: contractSumToDate, workBps: contract.retainageWorkBps, storedBps: contract.retainageStoredBps, terms: contract.retainageTerms, released: releasedToDate });
   // Retainage is computed on the totals (as the G702 does), not summed from per-line rounding.
-  const retainageWork = applyBps(workToDate, contract.retainageWorkBps);
-  const retainageStored = applyBps(storedToDate, contract.retainageStoredBps);
-  const retainageTotal = retainageWork + retainageStored;
+  const held = retainageFor(workToDate, storedToDate);
+  const retainageWork = held.work;
+  const retainageStored = held.stored;
+  const retainageTotal = held.total;
+  if (held.special) {
+    // With a stepped rate or a release there is no per-line rate; share the total out in proportion.
+    const shares = allocate(retainageTotal, verifiedLines.map((l) => l.retainage));
+    verifiedLines.forEach((l, i) => (l.retainage = shares[i]!));
+  }
   const totalEarnedLessRetainage = totalCompletedStored - retainageTotal;
   const lessPreviousCertificates = prior?.totalEarnedLessRetainage ?? 0;
   const currentPaymentDue = totalEarnedLessRetainage - lessPreviousCertificates;
@@ -214,6 +347,8 @@ export function reconcile(input: ReconInput): ReconOutput {
     balanceToFinish: contractSumToDate - totalEarnedLessRetainage,
     priorApplicationNumber: prior?.applicationNumber ?? null,
     excludedLines: unmatched.length,
+    retainageReleased: held.released,
+    retainageBasis: held.basis,
   };
 
   // The subcontractor reports earlier billing but we hold no history for this contract.
@@ -225,6 +360,24 @@ export function reconcile(input: ReconInput): ReconOutput {
   const segments = input.documents.flatMap((d) => d.segments.map((s) => ({ ...s, documentId: d.id })));
   const hasType = (t: DocumentSegment['type']) => segments.some((s) => s.type === t);
   const firstOf = (t: DocumentSegment['type']) => segments.find((s) => s.type === t);
+
+  // A package that arrived by email is only as trustworthy as its sender.
+  if (input.intake?.via === 'email') {
+    const { senderEmail, sender } = input.intake;
+    const known = sender !== 'unknown';
+    checks.push({
+      code: 'intake.sender',
+      subjectKey: '',
+      category: 'documents',
+      severity: 'blocking',
+      outcome: known ? 'pass' : 'fail',
+      title: known ? 'Sent from a known address' : 'Sent from an address that is not on file',
+      detail: known
+        ? `Received by email from ${senderEmail}, ${sender === 'contact' ? `the contact address on file for ${input.subcontractor.name}` : sender === 'domain' ? `which is on the same email domain as the contact on file for ${input.subcontractor.name}` : 'a member of your team'}.`
+        : `This package arrived by email from ${senderEmail ?? 'an unknown address'}, which is not the contact on file for ${input.subcontractor.name} and is not anyone on your team. Anyone who knows the intake address can send to it, and a sender address can be forged.`,
+      action: known ? undefined : `Confirm with ${input.subcontractor.name} that they sent it. If the address is theirs, add it to the subcontractor’s record and this clears by itself.`,
+    });
+  }
 
   const payAppSeg = firstOf('pay_application');
   checks.push(
@@ -328,6 +481,128 @@ export function reconcile(input: ReconInput): ReconOutput {
         refs: { documentId: doc.id, page: 1, tab: 'documents' },
       });
     }
+  }
+
+  // What the reading of each file saw besides the figures: pages it could not read, pages missing
+  // from the printed numbering, and the same fact printed twice with different values. Each of
+  // these can hide a line item or an amount, so each blocks until a person has looked.
+  const marks = input.documents.flatMap((d) => (d.integrity?.pageNumbering ?? []).map((m) => ({ ...m, documentId: d.id })));
+  for (const doc of input.documents) {
+    const facts = doc.integrity;
+    if (!facts || doc.status === 'unreadable' || doc.status === 'failed') continue; // the whole file is already flagged
+
+    const unread = facts.unreadablePages;
+    if (unread.length > 0) {
+      const one = unread.length === 1;
+      checks.push({
+        code: 'doc.unreadable_pages',
+        subjectKey: doc.id,
+        category: 'extraction',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `${one ? 'Page' : 'Pages'} ${listNumbers(unread)} of “${doc.filename}” could not be read automatically`,
+        detail: `${one ? 'This page has' : 'These pages have'} no machine-readable text (a blank page or a scanned image), so nothing on ${one ? 'it' : 'them'} was read or checked. A line item, amount or signature there is missing from the figures in this review.`,
+        action: `Open the ${one ? 'page' : 'pages'} and key anything ${one ? 'it holds' : 'they hold'} by hand (line items on the Lines tab, summary figures on the Summary tab), then accept this item to confirm you have accounted for ${one ? 'it' : 'them'}. Or request a copy with a text layer.`,
+        data: { actualText: unread.join(',') },
+        refs: { documentId: doc.id, page: unread[0], tab: 'documents' },
+      });
+    }
+
+    // A number printed on another file of the package is not missing: an application and its
+    // schedule are often numbered as one document and sent as two files.
+    const gaps = printedPageGaps(facts.pageNumbering)
+      .map((g) => ({ ...g, missing: g.missing.filter((n) => !marks.some((m) => m.documentId !== doc.id && m.of === g.of && m.number === n)) }))
+      .filter((g) => g.missing.length > 0);
+    if (gaps.length > 0) {
+      const what = gaps.map((g) => `${g.missing.length === 1 ? 'page' : 'pages'} ${listNumbers(g.missing)}${g.of !== null ? ` of ${g.of}` : ''}`).join(' and ');
+      const first = gaps[0]!;
+      const sample = facts.pageNumbering.find((m) => m.page === first.pages[0]);
+      checks.push({
+        code: 'doc.page_missing',
+        subjectKey: doc.id,
+        category: 'documents',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `“${doc.filename}” is missing ${what}`,
+        detail: `The pages are numbered${sample ? ` (page ${sample.page} of the file is marked “${sample.source}”)` : ''}, but printed ${what} ${gaps.length === 1 && first.missing.length === 1 ? 'is' : 'are'} not in this file or in any other file of the package. A missing page of a schedule of values hides its line items; a missing page of an application or waiver can hide an amount, a condition or the signature.`,
+        action: 'Request the missing pages from the subcontractor. If nothing is missing (the numbering on the document is wrong), accept this item with a note saying so.',
+        data: { actualText: gaps.map((g) => `${g.missing.join(',')}/${g.of ?? ''}`).join(';') },
+        refs: { documentId: doc.id, page: first.pages[0], tab: 'documents' },
+      });
+    }
+
+    for (const conflict of facts.conflicts) {
+      // Amounts within the tolerance agree; application numbers must match exactly.
+      const same = (a: number | null, b: number | null) => a !== null && b !== null && (conflict.kind === 'total' ? near(a, b) : a === b);
+      const conflicting = conflict.others.filter((o) => !same(o.value, conflict.reported.value));
+      const other = conflicting[0];
+      if (!other) continue;
+      const reported = conflict.reported;
+      const at = (v: { page: number | null }) => (v.page !== null ? `page ${v.page}` : 'another page');
+      const base = {
+        code: 'doc.conflict',
+        subjectKey: `${doc.id}:${conflict.kind}:${conflict.field}`,
+        category: 'documents' as const,
+        outcome: 'fail' as const,
+        refs: { documentId: doc.id, page: other.page ?? reported.page ?? 1, tab: 'documents' as const },
+      };
+      if (conflict.kind === 'second_pay_application') {
+        const numbers = conflicting.map((o) => (o.value !== null ? `#${o.value}` : null)).filter(Boolean);
+        checks.push({
+          ...base,
+          severity: 'blocking',
+          title: `“${doc.filename}” holds more than one pay application`,
+          detail: `Only the application on ${at(reported)}${reported.value !== null ? ` (#${reported.value})` : ''} was read. ${pluralize(conflicting.length, 'other application')}${numbers.length > 0 ? ` (${numbers.join(', ')})` : ''} ${conflicting.length === 1 ? 'starts' : 'start'} on ${conflicting.map(at).join(', ')}; ${conflicting.length === 1 ? 'its' : 'their'} figures and schedule are not part of this review and nothing on ${conflicting.length === 1 ? 'it' : 'them'} has been checked. Paying both, or the wrong one, would pay the wrong amount.`,
+          action: 'Submit each application as its own package, or confirm the extra one is a copy of this application and accept this item with a note.',
+          data: { expected: reported.value, actual: other.value, actualText: conflicting.map((o) => `${o.value ?? '?'}@${o.page ?? '?'}`).join(',') },
+        });
+      } else if (conflict.kind === 'application_number') {
+        const values = [...new Set(conflicting.map((o) => o.value))];
+        checks.push({
+          ...base,
+          severity: 'blocking',
+          title: `“${doc.filename}” states two different application numbers`,
+          detail: `The pay application (${at(reported)}) is numbered ${reported.value ?? 'unreadable'}, but the ${docTypeName(other.docType)} (${conflicting.map(at).join(', ')}) says ${values.map((v) => v ?? 'unreadable').join(', ')}. The application number decides which earlier application counts as previous billing and whether this one is a duplicate.`,
+          action: 'Confirm the number with the subcontractor and correct it on the Summary tab if it was misread, then accept this item; or request corrected documents.',
+          data: { expected: reported.value, actual: other.value },
+        });
+      } else {
+        const field = conflict.field as ClaimedField;
+        // Line 4 against the schedule is already settled by the row sums (math.sheet_total and
+        // math.grand_total say which side is off); reporting it here too would say it twice.
+        if (field === 'totalCompletedStored' && input.lines.length > 0 && claimed.totalCompletedStored !== null) continue;
+        const label = CLAIMED_FIELD_LABEL[field] ?? humanKey(conflict.field);
+        const line = CLAIMED_FIELD_LINE[field];
+        const diff = reported.value !== null && other.value !== null ? other.value - reported.value : null;
+        checks.push({
+          ...base,
+          // The contract sum does not enter the payment; the others do.
+          severity: field === 'contractSumToDate' ? 'warning' : 'blocking',
+          title: `The application and its schedule print different figures for “${label}”`,
+          detail: `${line ? `Line ${line} of the pay application` : 'The pay application'} (${at(reported)}) says ${$(reported.value)}, but the ${docTypeName(other.docType)}’s printed total on ${at(other)} says ${$(other.value)}${diff !== null ? ` (${$(Math.abs(diff))} apart)` : ''}. The two documents disagree, so one of them is wrong or a page or line is missing.`,
+          action: 'Compare both pages with the document. If the document itself is inconsistent, request a corrected application.',
+          data: { expected: reported.value, actual: other.value, delta: diff },
+        });
+      }
+    }
+  }
+
+  // Two files in the package carrying pay applications with different numbers: only one was read.
+  const numbered = input.documents.filter((d) => d.integrity?.payApplicationNumber != null);
+  const distinct = [...new Set(numbered.map((d) => d.integrity!.payApplicationNumber!))];
+  if (distinct.length > 1) {
+    checks.push({
+      code: 'doc.conflict',
+      subjectKey: 'package:applicationNumber',
+      category: 'documents',
+      severity: 'blocking',
+      outcome: 'fail',
+      title: 'The package holds pay applications with different numbers',
+      detail: `${numbered.map((d) => `“${d.filename}” is application #${d.integrity!.payApplicationNumber}`).join('; ')}. Only one application can be reviewed per package; the figures of the other were not checked.`,
+      action: 'Remove the file that belongs to another application and submit it on its own, then re-run the review.',
+      data: { actualText: numbered.map((d) => `${d.id}:${d.integrity!.payApplicationNumber}`).join(',') },
+      refs: { documentId: numbered[0]!.id, page: 1, tab: 'documents' },
+    });
   }
 
   // Signature
@@ -704,6 +979,70 @@ export function reconcile(input: ReconInput): ReconOutput {
         refs: { field: 'totalCompletedStored', tab: 'summary' },
       });
     }
+
+    // The schedule's printed grand total against its rows, column by column: a row or page that
+    // was not read, or a misread cell, shows up here. Plain integer-cent sums of the rows under
+    // review; nothing the reader computed is trusted.
+    const totalled = input.documents.filter((d) => d.integrity?.scheduleGrandTotal);
+    for (const doc of totalled) {
+      const g = doc.integrity!.scheduleGrandTotal!;
+      // With one printed total in the package every row counts toward it, including rows keyed by
+      // hand and rows of a schedule split across files. With several, each covers its own file.
+      const rows = (totalled.length === 1 ? input.lines : input.lines.filter((l) => l.documentId === doc.id))
+        // A reviewer's adjustment changes what is approved, not what the document says.
+        .map((l) => ({ ...l, ...(l.printed ?? {}) }))
+        .map((l) => ({ ...l, total: l.total ?? (l.previous ?? 0) + (l.thisPeriod ?? 0) + (l.stored ?? 0) }));
+      const columns = LINE_AMOUNT_FIELDS.filter((f) => typeof g.values[f] === 'number');
+      if (rows.length === 0 || columns.length === 0) continue;
+      const compared = columns.map((field) => {
+        const printed = g.values[field] as number;
+        const { sum: rowSum, blanks } = sumColumn(rows, field);
+        return { field, printed, rowSum, blanks, ok: near(rowSum, printed) };
+      });
+      const off = compared.filter((c) => !c.ok);
+      const where = `${g.page !== null ? `page ${g.page} of ` : ''}“${doc.filename}”`;
+      const refs: FindingRefs = { documentId: doc.id, ...(g.page !== null ? { page: g.page } : {}), tab: 'lines' };
+      if (off.length === 0) {
+        checks.push({
+          code: 'math.grand_total',
+          subjectKey: doc.id,
+          category: 'math',
+          severity: 'blocking',
+          outcome: 'pass',
+          title: 'Schedule rows add up to its printed grand total',
+          detail: `The ${pluralize(rows.length, 'row')} add up to the ${g.label ? `“${g.label}” row` : 'grand total'} printed on ${where} in every column (${compared.map((c) => GRAND_TOTAL_COLUMN[c.field]).join(', ')}).`,
+          refs,
+        });
+        continue;
+      }
+      // Only the columns that feed the payment block; the others still point at a missing row.
+      const blocking = off.some((c) => c.field !== 'scheduledValue' && c.field !== 'previous' && c.field !== 'balance');
+      const main = off.find((c) => c.field === 'total') ?? off.find((c) => c.field === 'thisPeriod') ?? off[0]!;
+      const blanks = Math.max(...off.map((c) => c.blanks));
+      checks.push({
+        code: 'math.grand_total',
+        subjectKey: doc.id,
+        category: 'math',
+        severity: blocking ? 'blocking' : 'warning',
+        outcome: 'fail',
+        title: 'Schedule rows do not add up to its printed grand total',
+        detail:
+          `The ${g.label ? `“${g.label}” row` : 'grand total'} printed on ${where} does not equal the sum of the ${pluralize(rows.length, 'row')} under review: ` +
+          off.map((c) => `${GRAND_TOTAL_COLUMN[c.field]} is printed as ${$(c.printed)} but the rows add up to ${$(c.rowSum)} (${$(Math.abs(c.printed - c.rowSum))} ${c.rowSum < c.printed ? 'short' : 'over'})`).join('; ') +
+          `. A row or page that was not read, or a misread figure, is the usual cause; otherwise the schedule itself does not add up.` +
+          (blanks > 0 ? ` ${pluralize(blanks, 'row')} ${blanks === 1 ? 'has' : 'have'} no figure in ${off.length === 1 ? 'that column' : 'one of these columns'}.` : '') +
+          (g.confidence < policy.lowConfidenceThreshold ? ' The printed total was itself read with low confidence; check it against the document too.' : ''),
+        action: 'Find the row that is missing or misread: key a missing row or correct the figure on the Lines tab. If the schedule itself does not add up, request a corrected schedule.',
+        data: {
+          expected: main.rowSum,
+          actual: main.printed,
+          delta: main.printed - main.rowSum,
+          expectedText: off.map((c) => `${c.field}:${c.rowSum}`).join(','),
+          actualText: off.map((c) => `${c.field}:${c.printed}`).join(','),
+        },
+        refs,
+      });
+    }
   }
 
   // ── 6. Contract value & change orders ──────────────────────────────────────
@@ -834,7 +1173,10 @@ export function reconcile(input: ReconInput): ReconOutput {
         });
       }
 
-      if (v.total > s.scheduledValue + tol) {
+      // A deduct (negative scheduled value, e.g. a deductive change order) is billed as a credit:
+      // the valid range runs from the scheduled value up to zero, the mirror image of a normal line.
+      const deduct = s.scheduledValue < 0;
+      if (!deduct && v.total > s.scheduledValue + tol) {
         over++;
         checks.push({
           code: 'sov.overbilled',
@@ -848,9 +1190,26 @@ export function reconcile(input: ReconInput): ReconOutput {
           data: { expected: s.scheduledValue, actual: v.total, delta: v.total - s.scheduledValue },
           refs: { lineId: line.id, sovLineId: s.id, tab: 'lines' },
         });
+      } else if (deduct && (v.total < s.scheduledValue - tol || v.total > tol)) {
+        over++;
+        const tooMuchCredit = v.total < s.scheduledValue - tol;
+        checks.push({
+          code: 'sov.overbilled',
+          subjectKey: line.id,
+          category: 'schedule',
+          severity: 'blocking',
+          outcome: 'fail',
+          title: tooMuchCredit ? `${lineLabel(line)}: more credit taken than the deduct allows` : `${lineLabel(line)}: a deduct is billed as a charge`,
+          detail: tooMuchCredit
+            ? `This line is a deduct of ${$(s.scheduledValue)}. Credit to date would be ${$(v.total)}, ${$(s.scheduledValue - v.total)} more than the deduct.`
+            : `This line is a deduct of ${$(s.scheduledValue)}, so it can only reduce the billing. The application shows ${$(v.total)} billed against it.`,
+          action: 'Check the sign and the amount on this line against the change order.',
+          data: { expected: s.scheduledValue, actual: v.total, delta: v.total - s.scheduledValue },
+          refs: { lineId: line.id, sovLineId: s.id, tab: 'lines' },
+        });
       }
 
-      if ((line.thisPeriod ?? 0) < 0 || (line.stored ?? 0) < 0) {
+      if (!deduct && ((line.thisPeriod ?? 0) < 0 || (line.stored ?? 0) < 0)) {
         checks.push({
           code: 'sov.negative_billing',
           subjectKey: line.id,
@@ -1011,15 +1370,11 @@ export function reconcile(input: ReconInput): ReconOutput {
     // it in here would make a correctly calculated retainage look wrong.
     const basisWork = workToDate + sum(unmatched.map((l) => (l.previous ?? 0) + (l.thisPeriod ?? 0)));
     const basisStored = storedToDate + sum(unmatched.map((l) => l.stored ?? 0));
-    const expectedRetainage = unmatched.length > 0 ? applyBps(basisWork, contract.retainageWorkBps) + applyBps(basisStored, contract.retainageStoredBps) : retainageTotal;
+    const expected = unmatched.length > 0 ? retainageFor(basisWork, basisStored) : held;
+    const expectedRetainage = expected.total;
     const ok = near(claimedRetainage, expectedRetainage);
     const delta = claimedRetainage - expectedRetainage;
-    const basis =
-      `${formatBps(contract.retainageWorkBps)} of completed work (${$(basisWork)})` +
-      (basisStored !== 0 || contract.retainageStoredBps !== contract.retainageWorkBps
-        ? ` plus ${formatBps(contract.retainageStoredBps)} of stored material (${$(basisStored)})`
-        : '') +
-      (unmatched.length > 0 ? ', counting the lines that are not on the contract' : '');
+    const basis = expected.basis + (unmatched.length > 0 ? ', counting the lines that are not on the contract' : '');
     checks.push({
       code: 'ret.amount',
       subjectKey: '',
@@ -1030,21 +1385,29 @@ export function reconcile(input: ReconInput): ReconOutput {
       detail: ok
         ? `${$(expectedRetainage)} — ${basis}.`
         : `The contract requires ${basis} = ${$(expectedRetainage)}. The application withholds ${$(claimedRetainage)}, ${$(Math.abs(delta))} ${delta < 0 ? 'short. Under-withholding releases money the contract says to hold back.' : 'more than required.'}`,
-      action: ok ? undefined : 'The verified payment applies the contract rate. If a retainage reduction has been agreed, update the contract terms first.',
+      action: ok ? undefined : 'The verified payment applies the contract’s terms. If a reduced rate or a release of retainage has been agreed, record it on the contract first; this then clears by itself.',
       data: { expected: expectedRetainage, actual: claimedRetainage, delta },
       refs: { field: 'retainageTotal', tab: 'summary' },
     });
 
     if (prior?.retainageTotal != null && claimedRetainage < prior.retainageTotal - tol) {
+      // Retainage going down means previously withheld money is being billed. That is fine when the
+      // contract's own terms or a recorded release account for it, and a red flag when nothing does.
+      const authorised = prior.retainageTotal - expectedRetainage; // how far the contract lets it fall
+      const billed = prior.retainageTotal - claimedRetainage;
+      const explained = authorised > 0 && billed <= authorised + tol;
       checks.push({
         code: 'ret.release',
         subjectKey: '',
         category: 'retainage',
         severity: 'warning',
-        outcome: 'fail',
-        title: 'Retainage held would go down',
-        detail: `Retainage was ${$(prior.retainageTotal)} after the last approved application and is ${$(claimedRetainage)} on this one. That bills ${$(prior.retainageTotal - claimedRetainage)} of previously withheld retainage.`,
-        action: 'Confirm a retainage release was authorised before approving.',
+        outcome: explained ? 'pass' : 'fail',
+        title: explained ? 'Retainage released per the contract' : 'Retainage held would go down',
+        detail: explained
+          ? `Retainage goes from ${$(prior.retainageTotal)} after the last approved application to ${$(claimedRetainage)}, paying out ${$(billed)}. The contract’s retainage terms and recorded releases allow up to ${$(authorised)}.`
+          : `Retainage was ${$(prior.retainageTotal)} after the last approved application and is ${$(claimedRetainage)} on this one. That bills ${$(billed)} of previously withheld retainage` +
+            (authorised > 0 ? `, but the contract’s terms and recorded releases only account for ${$(authorised)}.` : ', and no release or reduced rate is recorded on the contract.'),
+        action: explained ? undefined : 'Confirm a release was authorised. If it was, record it on the contract; the verified payment then includes it.',
         data: { expected: prior.retainageTotal, actual: claimedRetainage, delta: claimedRetainage - prior.retainageTotal },
         refs: { field: 'retainageTotal', tab: 'summary' },
       });
@@ -1119,6 +1482,36 @@ function addDays(iso: string, days: number): string {
 function humanKey(key: string): string {
   return key.replace(/([A-Z])/g, ' $1').toLowerCase();
 }
+
+/** "3", "3 and 5", "2–4 and 7". */
+function listNumbers(ns: number[]): string {
+  const sorted = [...new Set(ns)].sort((a, b) => a - b);
+  const parts: string[] = [];
+  for (let i = 0; i < sorted.length; ) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j]! + 1) j++;
+    // Three or more in a row read better as a range.
+    if (j - i >= 2) parts.push(`${sorted[i]}–${sorted[j]}`);
+    else for (let k = i; k <= j; k++) parts.push(`${sorted[k]}`);
+    i = j + 1;
+  }
+  return parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
+/** "schedule of values", for use inside a sentence. */
+function docTypeName(t: DocType): string {
+  return DOC_TYPE_LABEL[t].replace(/\s*\(.*\)$/, '').toLowerCase();
+}
+
+const GRAND_TOTAL_COLUMN: Record<LineAmountField, string> = {
+  scheduledValue: 'scheduled value (C)',
+  previous: 'previous applications (D)',
+  thisPeriod: 'this period (E)',
+  stored: 'materials stored (F)',
+  total: 'completed and stored to date (G)',
+  balance: 'balance to finish (H)',
+  retainage: 'retainage',
+};
 
 /**
  * If the gap between billed and approved change orders is exactly one or two

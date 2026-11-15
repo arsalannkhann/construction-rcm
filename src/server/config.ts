@@ -20,6 +20,26 @@ export function isProduction(): boolean {
   return process.env.NODE_ENV === 'production';
 }
 
+/**
+ * How queued document processing gets run.
+ *
+ *   poll     A long-lived server process (Docker, `next start`) runs the queue
+ *            itself and checks it every few seconds.
+ *   request  Serverless hosting (Vercel), where nothing runs between requests.
+ *            Work runs right after the request that queued it, and any later
+ *            request (a page view, the processing screen's status check, the
+ *            scheduled call to /api/jobs/run) picks up whatever is left.
+ *
+ * RCM_JOB_RUNNER overrides; otherwise `request` on Vercel and `poll` elsewhere.
+ */
+export type JobRunnerMode = 'poll' | 'request';
+
+export function jobRunnerMode(env: Record<string, string | undefined> = process.env): JobRunnerMode {
+  const forced = env.RCM_JOB_RUNNER?.trim();
+  if (forced === 'poll' || forced === 'request') return forced;
+  return env.VERCEL ? 'request' : 'poll';
+}
+
 export type AiConfig = { configured: true; apiKey: string; model: string } | { configured: false };
 
 export function aiConfig(): AiConfig {

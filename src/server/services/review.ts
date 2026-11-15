@@ -9,6 +9,7 @@ import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import { formatMoney } from '@/lib/money';
 import { formatDate } from '@/lib/utils';
 import type { DB } from '@/db';
+import { locked, withOrgLock } from '@/db/tx';
 import {
   changeOrders,
   comments,
@@ -22,17 +23,20 @@ import {
   payAppLines,
   payApplications,
   projects,
+  retainageReleases,
   sovLines,
   subcontractors,
   users,
+  nextVersion,
 } from '@/db/schema';
 import { recordAudit } from '@/server/audit';
-import { assertCan, can, PermissionError, UserError, type Ctx } from '@/server/auth/permissions';
+import { assertCan, can, ConflictError, PermissionError, UserError, type Ctx } from '@/server/auth/permissions';
 import { sendEmail } from '@/server/email';
 import { newId } from '@/server/ids';
 import { mapLinesToSov } from '@/server/recon/matching';
-import type { ApprovedRecord, ClaimedField, ContractBaseline, LineAmountField, Tri, WaiverType } from '@/server/types';
+import type { ApprovedRecord, ClaimedField, ContractBaseline, HeaderCorrections, LineAmountField, Tri, WaiverType } from '@/server/types';
 import { CLAIMED_FIELD_LABEL, CLAIMED_FIELDS, LINE_AMOUNT_FIELDS, OPEN_STATUSES, WAIVER_TYPES } from '@/server/types';
+import { messageWordingProblem } from '@/lib/message-wording';
 import { notifyPermission, notifyUsers } from './notify';
 import { computeReconciliation, rereconcileContract, runReconciliation } from './reconcile';
 
@@ -61,11 +65,16 @@ const LINE_FIELD_LABEL: Record<LineAmountField, string> = {
 
 const appLabel = (app: App) => `application #${app.applicationNumber ?? '?'}`;
 
+/** A decision is made on what the person was looking at. If the application has moved on since, they must look again. */
+function assertCurrent(app: App, expectedVersion: number | undefined): void {
+  if (expectedVersion !== undefined && expectedVersion !== app.version) throw new ConflictError();
+}
+
 // ── Corrections to the application summary ──────────────────────────────────
 
 export type HeaderPatch = Partial<Record<ClaimedField, number | null>> & { applicationNumber?: number | null; periodTo?: string | null };
 
-export async function updateHeader(db: DB, ctx: Ctx, appId: string, patch: HeaderPatch): Promise<void> {
+export const updateHeader = locked(async function updateHeader(db: DB, ctx: Ctx, appId: string, patch: HeaderPatch): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -73,12 +82,20 @@ export async function updateHeader(db: DB, ctx: Ctx, appId: string, patch: Heade
   const claimed = { ...app.claimed };
   const evidence = { ...app.evidence };
   const changes: Array<{ field: string; label: string; from: unknown; to: unknown }> = [];
+  // Remember what the document said, so the correction can be re-applied if the package is read again.
+  const corrections: HeaderCorrections = { ...(app.headerCorrections ?? {}) };
+  const remember = (field: string, from: number | string | null, to: number | string | null) => {
+    const asRead = corrections[field] ? corrections[field]!.from : from;
+    if (asRead === to) delete corrections[field];
+    else corrections[field] = { from: asRead, to };
+  };
   for (const field of CLAIMED_FIELDS) {
     if (!(field in patch)) continue;
     const next = patch[field] ?? null;
     if (next !== null && !Number.isSafeInteger(next)) throw new UserError('Enter a valid amount.');
     if (claimed[field] === next) continue;
     changes.push({ field, label: CLAIMED_FIELD_LABEL[field], from: claimed[field], to: next });
+    remember(field, claimed[field], next);
     claimed[field] = next;
     // A person has now vouched for this value; keep the original location for reference.
     if (evidence[field]) evidence[field] = { ...evidence[field]!, confidence: 1 };
@@ -88,6 +105,7 @@ export async function updateHeader(db: DB, ctx: Ctx, appId: string, patch: Heade
     const n = patch.applicationNumber ?? null;
     if (n !== null && (!Number.isInteger(n) || n < 1 || n > 9999)) throw new UserError('Application number must be a whole number.');
     changes.push({ field: 'applicationNumber', label: 'Application number', from: app.applicationNumber, to: n });
+    remember('applicationNumber', app.applicationNumber, n);
     set.applicationNumber = n;
     if (evidence.applicationNumber) evidence.applicationNumber = { ...evidence.applicationNumber, confidence: 1 };
   }
@@ -95,12 +113,14 @@ export async function updateHeader(db: DB, ctx: Ctx, appId: string, patch: Heade
     const d = patch.periodTo ?? null;
     if (d !== null && !/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new UserError('Enter a valid date.');
     changes.push({ field: 'periodTo', label: 'Period to', from: app.periodTo, to: d });
+    remember('periodTo', app.periodTo, d);
     set.periodTo = d;
     if (evidence.periodTo) evidence.periodTo = { ...evidence.periodTo, confidence: 1 };
   }
   if (changes.length === 0) return;
+  set.headerCorrections = Object.keys(corrections).length ? corrections : null;
 
-  await db.update(payApplications).set({ ...set, updatedAt: new Date() }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, ...set, updatedAt: new Date() }).where(eq(payApplications.id, appId));
   const show = (c: (typeof changes)[number], v: unknown) => (typeof v === 'number' && c.field !== 'applicationNumber' ? formatMoney(v) : v === null ? 'blank' : c.field === 'periodTo' ? formatDate(String(v)) : String(v));
   await recordAudit(db, {
     orgId: ctx.orgId,
@@ -113,15 +133,15 @@ export async function updateHeader(db: DB, ctx: Ctx, appId: string, patch: Heade
     data: { changes },
   });
   await runReconciliation(db, ctx.orgId, appId, { actor: ctx });
-}
+});
 
-export async function confirmSignature(db: DB, ctx: Ctx, appId: string, confirmed: boolean): Promise<void> {
+export const confirmSignature = locked(async function confirmSignature(db: DB, ctx: Ctx, appId: string, confirmed: boolean): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
   await db
     .update(payApplications)
-    .set({ signatureConfirmedAt: confirmed ? new Date() : null, signatureConfirmedBy: confirmed ? ctx.userId : null, updatedAt: new Date() })
+    .set({ version: nextVersion, signatureConfirmedAt: confirmed ? new Date() : null, signatureConfirmedBy: confirmed ? ctx.userId : null, updatedAt: new Date() })
     .where(eq(payApplications.id, appId));
   await recordAudit(db, {
     orgId: ctx.orgId,
@@ -133,14 +153,14 @@ export async function confirmSignature(db: DB, ctx: Ctx, appId: string, confirme
     summary: confirmed ? 'Confirmed by looking at the document that the pay application is signed' : 'Withdrew the confirmation that the pay application is signed',
   });
   await runReconciliation(db, ctx.orgId, appId, { actor: ctx });
-}
+});
 
 // ── Line items ──────────────────────────────────────────────────────────────
 
 export type LinePatch = Partial<Record<LineAmountField, number | null>> & { itemNo?: string | null; description?: string | null };
 export type EditKind = 'correction' | 'adjustment';
 
-export async function updateLine(db: DB, ctx: Ctx, lineId: string, patch: LinePatch, kind: EditKind, note?: string | null): Promise<void> {
+export const updateLine = locked(async function updateLine(db: DB, ctx: Ctx, lineId: string, patch: LinePatch, kind: EditKind, note?: string | null): Promise<void> {
   assertCan(ctx, 'application:review');
   const [line] = await db.select().from(payAppLines).where(and(eq(payAppLines.orgId, ctx.orgId), eq(payAppLines.id, lineId)));
   if (!line) throw new UserError('Line not found.');
@@ -195,9 +215,9 @@ export async function updateLine(db: DB, ctx: Ctx, lineId: string, patch: LinePa
     data: { kind, note: note ?? null, patch },
   });
   await runReconciliation(db, ctx.orgId, app.id, { actor: ctx });
-}
+});
 
-export async function addLine(db: DB, ctx: Ctx, appId: string, values: LinePatch): Promise<string> {
+export const addLine = locked(async function addLine(db: DB, ctx: Ctx, appId: string, values: LinePatch): Promise<string> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -246,9 +266,9 @@ export async function addLine(db: DB, ctx: Ctx, appId: string, values: LinePatch
   });
   await runReconciliation(db, ctx.orgId, appId, { actor: ctx });
   return id;
-}
+});
 
-export async function deleteLine(db: DB, ctx: Ctx, lineId: string): Promise<void> {
+export const deleteLine = locked(async function deleteLine(db: DB, ctx: Ctx, lineId: string): Promise<void> {
   assertCan(ctx, 'application:review');
   const [line] = await db.select().from(payAppLines).where(and(eq(payAppLines.orgId, ctx.orgId), eq(payAppLines.id, lineId)));
   if (!line) throw new UserError('Line not found.');
@@ -266,10 +286,10 @@ export async function deleteLine(db: DB, ctx: Ctx, lineId: string): Promise<void
     data: { line: { itemNo: line.itemNo, description: line.description, scheduledValue: line.scheduledValue, previous: line.previous, thisPeriod: line.thisPeriod, stored: line.stored, total: line.total } },
   });
   await runReconciliation(db, ctx.orgId, app.id, { actor: ctx });
-}
+});
 
 /** Point a submitted row at a contract line (or at nothing). */
-export async function setLineMatch(db: DB, ctx: Ctx, lineId: string, sovLineId: string | null): Promise<void> {
+export const setLineMatch = locked(async function setLineMatch(db: DB, ctx: Ctx, lineId: string, sovLineId: string | null): Promise<void> {
   assertCan(ctx, 'application:review');
   const [line] = await db.select().from(payAppLines).where(and(eq(payAppLines.orgId, ctx.orgId), eq(payAppLines.id, lineId)));
   if (!line) throw new UserError('Line not found.');
@@ -294,7 +314,7 @@ export async function setLineMatch(db: DB, ctx: Ctx, lineId: string, sovLineId: 
     summary: `Matched line ${line.itemNo ?? ''} ${line.description ?? ''} to ${label}`.replace(/\s+/g, ' '),
   });
   await runReconciliation(db, ctx.orgId, app.id, { actor: ctx });
-}
+});
 
 // ── Lien waivers ────────────────────────────────────────────────────────────
 
@@ -307,7 +327,7 @@ export type WaiverPatch = {
   signed?: Tri | null;
 };
 
-export async function updateWaiver(db: DB, ctx: Ctx, waiverId: string, patch: WaiverPatch): Promise<void> {
+export const updateWaiver = locked(async function updateWaiver(db: DB, ctx: Ctx, waiverId: string, patch: WaiverPatch): Promise<void> {
   assertCan(ctx, 'application:review');
   const [w] = await db.select().from(lienWaivers).where(and(eq(lienWaivers.orgId, ctx.orgId), eq(lienWaivers.id, waiverId)));
   if (!w) throw new UserError('Waiver not found.');
@@ -332,10 +352,10 @@ export async function updateWaiver(db: DB, ctx: Ctx, waiverId: string, patch: Wa
     data: { patch },
   });
   await runReconciliation(db, ctx.orgId, app.id, { actor: ctx });
-}
+});
 
 /** Record a waiver by hand, for a document that could not be read. */
-export async function addWaiver(db: DB, ctx: Ctx, appId: string, documentId: string, values: Required<Pick<WaiverPatch, 'waiverType'>> & WaiverPatch): Promise<string> {
+export const addWaiver = locked(async function addWaiver(db: DB, ctx: Ctx, appId: string, documentId: string, values: Required<Pick<WaiverPatch, 'waiverType'>> & WaiverPatch): Promise<string> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -373,7 +393,7 @@ export async function addWaiver(db: DB, ctx: Ctx, appId: string, documentId: str
   });
   await runReconciliation(db, ctx.orgId, appId, { actor: ctx });
   return id;
-}
+});
 
 // ── Findings ────────────────────────────────────────────────────────────────
 
@@ -384,12 +404,14 @@ export function canAcceptFinding(ctx: Ctx, f: { severity: string; needsQualified
   return can(ctx.role, 'application:review');
 }
 
-export async function acceptFinding(db: DB, ctx: Ctx, findingId: string, note: string, opts: { now?: Date } = {}): Promise<void> {
+export const acceptFinding = locked(async function acceptFinding(db: DB, ctx: Ctx, findingId: string, note: string, opts: { now?: Date; expectedVersion?: number } = {}): Promise<void> {
   const [f] = await db.select().from(findings).where(and(eq(findings.orgId, ctx.orgId), eq(findings.id, findingId)));
-  if (!f) throw new UserError('Finding not found.');
+  // A finding is replaced when the figures behind it change, so "not found" here usually means exactly that.
+  if (!f) throw new ConflictError('This finding has changed since you opened the page. The page has been updated: read it again before accepting it.');
   const app = await loadApp(db, ctx, f.payApplicationId);
   assertOpen(app);
-  if (f.status !== 'open') throw new UserError('This finding is no longer open.');
+  assertCurrent(app, opts.expectedVersion);
+  if (f.status !== 'open') throw new ConflictError('This finding is no longer open. The page has been updated.');
   if (!canAcceptFinding(ctx, f)) throw new PermissionError(f.needsQualifiedReview ? 'compliance:signoff' : f.severity === 'blocking' ? 'application:approve' : 'application:review');
   if ((f.severity === 'blocking' || f.needsQualifiedReview) && note.trim().length < 5) throw new UserError('Explain why this is acceptable. The explanation is kept with the approval record.');
 
@@ -407,9 +429,9 @@ export async function acceptFinding(db: DB, ctx: Ctx, findingId: string, note: s
     at: now,
   });
   await refreshCounts(db, app.id);
-}
+});
 
-export async function reopenFinding(db: DB, ctx: Ctx, findingId: string): Promise<void> {
+export const reopenFinding = locked(async function reopenFinding(db: DB, ctx: Ctx, findingId: string): Promise<void> {
   assertCan(ctx, 'application:review');
   const [f] = await db.select().from(findings).where(and(eq(findings.orgId, ctx.orgId), eq(findings.id, findingId)));
   if (!f) throw new UserError('Finding not found.');
@@ -427,13 +449,13 @@ export async function reopenFinding(db: DB, ctx: Ctx, findingId: string): Promis
     summary: `Reopened “${f.title}”`,
   });
   await refreshCounts(db, app.id);
-}
+});
 
 async function refreshCounts(db: DB, appId: string): Promise<void> {
   const rows = await db.select({ status: findings.status, severity: findings.severity }).from(findings).where(eq(findings.payApplicationId, appId));
   await db
     .update(payApplications)
-    .set({
+    .set({ version: nextVersion,
       openBlocking: rows.filter((r) => r.status === 'open' && r.severity === 'blocking').length,
       openWarnings: rows.filter((r) => r.status === 'open' && r.severity === 'warning').length,
       updatedAt: new Date(),
@@ -443,7 +465,7 @@ async function refreshCounts(db: DB, appId: string): Promise<void> {
 
 // ── Matching and contract-level resolutions ─────────────────────────────────
 
-export async function assignContract(db: DB, ctx: Ctx, appId: string, contractId: string): Promise<void> {
+export const assignContract = locked(async function assignContract(db: DB, ctx: Ctx, appId: string, contractId: string): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -457,7 +479,7 @@ export async function assignContract(db: DB, ctx: Ctx, appId: string, contractId
   }
   await db
     .update(payApplications)
-    .set({ contractId, projectId: contract.projectId, subcontractorId: contract.subcontractorId, status: app.status === 'needs_matching' ? 'needs_review' : app.status, updatedAt: new Date() })
+    .set({ version: nextVersion, contractId, projectId: contract.projectId, subcontractorId: contract.subcontractorId, status: app.status === 'needs_matching' ? 'needs_review' : app.status, updatedAt: new Date() })
     .where(eq(payApplications.id, appId));
   await recordAudit(db, {
     orgId: ctx.orgId,
@@ -470,13 +492,13 @@ export async function assignContract(db: DB, ctx: Ctx, appId: string, contractId
     data: { contractId, previousContractId: app.contractId },
   });
   await runReconciliation(db, ctx.orgId, appId, { actor: ctx });
-}
+});
 
 /**
  * For a contract that was already being billed before it was set up here:
  * take this application's "previous" figures as the opening balances.
  */
-export async function setOpeningBalances(db: DB, ctx: Ctx, appId: string): Promise<void> {
+export const setOpeningBalances = locked(async function setOpeningBalances(db: DB, ctx: Ctx, appId: string): Promise<void> {
   assertCan(ctx, 'application:approve');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -513,10 +535,10 @@ export async function setOpeningBalances(db: DB, ctx: Ctx, appId: string): Promi
     data: { baseline },
   });
   await rereconcileContract(db, ctx.orgId, app.contractId, { actor: ctx });
-}
+});
 
 /** For a contract with no schedule of values yet: adopt the one on this application. */
-export async function adoptSchedule(db: DB, ctx: Ctx, appId: string): Promise<void> {
+export const adoptSchedule = locked(async function adoptSchedule(db: DB, ctx: Ctx, appId: string): Promise<void> {
   assertCan(ctx, 'records:write');
   const app = await loadApp(db, ctx, appId);
   assertOpen(app);
@@ -541,11 +563,11 @@ export async function adoptSchedule(db: DB, ctx: Ctx, appId: string): Promise<vo
     summary: `Adopted the schedule of values from ${appLabel(app)} as the contract’s schedule (${usable.length} lines, ${formatMoney(usable.reduce((a, l) => a + l.scheduledValue!, 0))})`,
   });
   await rereconcileContract(db, ctx.orgId, app.contractId, { actor: ctx });
-}
+});
 
 // ── Workflow ────────────────────────────────────────────────────────────────
 
-export async function assignReviewer(db: DB, ctx: Ctx, appId: string, userId: string | null, opts: { now?: Date } = {}): Promise<void> {
+export const assignReviewer = locked(async function assignReviewer(db: DB, ctx: Ctx, appId: string, userId: string | null, opts: { now?: Date } = {}): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   let name = 'nobody';
@@ -559,20 +581,21 @@ export async function assignReviewer(db: DB, ctx: Ctx, appId: string, userId: st
     name = m.name;
   }
   const now = opts.now ?? new Date();
-  await db.update(payApplications).set({ assigneeId: userId, updatedAt: now }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, assigneeId: userId, updatedAt: now }).where(eq(payApplications.id, appId));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'application.assigned', entityType: 'pay_application', entityId: appId, payApplicationId: appId, summary: `Assigned to ${name}`, data: { assigneeId: userId }, at: now });
   if (userId && userId !== ctx.userId) {
     await notifyUsers(db, ctx.orgId, [userId], { type: 'application.assigned', title: `${ctx.userName} assigned you ${appLabel(app)}`, href: `/applications/${appId}` }, now);
   }
-}
+});
 
-export async function submitForApproval(db: DB, ctx: Ctx, appId: string, note?: string | null, opts: { now?: Date } = {}): Promise<void> {
+export const submitForApproval = locked(async function submitForApproval(db: DB, ctx: Ctx, appId: string, note?: string | null, opts: { now?: Date; expectedVersion?: number } = {}): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
+  assertCurrent(app, opts.expectedVersion);
   if (app.status !== 'needs_review') throw new UserError('Only applications in review can be submitted for approval.');
   if (!app.contractId) throw new UserError('Match the application to a contract first.');
   const now = opts.now ?? new Date();
-  await db.update(payApplications).set({ status: 'pending_approval', submittedForApprovalAt: now, submittedForApprovalBy: ctx.userId, updatedAt: now }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, status: 'pending_approval', submittedForApprovalAt: now, submittedForApprovalBy: ctx.userId, updatedAt: now }).where(eq(payApplications.id, appId));
   await recordAudit(db, {
     orgId: ctx.orgId,
     actor: ctx,
@@ -585,17 +608,26 @@ export async function submitForApproval(db: DB, ctx: Ctx, appId: string, note?: 
     at: now,
   });
   await notifyPermission(db, ctx.orgId, 'application:approve', { type: 'application.pending_approval', title: `${appLabel(app)} is waiting for your approval`, body: `Submitted by ${ctx.userName} at ${formatMoney(app.verifiedAmount)}`, href: `/applications/${appId}` }, { except: ctx.userId, at: now });
-}
+});
 
-export type ApproveInput = { note?: string | null; acknowledgeWarnings?: boolean; now?: Date };
+export type ApproveInput = {
+  note?: string | null;
+  acknowledgeWarnings?: boolean;
+  now?: Date;
+  /** The version of the application the approver was looking at. */
+  expectedVersion?: number;
+  /** The payment amount the approver was shown. Approval fails if the verified amount is no longer this. */
+  expectedAmount?: number | null;
+};
 
-export async function approveApplication(db: DB, ctx: Ctx, appId: string, input: ApproveInput = {}): Promise<ApprovedRecord> {
+export const approveApplication = locked(async function approveApplication(db: DB, ctx: Ctx, appId: string, input: ApproveInput = {}): Promise<ApprovedRecord> {
   assertCan(ctx, 'application:approve');
   const now = input.now ?? new Date();
   let app = await loadApp(db, ctx, appId);
   if (app.status !== 'needs_review' && app.status !== 'pending_approval') throw new UserError('This application is not in a state that can be approved.');
   if (!app.contractId) throw new UserError('Match the application to a contract first.');
   if (app.applicationNumber === null || !app.periodTo) throw new UserError('The application number and period are required before approval.');
+  assertCurrent(app, input.expectedVersion);
 
   // Decide on the current facts, not on whatever was last displayed.
   await runReconciliation(db, ctx.orgId, appId, { actor: ctx, now });
@@ -611,12 +643,17 @@ export async function approveApplication(db: DB, ctx: Ctx, appId: string, input:
   const out = await computeReconciliation(db, ctx.orgId, appId, now);
   if (!out) throw new UserError('The application could not be verified.');
   if (out.lines.length === 0) throw new UserError('The contract has no schedule of values, so there is nothing to approve against.');
+  // Never approve an amount the approver did not see.
+  if (input.expectedAmount !== undefined && input.expectedAmount !== out.verified.currentPaymentDue) {
+    throw new ConflictError(`The verified payment is now ${formatMoney(out.verified.currentPaymentDue)}, not the ${formatMoney(input.expectedAmount)} you were shown. The page has been updated: check it and approve again.`);
+  }
 
   const [org] = await db.select().from(organizations).where(eq(organizations.id, ctx.orgId));
   const [contract] = await db.select().from(contracts).where(eq(contracts.id, app.contractId!));
   const [project] = await db.select().from(projects).where(eq(projects.id, contract!.projectId));
   const [sub] = await db.select().from(subcontractors).where(eq(subcontractors.id, contract!.subcontractorId));
   const cos = await db.select().from(changeOrders).where(and(eq(changeOrders.contractId, contract!.id), eq(changeOrders.status, 'approved')));
+  const releases = await db.select().from(retainageReleases).where(and(eq(retainageReleases.contractId, contract!.id), eq(retainageReleases.status, 'approved')));
   const lines = await db.select().from(payAppLines).where(eq(payAppLines.payApplicationId, appId));
   const waivers = await db.select().from(lienWaivers).where(eq(lienWaivers.payApplicationId, appId));
   const docs = await db.select().from(documents).where(eq(documents.payApplicationId, appId)).orderBy(asc(documents.createdAt));
@@ -638,8 +675,10 @@ export async function approveApplication(db: DB, ctx: Ctx, appId: string, input:
       originalAmount: contract!.originalAmount,
       retainageWorkBps: contract!.retainageWorkBps,
       retainageStoredBps: contract!.retainageStoredBps,
+      retainageTerms: contract!.retainageTerms ?? null,
       externalId: contract!.externalId,
     },
+    retainageReleases: releases.filter((r) => r.effectiveOn <= app.periodTo!).map((r) => ({ amount: r.amount, effectiveOn: r.effectiveOn, note: r.note })),
     application: { id: app.id, number: app.applicationNumber!, periodTo: app.periodTo!, receivedAt: app.receivedAt.toISOString() },
     claimed: app.claimed,
     approved: out.verified,
@@ -672,7 +711,7 @@ export async function approveApplication(db: DB, ctx: Ctx, appId: string, input:
 
   await db
     .update(payApplications)
-    .set({
+    .set({ version: nextVersion,
       status: 'approved',
       decidedAt: now,
       decidedBy: ctx.userId,
@@ -708,34 +747,35 @@ export async function approveApplication(db: DB, ctx: Ctx, appId: string, input:
   // Later applications on this contract now have a new "previous" basis.
   await rereconcileContract(db, ctx.orgId, contract!.id, { actor: ctx, now, except: appId });
   return record;
-}
+});
 
-export async function rejectApplication(db: DB, ctx: Ctx, appId: string, reason: string, opts: { now?: Date } = {}): Promise<void> {
+export const rejectApplication = locked(async function rejectApplication(db: DB, ctx: Ctx, appId: string, reason: string, opts: { now?: Date; expectedVersion?: number } = {}): Promise<void> {
   assertCan(ctx, 'application:approve');
   const app = await loadApp(db, ctx, appId);
+  assertCurrent(app, opts.expectedVersion);
   if (!['needs_review', 'pending_approval', 'on_hold', 'needs_matching'].includes(app.status)) throw new UserError('This application cannot be rejected in its current state.');
   if (reason.trim().length < 5) throw new UserError('Give the reason for rejecting. It is kept with the record and can be sent to the subcontractor.');
   const now = opts.now ?? new Date();
-  await db.update(payApplications).set({ status: 'rejected', decidedAt: now, decidedBy: ctx.userId, decisionNote: reason.trim(), holdSince: null, updatedAt: now }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, status: 'rejected', decidedAt: now, decidedBy: ctx.userId, decisionNote: reason.trim(), holdSince: null, updatedAt: now }).where(eq(payApplications.id, appId));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'application.rejected', entityType: 'pay_application', entityId: appId, payApplicationId: appId, summary: `Rejected ${appLabel(app)} — ${reason.trim()}`, data: { reason: reason.trim() }, at: now });
   await notifyUsers(db, ctx.orgId, [app.assigneeId, app.submittedForApprovalBy, app.submittedBy].filter((u) => u !== ctx.userId), { type: 'application.rejected', title: `${appLabel(app)} rejected`, body: reason.trim(), href: `/applications/${appId}` }, now);
   if (app.contractId) await rereconcileContract(db, ctx.orgId, app.contractId, { actor: ctx, now, except: appId });
-}
+});
 
-export async function voidApplication(db: DB, ctx: Ctx, appId: string, reason: string): Promise<void> {
+export const voidApplication = locked(async function voidApplication(db: DB, ctx: Ctx, appId: string, reason: string): Promise<void> {
   assertCan(ctx, 'application:approve');
   const app = await loadApp(db, ctx, appId);
   if (app.status === 'approved') throw new UserError('An approved application cannot be voided. Reopen it first.');
   if (app.status === 'void') return;
   if (reason.trim().length < 5) throw new UserError('Give the reason for voiding.');
   const now = new Date();
-  await db.update(payApplications).set({ status: 'void', decidedAt: now, decidedBy: ctx.userId, decisionNote: reason.trim(), updatedAt: now }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, status: 'void', decidedAt: now, decidedBy: ctx.userId, decisionNote: reason.trim(), updatedAt: now }).where(eq(payApplications.id, appId));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'application.voided', entityType: 'pay_application', entityId: appId, payApplicationId: appId, summary: `Voided ${appLabel(app)} — ${reason.trim()}`, data: { reason: reason.trim() }, at: now });
   if (app.contractId) await rereconcileContract(db, ctx.orgId, app.contractId, { actor: ctx, now, except: appId });
-}
+});
 
 /** Undo a decision. Not allowed once later billing depends on it or it has been pushed to another system. */
-export async function reopenApplication(db: DB, ctx: Ctx, appId: string, reason: string): Promise<void> {
+export const reopenApplication = locked(async function reopenApplication(db: DB, ctx: Ctx, appId: string, reason: string): Promise<void> {
   assertCan(ctx, 'application:approve');
   const app = await loadApp(db, ctx, appId);
   if (!['approved', 'rejected', 'void'].includes(app.status)) throw new UserError('Only a decided application can be reopened.');
@@ -749,7 +789,7 @@ export async function reopenApplication(db: DB, ctx: Ctx, appId: string, reason:
   const now = new Date();
   await db
     .update(payApplications)
-    .set({ status: app.contractId ? 'needs_review' : 'needs_matching', decidedAt: null, decidedBy: null, decisionNote: null, approvedAmount: null, approvedRetainage: null, approvedRecord: null, transferStatus: 'none', submittedForApprovalAt: null, submittedForApprovalBy: null, updatedAt: now })
+    .set({ version: nextVersion, status: app.contractId ? 'needs_review' : 'needs_matching', decidedAt: null, decidedBy: null, decisionNote: null, approvedAmount: null, approvedRetainage: null, approvedRecord: null, transferStatus: 'none', submittedForApprovalAt: null, submittedForApprovalBy: null, updatedAt: now })
     .where(eq(payApplications.id, appId));
   await recordAudit(db, {
     orgId: ctx.orgId,
@@ -766,7 +806,7 @@ export async function reopenApplication(db: DB, ctx: Ctx, appId: string, reason:
     await runReconciliation(db, ctx.orgId, appId, { actor: ctx, now });
     await rereconcileContract(db, ctx.orgId, app.contractId, { actor: ctx, now, except: appId });
   }
-}
+});
 
 // ── Messages to the subcontractor ───────────────────────────────────────────
 
@@ -790,66 +830,160 @@ export async function draftCorrectionRequest(db: DB, ctx: Ctx, appId: string): P
   };
 }
 
-export type MessageInput = { to: string; subject: string; body: string; hold?: boolean; kind?: 'correction_request' | 'decision_notice' | 'general'; now?: Date };
+export type MessageInput = {
+  to: string;
+  subject: string;
+  body: string;
+  hold?: boolean;
+  kind?: 'correction_request' | 'decision_notice' | 'general';
+  /** The sender has confirmed, outside this product, a statement about payment that the product cannot verify. */
+  acknowledgeWording?: boolean;
+  now?: Date;
+};
 
-/** Record a message to the subcontractor, send it if email delivery is configured, and optionally put the application on hold. */
+export { messageWordingProblem };
+
+const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Record a message to the subcontractor, send it if email delivery is
+ * configured, and optionally put the application on hold.
+ *
+ * The provider is called with no lock held. The message is stored first as
+ * `sending`, so if the process dies mid-send the record says "delivery not
+ * confirmed" rather than nothing, or worse, "sent".
+ */
 export async function sendSubcontractorMessage(db: DB, ctx: Ctx, appId: string, input: MessageInput): Promise<{ status: 'sent' | 'not_sent' | 'failed'; detail: string | null }> {
-  assertCan(ctx, 'application:review');
-  const app = await loadApp(db, ctx, appId);
-  if (app.status === 'processing' || app.status === 'void') throw new UserError('Messages cannot be sent for this application right now.');
-  const to = input.to.trim();
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) throw new UserError('Enter the recipient’s email address.');
-  if (!input.subject.trim() || input.body.trim().length < 10) throw new UserError('Write a subject and a message.');
-
-  const result = await sendEmail({ to, subject: input.subject.trim(), text: input.body, replyTo: ctx.userEmail });
   const now = input.now ?? new Date();
-  await db.insert(communications).values({
-    id: newId('msg'),
-    orgId: ctx.orgId,
-    payApplicationId: appId,
-    kind: input.kind ?? 'correction_request',
-    toEmail: to,
-    subject: input.subject.trim(),
-    body: input.body,
-    status: result.status,
-    provider: result.provider,
-    providerRef: result.status === 'sent' ? result.providerRef : null,
-    error: result.status === 'failed' ? result.error : result.status === 'not_sent' ? result.reason : null,
-    createdBy: ctx.userId,
-    createdAt: now,
+  const to = input.to.trim();
+  const subject = input.subject.trim();
+
+  let vouched = false;
+  const messageId = await withOrgLock(db, ctx.orgId, async (tx) => {
+    assertCan(ctx, 'application:review');
+    const app = await loadApp(tx, ctx, appId);
+    if (app.status === 'processing' || app.status === 'void') throw new UserError('Messages cannot be sent for this application right now.');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) throw new UserError('Enter the recipient’s email address.');
+    if (!subject || input.body.trim().length < 10) throw new UserError('Write a subject and a message.');
+    const wording = messageWordingProblem(app.status, `${subject}\n${input.body}`);
+    if (wording && (wording.level === 'block' || !input.acknowledgeWording)) throw new UserError(wording.reason);
+    vouched = wording !== null;
+
+    // A double click, a retry after a slow response, or two reviewers sending the same request.
+    const recent = await tx.select().from(communications).where(and(eq(communications.orgId, ctx.orgId), eq(communications.payApplicationId, appId), eq(communications.toEmail, to)));
+    const twin = recent.find((m) => m.subject === subject && m.body === input.body && m.status !== 'failed' && now.getTime() - m.createdAt.getTime() < DUPLICATE_WINDOW_MS);
+    if (twin) {
+      throw new UserError(
+        twin.status === 'sent'
+          ? `This exact message was already sent to ${to} a few minutes ago. It has not been sent again.`
+          : twin.status === 'sending'
+            ? `This exact message to ${to} is already being sent.`
+            : `This exact message to ${to} is already saved on the record as a draft.`,
+      );
+    }
+
+    const id = newId('msg');
+    await tx.insert(communications).values({ id, orgId: ctx.orgId, payApplicationId: appId, kind: input.kind ?? 'correction_request', toEmail: to, subject, body: input.body, status: 'sending', createdBy: ctx.userId, createdAt: now });
+    return id;
   });
 
-  const hold = input.hold && (OPEN_STATUSES as string[]).includes(app.status) && app.status !== 'needs_matching';
-  if (hold) await db.update(payApplications).set({ status: 'on_hold', holdSince: now, updatedAt: now }).where(eq(payApplications.id, appId));
+  const result = await sendEmail({ to, subject, text: input.body, replyTo: ctx.userEmail });
 
-  const delivery = result.status === 'sent' ? `Emailed ${to}` : result.status === 'failed' ? `Email to ${to} FAILED to send` : `Drafted a message to ${to} (not sent: email delivery is not configured)`;
+  return withOrgLock(db, ctx.orgId, async (tx) => {
+    await tx
+      .update(communications)
+      .set({
+        status: result.status,
+        provider: result.provider,
+        providerRef: result.status === 'sent' ? result.providerRef : null,
+        error: result.status === 'failed' ? result.error : result.status === 'not_sent' ? result.reason : null,
+      })
+      .where(eq(communications.id, messageId));
+
+    // Waiting on the subcontractor only makes sense if the message can reach them.
+    const app = await loadApp(tx, ctx, appId);
+    const hold = !!input.hold && result.status !== 'failed' && (OPEN_STATUSES as string[]).includes(app.status) && app.status !== 'needs_matching';
+    if (hold) await tx.update(payApplications).set({ version: nextVersion, status: 'on_hold', holdSince: now, updatedAt: now }).where(eq(payApplications.id, appId));
+
+    const delivery = result.status === 'sent' ? `Emailed ${to}` : result.status === 'failed' ? `Email to ${to} FAILED to send` : `Drafted a message to ${to} (not sent: email delivery is not configured)`;
+    await recordAudit(tx, {
+      orgId: ctx.orgId,
+      actor: ctx,
+      action: result.status === 'sent' ? 'message.sent' : result.status === 'failed' ? 'message.failed' : 'message.drafted',
+      entityType: 'pay_application',
+      entityId: appId,
+      payApplicationId: appId,
+      summary: `${delivery}: “${subject}”${hold ? '. Application placed on hold awaiting the subcontractor.' : ''}${input.hold && result.status === 'failed' ? '. The application was not placed on hold because the message did not go out.' : ''}${vouched ? ` ${ctx.userName} confirmed the payment statement in it against the accounting system.` : ''}`,
+      data: { to, subject, status: result.status, hold, paymentStatementConfirmed: vouched },
+      at: now,
+    });
+    if (result.status === 'failed') {
+      await notifyUsers(tx, ctx.orgId, [ctx.userId], { type: 'message.failed', title: 'A message to a subcontractor failed to send', body: result.error, href: `/applications/${appId}` }, now);
+    }
+    return { status: result.status, detail: result.status === 'failed' ? result.error : result.status === 'not_sent' ? result.reason : null };
+  });
+}
+
+/**
+ * A corrected package came in for an application that is still undecided.
+ * Retire the earlier submission in favour of this one, keeping both on record
+ * and linked, so the same billing cannot be approved twice.
+ */
+export const supersedeApplication = locked(async function supersedeApplication(db: DB, ctx: Ctx, appId: string, earlierId: string): Promise<void> {
+  assertCan(ctx, 'application:review');
+  const app = await loadApp(db, ctx, appId);
+  assertOpen(app);
+  const earlier = await loadApp(db, ctx, earlierId);
+  if (earlier.id === app.id) throw new UserError('Choose the earlier submission to replace.');
+  if (!app.contractId || earlier.contractId !== app.contractId) throw new UserError('Both submissions must be matched to the same contract.');
+  if (app.applicationNumber === null || earlier.applicationNumber !== app.applicationNumber) throw new UserError('Only a submission with the same application number can be replaced.');
+  if (earlier.status === 'approved') throw new UserError(`Application #${earlier.applicationNumber} is already approved. Reopen it first if the corrected package should replace it.`);
+  if (earlier.status === 'void') return;
+  if (earlier.status === 'processing') throw new UserError('The earlier submission is still being read. Try again in a moment.');
+  if (earlier.receivedAt > app.receivedAt) throw new UserError('That submission arrived after this one. Open it and replace this one from there.');
+
+  const now = new Date();
+  const note = `Replaced by a corrected submission received ${formatDate(app.receivedAt.toISOString().slice(0, 10))}`;
+  await db
+    .update(payApplications)
+    .set({ version: nextVersion, status: 'void', decidedAt: now, decidedBy: ctx.userId, decisionNote: note, supersededById: app.id, holdSince: null, updatedAt: now })
+    .where(eq(payApplications.id, earlier.id));
   await recordAudit(db, {
     orgId: ctx.orgId,
     actor: ctx,
-    action: result.status === 'sent' ? 'message.sent' : result.status === 'failed' ? 'message.failed' : 'message.drafted',
+    action: 'application.superseded',
     entityType: 'pay_application',
-    entityId: appId,
-    payApplicationId: appId,
-    summary: `${delivery}: “${input.subject.trim()}”${hold ? '. Application placed on hold awaiting the subcontractor.' : ''}`,
-    data: { to, subject: input.subject.trim(), status: result.status, hold: !!hold },
+    entityId: earlier.id,
+    payApplicationId: earlier.id,
+    summary: `Voided ${appLabel(earlier)} (was ${earlier.status.replace('_', ' ')}): ${note.toLowerCase()}. Its documents and history are kept.`,
+    data: { supersededById: app.id, previousStatus: earlier.status },
     at: now,
   });
-  if (result.status === 'failed') {
-    await notifyUsers(db, ctx.orgId, [ctx.userId], { type: 'message.failed', title: 'A message to a subcontractor failed to send', body: result.error, href: `/applications/${appId}` }, now);
-  }
-  return { status: result.status, detail: result.status === 'failed' ? result.error : result.status === 'not_sent' ? result.reason : null };
-}
+  await recordAudit(db, {
+    orgId: ctx.orgId,
+    actor: ctx,
+    action: 'application.replaced_earlier',
+    entityType: 'pay_application',
+    entityId: app.id,
+    payApplicationId: app.id,
+    summary: `This submission replaces the earlier ${appLabel(earlier)} received ${formatDate(earlier.receivedAt.toISOString().slice(0, 10))}, which was voided`,
+    data: { supersedes: earlier.id },
+    at: now,
+  });
+  await runReconciliation(db, ctx.orgId, app.id, { actor: ctx, now });
+  await rereconcileContract(db, ctx.orgId, app.contractId, { actor: ctx, now, except: app.id });
+});
 
-export async function resumeReview(db: DB, ctx: Ctx, appId: string): Promise<void> {
+export const resumeReview = locked(async function resumeReview(db: DB, ctx: Ctx, appId: string): Promise<void> {
   assertCan(ctx, 'application:review');
   const app = await loadApp(db, ctx, appId);
   if (app.status !== 'on_hold' && app.status !== 'pending_approval') throw new UserError('This application is not on hold or pending approval.');
   const now = new Date();
-  await db.update(payApplications).set({ status: 'needs_review', holdSince: null, submittedForApprovalAt: null, submittedForApprovalBy: null, updatedAt: now }).where(eq(payApplications.id, appId));
+  await db.update(payApplications).set({ version: nextVersion, status: 'needs_review', holdSince: null, submittedForApprovalAt: null, submittedForApprovalBy: null, updatedAt: now }).where(eq(payApplications.id, appId));
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'application.resumed', entityType: 'pay_application', entityId: appId, payApplicationId: appId, summary: app.status === 'on_hold' ? 'Took the application off hold and resumed review' : 'Returned the application to review', at: now });
-}
+});
 
-export async function addComment(db: DB, ctx: Ctx, appId: string, body: string): Promise<void> {
+export const addComment = locked(async function addComment(db: DB, ctx: Ctx, appId: string, body: string): Promise<void> {
   if (ctx.role === 'viewer') throw new PermissionError('application:upload');
   const app = await loadApp(db, ctx, appId);
   const text = body.trim();
@@ -859,4 +993,4 @@ export async function addComment(db: DB, ctx: Ctx, appId: string, body: string):
   await db.insert(comments).values({ id: newId('cmt'), orgId: ctx.orgId, payApplicationId: appId, userId: ctx.userId, body: text, createdAt: now });
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'comment.added', entityType: 'pay_application', entityId: appId, payApplicationId: appId, summary: `Commented: ${text.length > 140 ? `${text.slice(0, 140)}…` : text}`, at: now });
   await notifyUsers(db, ctx.orgId, [app.assigneeId, app.submittedForApprovalBy].filter((u) => u !== ctx.userId), { type: 'comment.added', title: `${ctx.userName} commented on ${appLabel(app)}`, body: text.slice(0, 200), href: `/applications/${appId}` }, now);
-}
+});
