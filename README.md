@@ -11,9 +11,10 @@ the way is kept in a tamper-evident audit trail.
 It is not an ERP, a payment system or a document store. No money moves from it,
 and it does not make legal determinations.
 
-Zephric was called Construction RCM until November 2026. The repository, the
-Vercel and Supabase projects and the `construction-rcm.vercel.app` address keep
-the old name; everything a customer sees says Zephric. Authenticator entries
+Zephric was called Construction RCM until November 2026. It is served at
+https://zephric.vercel.app; `construction-rcm.vercel.app` still serves the same
+deployment. The repository and the Vercel and Supabase projects keep the old
+name; everything a customer sees says Zephric. Authenticator entries
 made before the rename are labelled "Construction RCM" and keep working.
 
 Visitors who are not signed in see the public Zephric website at `/`
@@ -627,7 +628,7 @@ another organisation, and the password prompt before two-step setup.
 
 | What | Result |
 |---|---|
-| Vercel + Supabase production | https://construction-rcm.vercel.app, Node 22, region sin1, all secrets set. Checked live on 2026-11-15: `/api/health` returns `ok` with PostgreSQL reached through Supabase's session pooler and TLS **verified** against the configured CA, the Data API exposing no table and no table without RLS, documents stored in the database, and the queue empty. `/api/jobs/run` refuses no token and a wrong token (401) and, with `CRON_SECRET`, runs the queue against the live database (200). Signed-out pages redirect to sign-in; the sign-up page renders. |
+| Vercel + Supabase production | https://zephric.vercel.app (formerly https://construction-rcm.vercel.app, which still answers), Node 22, region sin1, all secrets set. Checked live on 2026-11-15: `/api/health` returns `ok` with PostgreSQL reached through Supabase's session pooler and TLS **verified** against the configured CA, the Data API exposing no table and no table without RLS, documents stored in the database, and the queue empty. `/api/jobs/run` refuses no token and a wrong token (401) and, with `CRON_SECRET`, runs the queue against the live database (200). Signed-out pages redirect to sign-in; the sign-up page renders. |
 | Supabase project `construction-rcm` | Schema applied (migrations 0000–0004, recorded under the repository's versions). The Data API, probed from outside with both public keys, refuses every table. |
 | Docker image and Compose stack | Built and run to a healthy state on 2026-11-15, before that day's authentication changes; not rebuilt since. |
 | Signed-in use of the live site | On 2026-11-15 the owner signed up on the live site, and a project, a subcontractor and a subcontract with a three-line schedule of values ($500,000.00, retainage 10% / 10%) were created through the interface and confirmed in the Supabase database. |
