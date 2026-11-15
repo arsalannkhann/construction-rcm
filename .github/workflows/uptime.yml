@@ -1,0 +1,44 @@
+# Checks the live site every 15 minutes. A failed run is an alert: GitHub emails
+# it to whoever last changed this file's schedule (check your GitHub
+# notification settings). Three attempts, 20 seconds apart, before it fails, so
+# one slow cold start is not an alert.
+#
+# It fails when /api/health does not answer 200 with status "ok": the database
+# is unreachable, documents cannot be read, queued work is stalled, or the
+# scheduled run has not happened for more than a day. The response holds counts
+# only, never an organisation's data, so it is safe in this public log.
+#
+# GitHub pauses scheduled workflows in a public repository after 60 days without
+# a commit; re-enable it under Actions if that happens. A dedicated uptime service
+# alerts faster and by more means (docs/operations.md, "Monitoring").
+name: Uptime
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  health:
+    name: Health check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: GET /api/health
+        env:
+          URL: ${{ vars.HEALTH_URL || 'https://zephric.vercel.app/api/health' }}
+        run: |
+          for attempt in 1 2 3; do
+            response=$(curl -sS --max-time 40 -w '\n%{http_code}' "$URL" || printf '\n000')
+            code=$(printf '%s\n' "$response" | tail -n1)
+            body=$(printf '%s\n' "$response" | sed '$d')
+            status=$(printf '%s' "$body" | jq -r '.status // "unreadable"' 2>/dev/null || echo unreadable)
+            echo "Attempt $attempt: HTTP $code, status $status"
+            if [ "$code" = 200 ] && [ "$status" = ok ]; then exit 0; fi
+            [ "$attempt" -lt 3 ] && sleep 20
+          done
+          printf '%s' "$body" | jq -r '.problems[]? | "problem: " + .' 2>/dev/null || true
+          echo "::error title=Zephric is not healthy::$URL answered HTTP $code with status $status"
+          exit 1

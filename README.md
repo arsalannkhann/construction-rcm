@@ -147,7 +147,7 @@ where documents are kept and what drives background work.
 | Documents | On disk, content-addressed | In PostgreSQL (`stored_objects`) | In PostgreSQL (`stored_objects`) |
 | Background work | Polling runner in the server process | Polling runner in each app process | Request mode: runs right after the request that queued it (kept alive with `after()`), on page views when idle, and on a scheduled call to `/api/jobs/run` |
 | Uploads | One request | One request | Packages over 4 MB are sent in 4 MiB parts (Vercel's request limit is 4.5 MB) |
-| Migrations | Applied by the app | Applied by the app | Applied by Supabase's GitHub integration from `supabase/migrations`; the app only checks the schema (`RCM_MIGRATIONS=external`) |
+| Migrations | Applied by the app | Applied by the app | Applied by hand from `supabase/migrations` before each merge (the GitHub integration did not apply them); the app only checks the schema (`RCM_MIGRATIONS=external`) |
 
 ```mermaid
 flowchart LR
@@ -510,7 +510,7 @@ Copy `.env.example` to `.env.local`. Everything is optional in development.
 | `CRON_SECRET` | Lets the scheduler run the queue at `/api/jobs/run` (needed on Vercel) | That endpoint refuses to run |
 | `RCM_JOB_RUNNER` | `poll` or `request` | `request` on Vercel, `poll` elsewhere |
 | `DATABASE_CA_CERT` | The database provider's CA (PEM or path): encrypted, verified connection. Needed for Supabase | node-postgres's own TLS rules apply |
-| `RCM_MIGRATIONS` | `external`: the app checks the schema that Supabase's GitHub integration applied | The app applies `drizzle/` itself |
+| `RCM_MIGRATIONS` | `external`: the app only checks the schema, applied outside it (on Supabase, from `supabase/migrations`) | The app applies `drizzle/` itself |
 | `RCM_CLIENT_IP_HEADER`, `RCM_TRUSTED_PROXY_HOPS` | Where the client address comes from, for the sign-in limits (see `docs/authentication.md`) | The address one proxy appended to `X-Forwarded-For` |
 | `RCM_STORAGE` | `database` or `disk` for documents | `database` with `DATABASE_URL`, otherwise `disk` |
 | `RCM_EXTRACTION_FALLBACKS` | `off` disables the API's server-side refusal fallback for extraction requests | Fallback on |
@@ -522,9 +522,11 @@ The full procedure, with Docker as the alternative, is in
 [docs/operations.md](docs/operations.md) ("Deploy on Vercel", "Use Supabase as
 the database"). In short:
 
-1. **Database.** Supabase's GitHub integration applies `supabase/migrations`
-   when they reach `main`. After a schema change run `pnpm db:generate` and
-   `pnpm db:supabase`, and commit both.
+1. **Database.** After a schema change run `pnpm db:generate` and
+   `pnpm db:supabase`, and commit both. Apply the new file to Supabase by hand
+   **before merging** (operations, "Schema"): the GitHub integration did not
+   apply migration 0005 on its own, and production refused to start until it
+   was applied.
 2. **Vercel project** connected to this repository; framework Next.js; region
    `sin1` (next to the database, `vercel.json`); Node 22 (from
    `package.json` engines). The production branch is `main`: every push to
@@ -629,7 +631,7 @@ another organisation, and the password prompt before two-step setup.
 | What | Result |
 |---|---|
 | Vercel + Supabase production | https://zephric.vercel.app (formerly https://construction-rcm.vercel.app, which still answers), Node 22, region sin1, all secrets set. Checked live on 2026-11-15: `/api/health` returns `ok` with PostgreSQL reached through Supabase's session pooler and TLS **verified** against the configured CA, the Data API exposing no table and no table without RLS, documents stored in the database, and the queue empty. `/api/jobs/run` refuses no token and a wrong token (401) and, with `CRON_SECRET`, runs the queue against the live database (200). Signed-out pages redirect to sign-in; the sign-up page renders. |
-| Supabase project `construction-rcm` | Schema applied (migrations 0000–0004, recorded under the repository's versions). The Data API, probed from outside with both public keys, refuses every table. |
+| Supabase project `construction-rcm` | Schema applied (migrations 0000–0006, recorded under the repository's versions, applied by hand). The Data API, probed from outside with both public keys, refuses every table. |
 | Docker image and Compose stack | Built and run to a healthy state on 2026-11-15, before that day's authentication changes; not rebuilt since. |
 | Signed-in use of the live site | On 2026-11-15 the owner signed up on the live site, and a project, a subcontractor and a subcontract with a three-line schedule of values ($500,000.00, retainage 10% / 10%) were created through the interface and confirmed in the Supabase database. |
 | Uploads and reading on the live site | On 2026-11-15 the five sample PDFs were uploaded as one package, including a 5.9 MB file sent in 4 MiB parts; every stored object matches its original byte for byte (SHA-256). The first reading failed for every file: pdf.js's worker was not in the deployed functions (fixed in [PR #2](https://github.com/arsalannkhann/construction-rcm/pull/2); the health check now opens a test PDF so this shows as `degraded`). After the fix, the four extra files were removed from the package through the interface ([PR #3](https://github.com/arsalannkhann/construction-rcm/pull/3)) and the package was read again: the 4-page file was split into pay application, schedule of values, lien waiver and one unreadable page; it was read as application #1 for the period to 2026-09-30, matched to SC-2301-16, with $99,000.00 requested and verified and $11,000.00 retainage, all equal to the generator's figures. The only open finding was the unreadable page (`doc.unreadable_pages`), with 26 checks passed. Each removal was audited and every background job succeeded on its first attempt. |
@@ -640,7 +642,9 @@ were not available:**
 
 | Area | State |
 |---|---|
-| Two-step, rejection and the schedule on the live site | Two-step verification and rejecting an application have not been run on the live deployment. The daily scheduled run has not been seen to fire. |
+| Two-step, rejection and the schedule on the live site | Two-step verification and rejecting an application have not been run on the live deployment. The daily scheduled run has not been seen to fire; from this release `/api/health` records when it last ran (`scheduler.lastRunAt`). |
+| Production backups | The nightly workflow and its restore drill are in place, and the drill runs on sample data with no secrets. The production job does nothing until the owner sets its key and connection (operations, "Backups"); no production backup has been taken or restored. Free-plan Supabase backups cannot be downloaded. |
+| Uptime alerts | A GitHub Actions check runs every 15 minutes and fails when the site is not healthy; it alerts by GitHub's email only. No dedicated uptime service is configured. |
 | Claude reading real documents | Never called live (no API key). Accuracy on real pay applications is unmeasured. |
 | Real subcontractor documents | None available. The evaluation harness is ready (`pnpm eval:extraction`, `eval/real/README.md`); scores on the synthetic corpus are a regression signal only. How to measure it, the synthetic results and a pilot protocol: [docs/extraction-evaluation.md](docs/extraction-evaluation.md). |
 | Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`) and tested against an emulator of it; the sandbox procedure is [docs/procore-validation.md](docs/procore-validation.md). The duplicate-invoice check assumes Procore lists a new invoice straight away (validation step 12). |

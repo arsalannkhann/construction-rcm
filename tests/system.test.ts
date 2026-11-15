@@ -6,9 +6,9 @@ import { and, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { explainConnectError } from '@/db/connection';
 import { SchemaBehindError } from '@/db/migrations';
-import { auditEvents, communications, documents, jobs } from '@/db/schema';
+import { auditEvents, communications, documents, jobs, scheduledRuns } from '@/db/schema';
 import { ConflictError, PermissionError, UserError } from '@/server/auth/permissions';
-import { drain } from '@/server/jobs';
+import { drain, lastScheduledRun, recordScheduledRun, SCHEDULED_RUNS_KEPT } from '@/server/jobs';
 import { renderPackage } from '@/server/samples/pdf';
 import { createApplication } from '@/server/services/intake';
 import { getReviewData } from '@/server/services/queries';
@@ -85,6 +85,51 @@ describe('the health check', () => {
     const w = await createWorld();
     const health = await deploymentHealth(async () => w.db);
     expect(health.database.tls).toBe(process.env.DATABASE_URL ? 'off' : null);
+  });
+
+  it('shows when the scheduler last called, and calls a missed day a problem where the queue runs on request', async () => {
+    const w = await createWorld();
+    await w.db.delete(scheduledRuns);
+    const previous = process.env.RCM_JOB_RUNNER;
+    process.env.RCM_JOB_RUNNER = 'request';
+    try {
+      // Before the first run there is nothing to judge.
+      let health = await deploymentHealth(async () => w.db);
+      expect(health.scheduler).toEqual({ lastRunAt: null, overdue: false });
+      expect(health.status).toBe('ok');
+
+      const now = Date.now();
+      const longAgo = new Date(now - 30 * 3_600_000);
+      const recently = new Date(now - 2 * 3_600_000);
+      await recordScheduledRun(w.db, { startedAt: longAgo, finishedAt: longAgo, ran: 0, queued: 0, failed: 0 });
+      health = await deploymentHealth(async () => w.db);
+      expect(health.scheduler).toEqual({ lastRunAt: longAgo, overdue: true });
+      expect(health.status).toBe('degraded');
+      expect(health.problems.join(' ')).toMatch(/scheduled run \(\/api\/jobs\/run\) last happened at .* more than a day ago/);
+
+      await recordScheduledRun(w.db, { startedAt: recently, finishedAt: recently, ran: 1, queued: 0, failed: 0 });
+      health = await deploymentHealth(async () => w.db);
+      expect(health.scheduler).toEqual({ lastRunAt: recently, overdue: false });
+      expect(health.status).toBe('ok');
+    } finally {
+      if (previous === undefined) delete process.env.RCM_JOB_RUNNER;
+      else process.env.RCM_JOB_RUNNER = previous;
+    }
+    // Where a process polls the queue, the scheduled endpoint is not needed, so a stale run is not a problem.
+    const polling = await deploymentHealth(async () => w.db);
+    expect(polling.scheduler?.overdue).toBe(false);
+  });
+
+  it('keeps only the newest scheduled runs', async () => {
+    const w = await createWorld();
+    await w.db.delete(scheduledRuns);
+    const base = Date.parse('2030-01-01T03:00:00Z');
+    for (let i = 0; i < SCHEDULED_RUNS_KEPT + 5; i++) {
+      const at = new Date(base + i * 86_400_000);
+      await recordScheduledRun(w.db, { startedAt: at, finishedAt: at, ran: 0, queued: 0, failed: 0 });
+    }
+    expect(await w.db.select().from(scheduledRuns)).toHaveLength(SCHEDULED_RUNS_KEPT);
+    expect(await lastScheduledRun(w.db)).toEqual(new Date(base + (SCHEDULED_RUNS_KEPT + 4) * 86_400_000));
   });
 });
 

@@ -28,6 +28,7 @@ export async function GET() {
         stalled: health.queue.stalled,
       },
       runner: { mode: health.runner.mode, polling: health.runner.polling, lastActivityAt: health.runner.lastActivityAt?.toISOString() ?? null },
+      scheduler: health.scheduler && { lastRunAt: health.scheduler.lastRunAt?.toISOString() ?? null, overdue: health.scheduler.overdue },
       pdfReader: health.pdfReader,
       checkedAt: new Date().toISOString(),
     },

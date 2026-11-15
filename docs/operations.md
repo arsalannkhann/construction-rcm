@@ -38,7 +38,7 @@ run a pilot on it.
 | `RCM_CLIENT_IP_HEADER` / `RCM_TRUSTED_PROXY_HOPS` | Yes, one of them, unless the default fits | How the client's address is found, for the sign-in limits. Name a header the platform sets itself (`cf-connecting-ip`, `fly-client-ip`, `x-real-ip` on Vercel), or give the number of proxies that append to `X-Forwarded-For` (default 1). Never expose the app without a proxy in front. See `docs/authentication.md`, "Client addresses". |
 | `APP_URL` | Yes | The public `https://` URL. Used in invitation and password links and OAuth redirects. Session cookies are marked `Secure` only when this starts with `https://`. |
 | `DATABASE_CA_CERT` | For Supabase | The database provider's CA certificate (PEM text, or a path to the file). Connections are then encrypted and the server's certificate and host name are checked. Needed because node-postgres treats `sslmode=require` as full verification against Node's built-in authorities, which do not include Supabase's, so `?sslmode=require` alone fails to connect. Do not switch verification off instead. |
-| `RCM_MIGRATIONS` | For Supabase | `external` when Supabase's GitHub integration applies `supabase/migrations`. The app then only checks the schema at start and refuses to run on an older one. Unset, the app applies `drizzle/` itself. |
+| `RCM_MIGRATIONS` | For Supabase | `external` when the database's schema is managed outside the app (on Supabase, `supabase/migrations`, applied as described under [Schema](#schema)). The app then only checks the schema at start and refuses to run on an older one. Unset, the app applies `drizzle/` itself. |
 | `DATABASE_POOL_MAX` | No | Connections per app process (default 10; 3 on Vercel, per instance). |
 | `CRON_SECRET` | On Vercel | Secret the scheduler sends to `/api/jobs/run` as `Authorization: Bearer …` (Vercel's cron does this by itself). Without it that endpoint refuses to run. `openssl rand -hex 32`. |
 | `RCM_JOB_RUNNER` | No | `poll` (a long-lived process runs the queue) or `request` (serverless: work runs after the request that queued it). Default: `request` on Vercel, `poll` elsewhere. Leave it unset. |
@@ -106,19 +106,38 @@ owns its tables, and does not use Supabase Auth, Storage or the Data API.
 
 `supabase/migrations/` holds the same migrations as `drizzle/`, under the
 version names Supabase expects. `pnpm db:supabase` regenerates it after
-`pnpm db:generate`, and a test fails if the two ever differ. With the GitHub
-integration's **Deploy to production** option on (Project settings →
-Integrations), Supabase applies new files when they reach `main`, each in one
-transaction.
+`pnpm db:generate`, and a test fails if the two ever differ.
 
-The `construction-rcm` project already holds migrations 0000–0003. They were
-applied on 2026-11-15 (0003, which adds `login_challenges.invitation_id`, after
-the others) and recorded under the same versions as the files, so the
-integration has nothing to re-apply when this branch reaches `main`. Check with:
+**Apply each new migration by hand, before its change is merged.** Supabase's
+GitHub integration can apply these files when they reach `main` (its **Deploy
+to production** option, Project settings → Integrations), but on the
+`construction-rcm` project it does not: on 2026-11-16 migration 0005 reached
+`main`, no Supabase check ran on the commit, the new deployment refused to
+start for about seven minutes (`/api/health` named the missing migration), and
+the migration had to be applied by hand. Until someone with access to the
+Supabase organisation turns that option on and watches it apply one migration,
+treat it as off.
+
+To apply one, open the SQL editor and run the file and its history row in one
+transaction. With `<version>` and `<name>` taken from the file name
+(`supabase/migrations/<version>_<name>.sql`):
+
+```sql
+begin;
+-- paste the contents of supabase/migrations/<version>_<name>.sql here
+insert into supabase_migrations.schema_migrations (version, name, statements)
+values ('<version>', '<name>', array[$mig$ paste the same contents here $mig$]);
+commit;
+```
+
+Then check that it is recorded, and only then merge:
 
 ```sql
 select version, name from supabase_migrations.schema_migrations order by version;
 ```
+
+Migrations 0000–0005 are applied to `construction-rcm` and recorded under the
+same versions as the files.
 
 Never let the app apply its own migrations to a database Supabase manages: set
 `RCM_MIGRATIONS=external`. If you forget, the app refuses to start and says so.
@@ -171,20 +190,20 @@ list "RLS enabled, no policy" for every table. That is intended.
   so it grows by roughly the size of every uploaded PDF. The Free plan's 500 MB
   holds roughly a hundred or two billing packages. Watch Reports → Database.
 - **Pausing.** Free-plan projects are paused after a week of low activity.
-- **Backups.** Free-plan backups cannot be downloaded. Take your own nightly
-  `pg_dump` through the session pooler (see [Backups](#backups); `pg_dump` must
-  be version 17 or later to match the server), and consider point-in-time
-  recovery on a paid plan.
+- **Backups.** Free-plan backups cannot be downloaded. The nightly backup
+  workflow ([Backups](#backups)) takes its own `pg_dump` through the session
+  pooler, restores and checks it; it needs three settings in GitHub before it
+  does anything. Point-in-time recovery needs a paid plan.
 
 A pilot with a customer's real billing should run on a paid plan. That is a
 purchasing decision for whoever owns the Supabase organisation.
 
 ### Upgrading on Supabase
 
-Migrations reach the database when the change is merged to `main`; the new
-app version must start only after that. If it starts first, it refuses to run
-(`/api/health` returns 503 naming the missing migration) until the integration
-has applied it, and then starts normally on the next restart. Migrations so
+The new app version must start only after its migrations are in the database,
+so apply them (above) before merging. If it starts first, it refuses to run
+(`/api/health` returns 503 naming the missing migration) until they are
+applied, and then starts normally on the next request. Migrations so
 far only add tables and columns, so the previous app version keeps working
 while they are applied.
 
@@ -259,9 +278,9 @@ the first field at once.
 
 ### Migrations and branches
 
-The Vercel project deploys `main` to production on every push, and Supabase's
-GitHub integration applies `supabase/migrations` when they reach `main`, so in
-normal operation code and schema arrive together. A deployment from another
+The Vercel project deploys `main` to production on every push. Migrations are
+applied by hand before the merge ([Schema](#schema)), so the schema is ready
+when the code arrives. A deployment from another
 branch needs that branch's migrations applied to the database first; otherwise
 `/api/health` names the missing migration and the app refuses to serve. Do not
 push `main` to production while it is behind the branch running there: it
@@ -278,6 +297,9 @@ would replace the running version with the older one.
    *On request*.
 3. Upload a package over 4 MB and watch it being read.
 4. Vercel → the project → Settings → Cron Jobs lists `/api/jobs/run`.
+5. The day after deploying, `/api/health` shows `"scheduler":{"lastRunAt":…}`
+   within the last day. Vercel's Hobby plan keeps logs for an hour, so this is
+   how you know the 03:00 UTC run happened.
 
 ## Without Docker
 
@@ -402,56 +424,131 @@ privacy notice on the page promises that.
 Everything is in PostgreSQL, including the documents, so a database backup is
 a complete backup.
 
-Nightly, from a machine that can reach the database:
+### Nightly, from GitHub Actions
+
+`.github/workflows/backup.yml` runs at 02:30 UTC and on demand (Actions →
+Database backup → Run workflow). It has two jobs:
+
+- **Restore drill** runs on every pull request that touches migrations, and
+  before every backup. It needs no secrets: it fills a PostgreSQL 17 database
+  through the app (all migrations and the demo workspace), dumps it, restores
+  the dump into an empty database and runs `pnpm backup:check` on the copy.
+  That proves the dump-and-restore procedure works with the current schema.
+- **Back up production** dumps the production database through the session
+  pooler, restores it into an empty PostgreSQL 17 database on the runner, runs
+  the same check, encrypts the dump to your key with
+  [age](https://github.com/FiloSottile/age) and keeps it as a workflow artifact
+  for 30 days. The repository is public: nothing unencrypted is uploaded, and
+  the log shows counts only.
+
+`pnpm backup:check` (scripts/check-restore.ts) checks a restored database:
+every migration is recorded, every organisation's audit trail verifies hash by
+hash, every stored file matches its SHA-256 and size, no document or exported
+file points at a missing file, and (in the drill) every table has as many rows
+as the source. Verified 2026-11-16 against a seeded database, and with planted
+damage: a deleted file, an edited audit event and altered file bytes were each
+reported and failed the check.
+
+**Turning on the production backup (owner, about 15 minutes).** Until these are
+set, the production job logs a warning and backs up nothing.
+
+1. On your own computer, make a key pair. Keep the key file somewhere safe and
+   offline, such as your password manager: without it the backups cannot be
+   decrypted, and nobody else can make you a new one.
+
+   ```bash
+   age-keygen -o zephric-backup.key
+   ```
+
+   It prints the public key (`age1…`).
+2. GitHub → the repository → Settings → Secrets and variables → Actions:
+   - Variables → `BACKUP_AGE_RECIPIENT` = the `age1…` public key.
+   - Secrets → `BACKUP_DATABASE_URL` = the Supabase **session pooler**
+     connection string (Connect → Session pooler, port 5432), with the
+     database password. GitHub's runners need IPv4, which the direct
+     connection does not offer on the Free plan.
+   - Secrets → `BACKUP_DATABASE_CA_CERT` = the contents of the Supabase CA
+     certificate (Database settings → SSL configuration → Download
+     certificate), so the runner verifies it is talking to Supabase. Without
+     it the connection is still encrypted, and the log warns that the server
+     was not verified.
+3. Actions → Database backup → Run workflow. Both jobs should pass, and the run
+   should list an artifact named `zephric-<date>.dump.age`.
+
+Whoever can change Actions secrets in this repository can read the database.
+Secrets are not given to workflows run from forks.
+
+**To use a backup:** download the artifact from the run (it arrives zipped),
+unzip it, then:
 
 ```bash
-pg_dump --format=custom --no-owner --file="rcm-$(date +%F).dump" "$DATABASE_URL"
+age --decrypt -i zephric-backup.key -o zephric.dump zephric-YYYY-MM-DDTHHMMZ.dump.age
+```
+
+Thirty days of artifacts are kept. GitHub pauses scheduled workflows in a public
+repository after 60 days without a commit; if that happens, re-enable it under
+Actions. A paid Supabase plan adds daily backups you can restore from the
+dashboard, and point-in-time recovery as an add-on; both are a good addition to
+this, not a replacement.
+
+### Elsewhere
+
+From any machine that can reach the database (`pg_dump` 17 or later for
+Supabase):
+
+```bash
+pg_dump --format=custom --no-owner --no-privileges --file="zephric-$(date +%F).dump" "$DATABASE_URL"
 ```
 
 With Docker Compose:
 
 ```bash
-docker compose exec -T db pg_dump --format=custom --no-owner -U rcm rcm > "rcm-$(date +%F).dump"
+docker compose exec -T db pg_dump --format=custom --no-owner -U rcm rcm > "zephric-$(date +%F).dump"
 ```
 
-Keep at least 30 days, off the database host. A managed database's automatic
-snapshots and point-in-time recovery are a good addition, not a replacement for
-a dump you have restored at least once.
-
-**Test a restore before the pilot starts** (into a scratch database):
-
-```bash
-createdb rcm_restore_test
-```
-
-```bash
-pg_restore --no-owner --dbname=rcm_restore_test rcm-YYYY-MM-DD.dump
-```
-
-Start an app instance against `rcm_restore_test`, sign in, open an approved
-application and download its approval PDF, then go to Activity and run the
-audit-chain check. All three must work.
-
-If you chose `RCM_STORAGE=disk`, documents are under `RCM_DATA_DIR/storage`
-instead and must be backed up together with the database dump, taken at the
-same time.
+Keep at least 30 days, off the database host. If you chose
+`RCM_STORAGE=disk`, documents are under `RCM_DATA_DIR/storage` instead and
+must be backed up together with the dump, taken at the same time
+(`pnpm backup:check` then reports no stored files, and does not check them).
 
 ### Secrets
 
 `RCM_SECRET_KEY` is not in the database. Store it in your secrets manager. If
 it is lost, records and documents are unaffected, but stored integration
-tokens (Procore) cannot be decrypted and the integration must be reconnected.
+tokens (Procore) and authenticator keys cannot be decrypted: the integration
+must be reconnected and everyone must set up two-step verification again.
 
 ## Restoring
 
-1. Stop the app.
-2. Restore the dump into an empty database (`pg_restore --clean --if-exists` to
-   replace an existing one).
-3. Start the app with the same `RCM_SECRET_KEY`. Migrations newer than the dump
-   are applied automatically.
-4. Work done after the dump was taken is gone. Settings → System status and
+1. Stop the app (on Vercel: pause the project, or point `DATABASE_URL` at the
+   restored database only once step 3 passes).
+2. Restore the dump into an empty database:
+
+   ```bash
+   createdb zephric_restored
+   ```
+
+   ```bash
+   pg_restore --no-owner --no-privileges --clean --if-exists --exit-on-error --dbname=zephric_restored zephric.dump
+   ```
+
+3. Check it before anyone uses it:
+
+   ```bash
+   DATABASE_URL=postgres://…/zephric_restored pnpm backup:check
+   ```
+
+4. Start the app with the same `RCM_SECRET_KEY`. On a database Supabase
+   manages, keep `RCM_MIGRATIONS=external` and apply any migration newer than
+   the dump by hand ([Schema](#schema)); elsewhere the app applies them at
+   start.
+5. Work done after the dump was taken is gone. Settings → System status and
    Activity show the last recorded events; tell the team which billing
    packages to upload again.
+
+Restoring into plain PostgreSQL 17 is what the drill tests every night.
+Restoring into a new Supabase project follows the same steps but has not been
+rehearsed; do it once, into a scratch project, before you need it.
 
 ## What happens when things fail
 
@@ -467,10 +564,28 @@ tokens (Procore) cannot be decrypted and the integration must be reconnected.
 
 ## Monitoring
 
-- Poll `GET /api/health` every minute. Alert on HTTP 503, and on
-  `"status":"degraded"` lasting more than 10 minutes (the problems are listed
-  in the response: a stalled queue, the queue not running, or PDFs that cannot
-  be read).
+`GET /api/health` answers 200 with `"status":"ok"` when everything is working,
+and otherwise lists the problems: the database unreachable, a stalled queue,
+the queue not running, PDFs that cannot be read, or the scheduled run missed
+for more than a day. It shows counts only, never an organisation's data.
+
+- **GitHub Actions** (`.github/workflows/uptime.yml`) checks it every 15
+  minutes, three attempts 20 seconds apart, and fails if it is not ok. GitHub
+  emails a failed scheduled run to whoever last changed the workflow's
+  schedule, so check that person's notification settings. Scheduled runs can
+  start late when GitHub is busy, and pause after 60 days without a commit. Set
+  the repository variable `HEALTH_URL` to check another address.
+- **A dedicated uptime service** (an owner decision; several have free tiers)
+  alerts faster and by text message. Point it at the same URL, every minute,
+  alerting on anything but HTTP 200 and on `"status":"degraded"` lasting more
+  than 10 minutes.
+- **Scheduled background work.** On Vercel, the queue runs when someone uses
+  the app and once a day from Vercel Cron (`/api/jobs/run`). Each scheduled run
+  is recorded; `/api/health` shows `"scheduler":{"lastRunAt":…}` and reports a
+  problem (`degraded`) once the last run is more than 26 hours old, which means
+  the cron job or `CRON_SECRET` is wrong. Where a process polls the queue
+  (`RCM_JOB_RUNNER` unset), the scheduled run is not needed and its age is not
+  a problem.
 - `queue.failed` greater than zero means someone should look at System status.
 - Logs go to standard output. Useful prefixes: `[jobs]` (queue), `[intake]`
   (document reading), `[db]` (connections, after-commit hooks), `[health]`.
