@@ -154,7 +154,7 @@ function wrapText(s: string, font: PDFFont, size: number, width: number): string
 export async function renderApprovalPdf(record: ApprovedRecord): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.setTitle(`Approval record - ${record.subcontractor.name} - Application ${record.application.number}`);
-  doc.setProducer('Construction RCM');
+  doc.setProducer('Zephric');
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const W = 612;

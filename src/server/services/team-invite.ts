@@ -36,9 +36,9 @@ export async function inviteAndNotify(db: DB, ctx: Ctx, input: { email: string; 
 
   const result = await sendEmail({
     to,
-    subject: `${ctx.userName} invited you to ${ctx.orgName} on Construction RCM`,
+    subject: `${ctx.userName} invited you to ${ctx.orgName} on Zephric`,
     text: [
-      `${ctx.userName} (${ctx.userEmail}) has invited you to join ${ctx.orgName} on Construction RCM as ${role}.`,
+      `${ctx.userName} (${ctx.userEmail}) has invited you to join ${ctx.orgName} on Zephric as ${role}.`,
       '',
       'Accept the invitation:',
       link,

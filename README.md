@@ -1,4 +1,4 @@
-# Construction RCM
+# Zephric
 
 Revenue cycle management for commercial general contractors. A subcontractor's
 billing package comes in; the system reads it, works out which subcontract it
@@ -10,6 +10,11 @@ the way is kept in a tamper-evident audit trail.
 
 It is not an ERP, a payment system or a document store. No money moves from it,
 and it does not make legal determinations.
+
+Zephric was called Construction RCM until November 2026. The repository, the
+Vercel and Supabase projects and the `construction-rcm.vercel.app` address keep
+the old name; everything a customer sees says Zephric. Authenticator entries
+made before the rename are labelled "Construction RCM" and keep working.
 
 **Contents:** [Quick start](#quick-start) ·
 [What to look at first](#what-to-look-at-first) ·
@@ -91,7 +96,7 @@ flowchart LR
     Sub["Subcontractor"]
   end
 
-  subgraph App["Construction RCM (Next.js 16)"]
+  subgraph App["Zephric (Next.js 16)"]
     UI["Pages and server actions"]
     API["Route handlers<br/>/api/*"]
     Svc["Services"]

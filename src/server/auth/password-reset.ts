@@ -81,9 +81,9 @@ export async function requestPasswordReset(db: DB, emailInput: string, opts: { d
   (opts.defer ?? detached)(async () => {
     const result = await sendEmail({
       to: user.email,
-      subject: 'Reset your Construction RCM password',
+      subject: 'Reset your Zephric password',
       text: [
-        'Someone asked to reset the password for the Construction RCM account that signs in with this email address.',
+        'Someone asked to reset the password for the Zephric account that signs in with this email address.',
         '',
         'Set a new password:',
         link,

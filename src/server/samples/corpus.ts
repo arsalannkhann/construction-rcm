@@ -407,7 +407,7 @@ async function scanned(bytes: Uint8Array, opts: { dpi: number; seed: number; spe
   const text = await readPdfText(bytes);
   const src = await PDFDocument.load(bytes);
   const out = await PDFDocument.create();
-  out.setProducer('Construction RCM sample generator');
+  out.setProducer('Zephric sample generator');
   for (const page of text.pages) {
     if (opts.pages && !opts.pages.includes(page.page)) {
       const [copy] = await out.copyPages(src, [page.page - 1]);

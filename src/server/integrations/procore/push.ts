@@ -366,36 +366,31 @@ async function settle(db: DB, ctx: Ctx, plan: Plan, transferId: string, outcome:
   });
 }
 
-/** One push per application at a time in this process; the claim covers other processes. */
-const inFlight = new Set<string>();
-
+/**
+ * One push per application at a time, across every server: the claim in step 1 is taken under the
+ * organisation's lock, so a second press waits for it and then sees the first one's 'sending' row.
+ */
 export async function pushToProcore(db: DB, ctx: Ctx, applicationId: string): Promise<ProcorePushResult> {
   assertCan(ctx, 'export:run');
-  if (inFlight.has(applicationId)) throw new UserError(BEING_SENT);
-  inFlight.add(applicationId);
-  try {
-    const evaluation = await evaluate(db, ctx, applicationId);
-    if (!evaluation.available) throw new UserError(evaluation.reason);
-    const { plan } = evaluation;
-    const taken = await claim(db, ctx, plan);
+  const evaluation = await evaluate(db, ctx, applicationId);
+  if (!evaluation.available) throw new UserError(evaluation.reason);
+  const { plan } = evaluation;
+  const taken = await claim(db, ctx, plan);
 
-    let outcome: Outcome;
+  let outcome: Outcome;
+  try {
+    const ready = await prepare(db, ctx, plan, taken);
+    outcome = 'kind' in ready ? ready : await create(ready);
+  } catch (err) {
+    let error: string;
     try {
-      const ready = await prepare(db, ctx, plan, taken);
-      outcome = 'kind' in ready ? ready : await create(ready);
-    } catch (err) {
-      let error: string;
-      try {
-        error = failure(err);
-      } catch {
-        // A defect before the create request went out. Release the claim truthfully, then let the error surface.
-        await settle(db, ctx, plan, taken.transferId, { kind: 'failed', error: STOPPED_BEFORE_SENDING });
-        throw err;
-      }
-      outcome = { kind: 'failed', error };
+      error = failure(err);
+    } catch {
+      // A defect before the create request went out. Release the claim truthfully, then let the error surface.
+      await settle(db, ctx, plan, taken.transferId, { kind: 'failed', error: STOPPED_BEFORE_SENDING });
+      throw err;
     }
-    return await settle(db, ctx, plan, taken.transferId, outcome);
-  } finally {
-    inFlight.delete(applicationId);
+    outcome = { kind: 'failed', error };
   }
+  return await settle(db, ctx, plan, taken.transferId, outcome);
 }

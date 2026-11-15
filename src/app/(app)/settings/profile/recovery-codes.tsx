@@ -25,11 +25,11 @@ export function RecoveryCodes({ codes, saved, onSavedChange }: { codes: string[]
     }
   };
   const download = () => {
-    const body = ['Construction RCM recovery codes', '', 'Each code works once, in place of a code from your authenticator app.', '', ...codes, ''].join('\n');
+    const body = ['Zephric recovery codes', '', 'Each code works once, in place of a code from your authenticator app.', '', ...codes, ''].join('\n');
     const url = URL.createObjectURL(new Blob([body], { type: 'text/plain' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'construction-rcm-recovery-codes.txt';
+    a.download = 'zephric-recovery-codes.txt';
     a.click();
     URL.revokeObjectURL(url);
   };

@@ -29,7 +29,7 @@ export default async function VerifyPage() {
   return (
     <>
       <h1 className="text-2xl font-semibold tracking-tight">Two-step verification</h1>
-      <p className="mt-1.5 text-[13px] text-ink-2">Enter the 6-digit code your authenticator app shows for Construction RCM.</p>
+      <p className="mt-1.5 text-[13px] text-ink-2">Enter the 6-digit code your authenticator app shows for Zephric (listed as Construction RCM if you set it up before the name changed).</p>
       <div className="mt-7">
         <VerifyForm attemptsLeft={challenge.attemptsLeft} />
       </div>

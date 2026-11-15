@@ -19,7 +19,7 @@ import { signUp } from '../src/server/services/team';
 
 async function main() {
   const db = await getDb();
-  const email = (process.env.DEMO_EMAIL ?? 'demo@construction-rcm.test').toLowerCase();
+  const email = (process.env.DEMO_EMAIL ?? 'demo@zephric.test').toLowerCase();
   const [existing] = await db.select().from(users).where(eq(users.email, email));
   let userId = existing?.id;
   let password: string | null = null;

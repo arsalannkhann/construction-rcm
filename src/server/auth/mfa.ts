@@ -27,7 +27,7 @@ import {
   verifyTotp,
 } from './totp';
 
-export const MFA_ISSUER = 'Construction RCM';
+export const MFA_ISSUER = 'Zephric';
 export const TOO_MANY_CODES = 'Too many wrong codes. Wait 15 minutes, then try again.';
 export const WRONG_CODE = 'That code is not right. Enter the code your authenticator app shows now, or one of your recovery codes.';
 const BAD_SHAPE = 'Enter the 6-digit code from your authenticator app, or one of your recovery codes.';

@@ -572,7 +572,7 @@ export type PackagePart = 'pay_application' | 'continuation_sheet' | 'lien_waive
 export async function renderPackage(p: SamplePackage, parts: PackagePart[] = ['pay_application', 'continuation_sheet', 'lien_waiver']): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.setTitle(`${p.sub.name} - Application ${p.applicationNumber}`);
-  doc.setProducer('Construction RCM sample generator');
+  doc.setProducer('Zephric sample generator');
   // Fixed dates keep the bytes deterministic so identical inputs hash identically.
   const stamp = new Date(`${p.applicationDate}T12:00:00Z`);
   doc.setCreationDate(stamp);

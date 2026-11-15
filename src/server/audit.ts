@@ -74,7 +74,7 @@ export async function recordAudit(db: DB, input: AuditInput): Promise<void> {
   const isSystem = 'system' in input.actor;
   const actorType = isSystem ? 'system' : 'user';
   const actorId = isSystem ? null : (input.actor as Ctx).userId;
-  const actorName = isSystem ? ((input.actor as { name?: string }).name ?? 'Construction RCM') : (input.actor as Ctx).userName;
+  const actorName = isSystem ? ((input.actor as { name?: string }).name ?? 'Zephric') : (input.actor as Ctx).userName;
   // Round-trip through JSON so what we hash is exactly what the database will hand back.
   const data = input.data ? (JSON.parse(JSON.stringify(input.data)) as Record<string, unknown>) : null;
   const createdAt = input.at ?? new Date();

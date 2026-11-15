@@ -10,7 +10,7 @@
 import { readPdfText, type PdfText } from './pdf-text';
 
 /** The only text on the test PDF. */
-export const READER_CHECK_TEXT = 'Construction RCM reader check';
+export const READER_CHECK_TEXT = 'Construction RCM reader check'; // matches the embedded PDF below; not shown to anyone
 
 /** One page (200 × 60 pt, standard Helvetica, made with pdf-lib) whose only text is READER_CHECK_TEXT. */
 const READER_CHECK_PDF = [

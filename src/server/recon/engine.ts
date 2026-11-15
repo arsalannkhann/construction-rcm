@@ -1334,7 +1334,7 @@ export function reconcile(input: ReconInput): ReconOutput {
       outcome: 'fail',
       title: 'Earlier billing is reported, but there is no history on file',
       detail: `The application reports ${$(statedPrevious)} of previously completed work and ${$(claimed.lessPreviousCertificates ?? 0)} of previous certificates, but no earlier application for this contract has been approved here. Until a starting point exists, “previous” amounts cannot be verified.`,
-      action: 'If this contract was already under way before you started using Construction RCM, set its opening balances from this application after checking them against your records. Otherwise investigate.',
+      action: 'If this contract was already under way before you started using Zephric, set its opening balances from this application after checking them against your records. Otherwise investigate.',
       data: { actual: claimed.lessPreviousCertificates ?? statedPrevious },
       refs: { field: 'lessPreviousCertificates', tab: 'summary' },
     });

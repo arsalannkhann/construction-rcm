@@ -288,7 +288,7 @@ function FindingCard({ finding: f }: { finding: Finding }) {
         open={confirmBaseline}
         onOpenChange={setConfirmBaseline}
         title="Set opening balances from this application?"
-        description="Use this only for a contract that was already being billed before you started using Construction RCM."
+        description="Use this only for a contract that was already being billed before you started using Zephric."
         footer={
           <>
             <Button variant="ghost" onClick={() => setConfirmBaseline(false)}>
