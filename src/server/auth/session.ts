@@ -29,7 +29,7 @@ export function cookieSecure(): boolean {
   return !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(appUrl());
 }
 
-const cookieOptions = (expires: Date) => ({ httpOnly: true, sameSite: 'lax' as const, secure: cookieSecure(), path: '/', expires });
+export const authCookieOptions = (expires: Date) => ({ httpOnly: true, sameSite: 'lax' as const, secure: cookieSecure(), path: '/', expires });
 
 export async function sessionToken(): Promise<string | null> {
   return (await cookies()).get(COOKIE)?.value ?? null;
@@ -70,7 +70,7 @@ export async function requireUser(): Promise<SessionInfo['user']> {
 }
 
 export async function setSessionCookie(token: string, expiresAt: Date): Promise<void> {
-  (await cookies()).set(COOKIE, token, cookieOptions(expiresAt));
+  (await cookies()).set(COOKIE, token, authCookieOptions(expiresAt));
 }
 
 /** Start a session for someone who has just proved who they are, and set its cookie. */
@@ -86,7 +86,7 @@ export async function endSession(): Promise<void> {
 }
 
 export async function setLoginChallengeCookie(token: string, expiresAt: Date): Promise<void> {
-  (await cookies()).set(CHALLENGE_COOKIE, token, cookieOptions(expiresAt));
+  (await cookies()).set(CHALLENGE_COOKIE, token, authCookieOptions(expiresAt));
 }
 
 export async function loginChallengeToken(): Promise<string | null> {

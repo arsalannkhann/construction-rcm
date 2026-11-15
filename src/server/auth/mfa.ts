@@ -135,14 +135,14 @@ export async function useSecondFactor(tx: DB, userId: string, input: string, now
 }
 
 /** Password and second step, for turning it off or replacing the recovery codes. */
-async function reauthenticate<T>(db: DB, userId: string, password: string, code: string, then: (tx: DB, used: UsedFactor) => Promise<T>): Promise<T> {
+async function reauthenticate<T>(db: DB, userId: string, password: string, code: string, now: Date, then: (tx: DB, used: UsedFactor) => Promise<T>): Promise<T> {
   if (!secondFactorKind(code)) throw new UserError(BAD_SHAPE);
   const user = await confirmPassword(db, userId, password);
   if (!user.mfaEnabledAt) throw new UserError('Two-step verification is not on for your account.');
-  const reservation = await reserveAttempt(db, 'mfa', mfaLimits(user.email));
+  const reservation = await reserveAttempt(db, 'mfa', mfaLimits(user.email), { now });
   if (!reservation) throw new UserError(TOO_MANY_CODES);
   const outcome = await inTransaction(db, async (tx) => {
-    const used = await useSecondFactor(tx, userId, code);
+    const used = await useSecondFactor(tx, userId, code, now);
     if (!used) return { ok: false as const };
     return { ok: true as const, value: await then(tx, used) };
   });
@@ -152,8 +152,8 @@ async function reauthenticate<T>(db: DB, userId: string, password: string, code:
 }
 
 /** Turn two-step verification off. Needs the password and a current code (or a recovery code). */
-export async function disableMfa(db: DB, userId: string, password: string, code: string): Promise<void> {
-  await reauthenticate(db, userId, password, code, async (tx) => {
+export async function disableMfa(db: DB, userId: string, password: string, code: string, opts: { now?: Date } = {}): Promise<void> {
+  await reauthenticate(db, userId, password, code, opts.now ?? new Date(), async (tx) => {
     await tx.update(users).set({ mfaSecret: null, mfaEnabledAt: null, mfaRecoveryCodes: null, mfaLastCounter: null }).where(eq(users.id, userId));
     await tx.delete(loginChallenges).where(eq(loginChallenges.userId, userId));
     await recordAccountEvent(tx, userId, { action: 'team.mfa_disabled', actor: 'self', summary: 'Turned off two-step verification' });
@@ -161,9 +161,9 @@ export async function disableMfa(db: DB, userId: string, password: string, code:
 }
 
 /** Replace all ten recovery codes. The old ones stop working. Returns the new ones, shown once. */
-export async function regenerateRecoveryCodes(db: DB, userId: string, password: string, code: string): Promise<string[]> {
+export async function regenerateRecoveryCodes(db: DB, userId: string, password: string, code: string, opts: { now?: Date } = {}): Promise<string[]> {
   const codes = generateRecoveryCodes();
-  await reauthenticate(db, userId, password, code, async (tx) => {
+  await reauthenticate(db, userId, password, code, opts.now ?? new Date(), async (tx) => {
     await tx.update(users).set({ mfaRecoveryCodes: codes.map(hashRecoveryCode) }).where(eq(users.id, userId));
     await recordAccountEvent(tx, userId, { action: 'team.mfa_recovery_codes_regenerated', actor: 'self', summary: 'Replaced their two-step verification recovery codes. The previous codes no longer work' });
   });
