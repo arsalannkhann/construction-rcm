@@ -89,7 +89,7 @@ export function tlsMode(config: PoolConfig, env: Env = process.env): TlsMode {
 export function missingDatabaseUrl(env: Env = process.env): DatabaseSetupError | null {
   if (env.DATABASE_URL || !env.VERCEL) return null;
   return new DatabaseSetupError(
-    'DATABASE_URL is not set. On Vercel, add it under Project Settings → Environment Variables (for Supabase, the session pooler connection string), together with DATABASE_CA_CERT, then redeploy. See docs/operations.md, "Vercel".',
+    'DATABASE_URL is not set. On Vercel, add it under Project Settings → Environment Variables (for Supabase, the session pooler connection string), together with DATABASE_CA_CERT, then redeploy. See docs/operations.md, "Deploy on Vercel".',
   );
 }
 
