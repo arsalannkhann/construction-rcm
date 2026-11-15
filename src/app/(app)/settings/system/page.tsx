@@ -57,6 +57,9 @@ export default async function SystemStatusPage() {
               },
         ]
       : []),
+    health.pdfReader.ok
+      ? { name: 'Document reading', tone: 'pass', status: 'Working', detail: 'A test PDF was opened and its text read on this server, with the same reader uploaded packages go through.' }
+      : { name: 'Document reading', tone: 'block', status: 'Not working', detail: 'This server could not open a test PDF, so uploaded packages are stored but not read. The cause is in the server log, in a line starting “[health]”.' },
     { name: 'Document storage', tone: health.storage === 'memory' ? 'warn' : 'pass', status: health.storage === 'database' ? 'In the database' : health.storage === 'disk' ? 'On disk' : 'In memory', detail: STORAGE_TEXT[health.storage] },
     health.runner.mode === 'request'
       ? {
