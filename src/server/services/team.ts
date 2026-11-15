@@ -202,7 +202,14 @@ export async function destroySession(db: DB, token: string | undefined | null): 
   if (token) await db.delete(sessions).where(eq(sessions.id, sha256Hex(token)));
 }
 
+/**
+ * The id a session is known by on screen. It is derived from the stored id, so
+ * the device list never hands the browser anything that is looked up directly.
+ */
+export const publicSessionId = (storedId: string) => sha256Hex(`session:${storedId}`).slice(0, 24);
+
 export type SessionSummary = {
+  /** `publicSessionId`, for signing this one out. */
   id: string;
   /** The session this list was asked for from. */
   current: boolean;
@@ -226,7 +233,7 @@ export async function listSessions(db: DB, userId: string, currentToken?: string
     .where(and(eq(sessions.userId, userId), gt(sessions.expiresAt, now)));
   return rows
     .map(({ session, orgName }) => ({
-      id: session.id,
+      id: publicSessionId(session.id),
       current: session.id === current,
       device: describeUserAgent(session.userAgent),
       ipAddress: session.ipAddress,
@@ -239,12 +246,15 @@ export async function listSessions(db: DB, userId: string, currentToken?: string
     .sort((a, b) => Number(b.current) - Number(a.current) || b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
 }
 
-/** Sign out one of your own other sessions. */
-export async function revokeSession(db: DB, userId: string, sessionId: string, currentToken?: string | null): Promise<void> {
-  if (currentToken && sha256Hex(currentToken) === sessionId) throw new UserError('That is the session you are using. Choose Sign out to end it.');
+/** Sign out one of your own other sessions, by the id the device list shows. */
+export async function revokeSession(db: DB, userId: string, publicId: string, currentToken?: string | null): Promise<void> {
+  if (currentToken && publicSessionId(sha256Hex(currentToken)) === publicId) throw new UserError('That is the session you are using. Choose Sign out to end it.');
   await inTransaction(db, async (tx) => {
-    // The session must be this person's own: an id from someone else's account matches nothing.
-    const [gone] = await tx.delete(sessions).where(and(eq(sessions.userId, userId), eq(sessions.id, sessionId))).returning({ userAgent: sessions.userAgent });
+    // Only this person's own sessions are searched: an id from someone else's account matches nothing.
+    const mine = await tx.select({ id: sessions.id }).from(sessions).where(eq(sessions.userId, userId));
+    const target = mine.find((s) => publicSessionId(s.id) === publicId);
+    if (!target) return;
+    const [gone] = await tx.delete(sessions).where(and(eq(sessions.userId, userId), eq(sessions.id, target.id))).returning({ userAgent: sessions.userAgent });
     if (!gone) return;
     await recordAccountEvent(tx, userId, { action: 'team.session_revoked', actor: 'self', summary: `Signed out one of their own sessions (${describeUserAgent(gone.userAgent)})` });
   });
@@ -351,8 +361,12 @@ export async function findInvitation(db: DB, token: string) {
   return { id: row.inv.id, orgId: row.inv.orgId, orgName: row.orgName, email: row.inv.email, role: row.inv.role as Role, hasAccount: !!existing };
 }
 
-/** Accept an invitation, creating the account if the invitee does not have one. */
-export async function acceptInvitation(db: DB, token: string, input: { name?: string; password: string }): Promise<{ userId: string; orgId: string }> {
+/**
+ * Accept an invitation, creating the account if the invitee does not have one.
+ * `mfaEnabled` says the existing account has two-step verification, so the
+ * caller must ask for the second step before starting a session.
+ */
+export async function acceptInvitation(db: DB, token: string, input: { name?: string; password: string }): Promise<{ userId: string; orgId: string; mfaEnabled: boolean }> {
   const invalid = 'This invitation is no longer valid. Ask for a new one.';
   const inv = await findInvitation(db, token);
   if (!inv) throw new UserError(invalid);
@@ -395,7 +409,7 @@ export async function acceptInvitation(db: DB, token: string, input: { name?: st
       entityId: user.id,
       summary: `${user.name} joined as ${ROLE_LABEL[inv.role]}`,
     });
-    return { userId: user.id, orgId: inv.orgId };
+    return { userId: user.id, orgId: inv.orgId, mfaEnabled: !!existing?.mfaEnabledAt };
   });
 }
 

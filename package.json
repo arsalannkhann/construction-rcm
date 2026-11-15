@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "seed:demo": "tsx scripts/seed-demo.ts",
+    "reset-password": "tsx scripts/reset-password.ts",
     "samples": "tsx scripts/generate-samples.ts",
     "postinstall": "node scripts/copy-pdf-worker.mjs",
     "test:pg": "vitest run --config vitest.pg.config.mts"
