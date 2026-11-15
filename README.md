@@ -16,6 +16,11 @@ Vercel and Supabase projects and the `construction-rcm.vercel.app` address keep
 the old name; everything a customer sees says Zephric. Authenticator entries
 made before the rename are labelled "Construction RCM" and keep working.
 
+Visitors who are not signed in see the public Zephric website at `/`
+(`public/landing/`), with a "design partner" inquiry form stored in the
+`inquiries` table; members go straight to the app. See
+[operations: the public website](docs/operations.md#the-public-website).
+
 **Contents:** [Quick start](#quick-start) ·
 [What to look at first](#what-to-look-at-first) ·
 [Architecture](#architecture) · [Configuration](#configuration) ·

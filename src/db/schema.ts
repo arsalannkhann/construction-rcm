@@ -712,3 +712,27 @@ export const inboundMessages = pgTable(
   },
   (t) => [uniqueIndex('inbound_messages_org_message').on(t.orgId, t.messageId), index('inbound_messages_org_created').on(t.orgId, t.createdAt)],
 );
+
+/**
+ * Messages sent through the "design partner" form on the public website. They
+ * belong to no organisation: they are for the people who run Zephric, and no
+ * page in the app shows them (read them in the database; see docs/operations.md).
+ */
+export const inquiries = pgTable(
+  'inquiries',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    email: text('email').notNull(),
+    company: text('company').notNull(),
+    country: text('country').notNull(),
+    role: text('role').notNull(),
+    challenge: text('challenge').notNull(),
+    /** Which version of the privacy notice the sender agreed to. */
+    consentVersion: text('consent_version').notNull(),
+    /** Keyed hash of the sender's network address, to limit repeated submissions without keeping the address. */
+    senderHash: text('sender_hash'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('inquiries_sender_created').on(t.senderHash, t.createdAt), index('inquiries_created').on(t.createdAt)],
+);

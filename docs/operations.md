@@ -365,6 +365,38 @@ real billing, one project first.
 10. **Retainage releases.** When retainage is to be paid out, an approver
     records the release on the contract before the application that bills it.
 
+## The public website
+
+Someone who is not signed in and opens `/` sees the Zephric website
+(`public/landing/`, plain HTML, CSS and browser JavaScript; fonts and images are
+served from the same site, nothing is loaded from elsewhere). A signed-in member
+who opens `/` goes on to the app. `next.config.ts` does this with a rewrite on
+the session cookie; the page carries its own Content-Security-Policy. Its
+"Sign in" link goes to `/login`.
+
+The page was built separately (a standalone project with its own small Node
+server); only its files were brought here. Edit them in `public/landing/`.
+
+### Website inquiries
+
+The "design partner" form posts to `/api/inquiries`, which stores each inquiry
+in the `inquiries` table. It belongs to no organisation and no page in the app
+shows it. To read new inquiries, open the Supabase dashboard → Table Editor →
+`inquiries`, or run:
+
+```sql
+select created_at, name, email, company, country, role, challenge
+from inquiries order by created_at desc limit 50;
+```
+
+Nothing notifies anyone when one arrives; look at least daily during the pilot.
+The form accepts six short fields and an explicit agreement to be contacted,
+16 KB at most, only from this site, at most 5 per address in ten minutes and
+100 in an hour from everyone. The sender's address is not stored, only a keyed
+hash of it (so `RCM_SECRET_KEY` must be set). What was sent is never logged.
+Delete inquiries you no longer need, and any the sender asks you to delete; the
+privacy notice on the page promises that.
+
 ## Backups
 
 Everything is in PostgreSQL, including the documents, so a database backup is
