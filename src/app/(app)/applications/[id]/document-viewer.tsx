@@ -1,10 +1,13 @@
 'use client';
 
-import { Download, FileWarning, Minus, Plus } from 'lucide-react';
+import { Download, FileWarning, Minus, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/data';
-import { Tooltip } from '@/components/ui/overlay';
+import { Dialog, Tooltip } from '@/components/ui/overlay';
+import { useAction } from '@/lib/use-action';
 import { cn } from '@/lib/utils';
+import { removeDocumentAction } from '../actions';
 import type { BBox, DocumentSegment } from '@/server/types';
 import { DOC_TYPE_LABEL } from '@/server/types';
 
@@ -50,9 +53,22 @@ const SEGMENT_SHORT: Record<string, string> = {
   other: 'Other',
 };
 
-export function DocumentViewer({ documents, target, onNavigate }: { documents: ViewerDocument[]; target: ViewerTarget | null; onNavigate: (t: Omit<ViewerTarget, 'nonce'>) => void }) {
+export function DocumentViewer({
+  documents,
+  target,
+  onNavigate,
+  canRemove = false,
+}: {
+  documents: ViewerDocument[];
+  target: ViewerTarget | null;
+  onNavigate: (t: Omit<ViewerTarget, 'nonce'>) => void;
+  /** The reviewer may take a file out of the package (an open application, more than one file). */
+  canRemove?: boolean;
+}) {
   const [activeId, setActiveId] = useState(target?.documentId ?? documents[0]?.id ?? null);
   const [zoom, setZoom] = useState(1);
+  const [removing, setRemoving] = useState(false);
+  const { pending, run } = useAction();
   useEffect(() => {
     if (target && documents.some((d) => d.id === target.documentId)) setActiveId(target.documentId);
   }, [target, documents]);
@@ -107,7 +123,29 @@ export function DocumentViewer({ documents, target, onNavigate }: { documents: V
             <Download className="size-3.5" />
           </a>
         </Tooltip>
+        {canRemove && documents.length > 1 ? (
+          <Tooltip content="Remove from this package">
+            <button className="focus-ring shrink-0 rounded p-1 text-ink-3 hover:bg-sunken hover:text-block" onClick={() => setRemoving(true)} aria-label="Remove from this package">
+              <Trash2 className="size-3.5" />
+            </button>
+          </Tooltip>
+        ) : null}
       </div>
+      <Dialog
+        open={removing}
+        onOpenChange={setRemoving}
+        size="sm"
+        title={`Remove “${active.filename}” from this package?`}
+        description="The package is read again without it. The original file stays stored, and the removal is recorded in the activity log."
+        footer={
+          <>
+            <Button onClick={() => setRemoving(false)}>Cancel</Button>
+            <Button variant="danger" loading={pending} onClick={() => run(() => removeDocumentAction(active.id), { success: 'Removed. The package is being read again.', onSuccess: () => setRemoving(false) })}>
+              Remove and read again
+            </Button>
+          </>
+        }
+      />
 
       {active.segments.length > 0 ? (
         <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line bg-surface px-3 py-1.5">
