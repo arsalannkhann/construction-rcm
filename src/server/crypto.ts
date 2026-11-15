@@ -1,8 +1,8 @@
 /**
- * Symmetric encryption for secrets at rest (integration tokens).
+ * Symmetric encryption for secrets at rest (integration tokens, authenticator keys).
  * AES-256-GCM with a key derived from RCM_SECRET_KEY.
  */
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dataDir, isInMemory, isProduction } from './config';
@@ -31,6 +31,15 @@ function key(): Buffer {
   }
   cachedKey = createHash('sha256').update(fs.readFileSync(file, 'utf8').trim()).digest();
   return cachedKey;
+}
+
+/**
+ * A key for one purpose (keyed hashes of recovery codes, remembered devices),
+ * derived from RCM_SECRET_KEY so no two uses share a key and someone holding
+ * only a copy of the database cannot recompute the hashes.
+ */
+export function purposeKey(purpose: string): Buffer {
+  return createHmac('sha256', key()).update(`rcm:${purpose}`).digest();
 }
 
 export function encryptJson(value: unknown): string {

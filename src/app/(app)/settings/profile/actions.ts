@@ -31,10 +31,10 @@ export async function changePasswordAction(input: { current: string; next: strin
 /** The key and its QR code. This response is the only place the key is ever shown. */
 export type MfaSetupStart = { formattedSecret: string; qrCode: string };
 
-export async function startMfaSetupAction(): Promise<ActionResult<MfaSetupStart>> {
+export async function startMfaSetupAction(password: string): Promise<ActionResult<MfaSetupStart>> {
   return run(async () => {
     const user = await requireUser();
-    const setup = await startMfaSetup(await getDb(), user.id);
+    const setup = await startMfaSetup(await getDb(), user.id, password);
     return { formattedSecret: setup.formattedSecret, qrCode: await qrSvgDataUri(setup.uri) };
   });
 }

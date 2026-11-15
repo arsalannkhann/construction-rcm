@@ -127,6 +127,12 @@ export const sessions = pgTable('sessions', {
 export const loginChallenges = pgTable('login_challenges', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  /**
+   * Set when the sign-in is accepting an invitation for an account with
+   * two-step verification: the membership is only created once the second
+   * step passes, never on the password alone.
+   */
+  invitationId: text('invitation_id').references(() => invitations.id, { onDelete: 'cascade' }),
   attempts: integer('attempts').notNull().default(0),
   expiresAt: ts('expires_at').notNull(),
   createdAt: createdAt(),
@@ -153,9 +159,9 @@ export const authAttempts = pgTable(
   'auth_attempts',
   {
     id: text('id').primaryKey(),
-    /** What is being throttled: a lower-cased email address, or `ip:<address>`. */
+    /** What is being throttled: a lower-cased email address, `ip:<address>`, `<email>|ip:<address>` or `<email>|reauth`. */
     subject: text('subject').notNull(),
-    kind: text('kind').notNull(), // password | mfa | reset
+    kind: text('kind').notNull(), // password | mfa | reset | signup
     succeeded: boolean('succeeded').notNull(),
     createdAt: createdAt(),
   },

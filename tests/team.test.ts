@@ -48,7 +48,7 @@ describe('invitations', () => {
     expect(await accountsFor(w, 'nia.newhire@example.test')).toEqual([]);
 
     const joined = await acceptInvitation(w.db, token, { name: 'Nia Newhire', password: 'a long enough password' });
-    expect(joined.orgId).toBe(w.orgId);
+    expect(joined).toMatchObject({ status: 'joined', orgId: w.orgId });
     expect(await accountsFor(w, 'nia.newhire@example.test')).toMatchObject([{ id: joined.userId, name: 'Nia Newhire' }]);
     expect((await listMembers(w.db, w.owner)).find((m) => m.userId === joined.userId)).toMatchObject({ role: 'accountant', status: 'active' });
 

@@ -6,7 +6,7 @@
  * mfa.ts.
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { sha256Hex } from '@/server/ids';
+import { purposeKey } from '@/server/crypto';
 
 export const TOTP_DIGITS = 6;
 export const TOTP_STEP_SECONDS = 30;
@@ -151,9 +151,13 @@ export function normaliseRecoveryCode(input: string): string {
   return input.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-/** Only this hash of a recovery code is stored. */
+/**
+ * Only this hash of a recovery code is stored. It is keyed with a key derived
+ * from RCM_SECRET_KEY: a code carries about 49 bits, few enough that a plain
+ * hash taken from a copy of the database could be reversed by brute force.
+ */
 export function hashRecoveryCode(code: string): string {
-  return sha256Hex(`recovery:${normaliseRecoveryCode(code)}`);
+  return createHmac('sha256', purposeKey('recovery-code')).update(normaliseRecoveryCode(code)).digest('hex');
 }
 
 /** Whether what was typed is shaped like an authenticator code or like a recovery code. */

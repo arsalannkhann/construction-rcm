@@ -20,7 +20,7 @@ import { newId } from '@/server/ids';
 
 const MINUTE = 60_000;
 
-export type AttemptKind = 'password' | 'mfa' | 'reset';
+export type AttemptKind = 'password' | 'mfa' | 'reset' | 'signup';
 
 type Limit = {
   subject: string;
@@ -33,6 +33,12 @@ type Limit = {
    * gets it right starts from zero. `all`: every attempt, whatever its outcome.
    */
   count: 'failures' | 'failures_since_success' | 'all';
+  /**
+   * A browser that has signed in to the account before (src/server/auth/device.ts)
+   * is not held back by this limit, though its attempts still count towards it.
+   * Used for the limits a stranger could fill up on purpose to keep someone out.
+   */
+  soft?: boolean;
 };
 
 export const PASSWORD_ATTEMPTS_PER_EMAIL = 8;
@@ -42,27 +48,56 @@ export const MFA_ATTEMPTS_PER_USER = 10;
 export const MFA_WINDOW_MS = 15 * MINUTE;
 export const RESET_REQUESTS_PER_EMAIL = 3;
 export const RESET_WINDOW_MS = 60 * MINUTE;
+export const SIGNUPS_PER_IP = 10;
+export const SIGNUP_WINDOW_MS = 60 * MINUTE;
 const KEEP_MS = 24 * 60 * MINUTE;
 
 /** How an IP address is written as a throttle subject. */
 export const ipSubject = (ip: string) => `ip:${ip}`;
 
 /**
- * Password guesses. An email address locks after 8 wrong passwords in 15
- * minutes; a success clears its count. An IP address locks after 30 wrong
- * passwords in 15 minutes across all addresses, and a success does not clear
- * that, or one working account would let its owner guess at others without limit.
+ * Password guesses, in 15-minute windows:
+ *
+ *  - An email address from one IP address: 8 wrong passwords, then that pair
+ *    is locked. A success clears the count.
+ *  - An email address from anywhere: 8 wrong passwords, then new browsers are
+ *    refused for that address. A browser that has signed in to the account
+ *    before can still try, so a stranger cannot keep someone out of their own
+ *    account by guessing at it. A success clears the count.
+ *  - An IP address across all email addresses: 30 wrong passwords. A success
+ *    does not clear that, or one working account would let its owner guess at
+ *    others without limit. A remembered browser is not held back by it, so
+ *    wrong passwords sent in an office's name cannot lock that office out.
+ *
+ * However many IP addresses a guesser uses, an address takes at most 8 wrong
+ * passwords per window from browsers that never signed in to it.
  */
 export function passwordLimits(email: string | null, ipAddress?: string | null): Limit[] {
   const limits: Limit[] = [];
-  if (email) limits.push({ subject: email, max: PASSWORD_ATTEMPTS_PER_EMAIL, windowMs: PASSWORD_WINDOW_MS, count: 'failures_since_success' });
-  if (ipAddress) limits.push({ subject: ipSubject(ipAddress), max: PASSWORD_ATTEMPTS_PER_IP, windowMs: PASSWORD_WINDOW_MS, count: 'failures' });
+  if (email) limits.push({ subject: email, max: PASSWORD_ATTEMPTS_PER_EMAIL, windowMs: PASSWORD_WINDOW_MS, count: 'failures_since_success', soft: true });
+  if (email && ipAddress) limits.push({ subject: `${email}|${ipSubject(ipAddress)}`, max: PASSWORD_ATTEMPTS_PER_EMAIL, windowMs: PASSWORD_WINDOW_MS, count: 'failures_since_success' });
+  if (ipAddress) limits.push({ subject: ipSubject(ipAddress), max: PASSWORD_ATTEMPTS_PER_IP, windowMs: PASSWORD_WINDOW_MS, count: 'failures', soft: true });
   return limits;
+}
+
+/**
+ * A signed-in person confirming their password before something sensitive:
+ * 8 wrong passwords in 15 minutes. Kept apart from the sign-in count, so
+ * strangers guessing at the address at the sign-in page do not stop the
+ * account's owner from changing their own password.
+ */
+export function reauthLimits(email: string): Limit[] {
+  return [{ subject: `${email}|reauth`, max: PASSWORD_ATTEMPTS_PER_EMAIL, windowMs: PASSWORD_WINDOW_MS, count: 'failures_since_success' }];
 }
 
 /** Second-step codes: 10 wrong codes per account in 15 minutes, however many sign-ins they are spread over. */
 export function mfaLimits(email: string): Limit[] {
   return [{ subject: email, max: MFA_ATTEMPTS_PER_USER, windowMs: MFA_WINDOW_MS, count: 'failures' }];
+}
+
+/** New accounts: 10 per IP address per hour, so sign-up cannot be used to test many addresses for an account. */
+export function signupLimits(ipAddress: string | null | undefined): Limit[] {
+  return ipAddress ? [{ subject: ipSubject(ipAddress), max: SIGNUPS_PER_IP, windowMs: SIGNUP_WINDOW_MS, count: 'all' }] : [];
 }
 
 /** Reset requests: 3 per address per hour, whether or not they led to a link. */
@@ -101,9 +136,10 @@ async function used(tx: DB, kind: AttemptKind, limit: Limit, now: Date): Promise
  * Count an attempt against every limit that applies to it. Returns null when
  * one of them is already used up: the attempt must then be refused without
  * being evaluated, and it is not recorded, so someone hammering a locked
- * address cannot keep it locked for longer than the window.
+ * address cannot keep it locked for longer than the window. With
+ * `rememberedDevice`, soft limits are counted but do not refuse.
  */
-export async function reserveAttempt(db: DB, kind: AttemptKind, limits: Limit[], opts: { now?: Date } = {}): Promise<Reservation | null> {
+export async function reserveAttempt(db: DB, kind: AttemptKind, limits: Limit[], opts: { now?: Date; rememberedDevice?: boolean } = {}): Promise<Reservation | null> {
   if (limits.length === 0) return { ids: [] };
   const now = opts.now ?? new Date();
   // Locks are always taken in the same order, so two attempts that share subjects cannot deadlock.
@@ -113,6 +149,7 @@ export async function reserveAttempt(db: DB, kind: AttemptKind, limits: Limit[],
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`auth:${kind}:${limit.subject}`}))`);
     }
     for (const limit of ordered) {
+      if (limit.soft && opts.rememberedDevice) continue;
       if ((await used(tx, kind, limit, now)) >= limit.max) return null;
     }
     const rows = ordered.map((limit) => ({ id: newId('att'), subject: limit.subject, kind, succeeded: false, createdAt: now }));
@@ -136,8 +173,9 @@ export async function recordSuccess(db: DB, kind: AttemptKind, subject: string, 
 }
 
 /** Whether a limit is used up right now, without counting an attempt. */
-export async function isLimited(db: DB, kind: AttemptKind, limits: Limit[], now: Date = new Date()): Promise<boolean> {
+export async function isLimited(db: DB, kind: AttemptKind, limits: Limit[], now: Date = new Date(), opts: { rememberedDevice?: boolean } = {}): Promise<boolean> {
   for (const limit of limits) {
+    if (limit.soft && opts.rememberedDevice) continue;
     if ((await used(db, kind, limit, now)) >= limit.max) return true;
   }
   return false;

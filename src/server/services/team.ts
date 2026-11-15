@@ -11,7 +11,8 @@ import { confirmPassword, normaliseEmail, recordAccountEvent, validEmail } from 
 import { DUMMY_PASSWORD_HASH, hashPassword, passwordProblem, verifyPassword } from '@/server/auth/password';
 import { issueResetToken, resetLink, RESET_LINK_MINUTES } from '@/server/auth/password-reset';
 import { assertCan, can, ROLE_LABEL, UserError, type Ctx } from '@/server/auth/permissions';
-import { passwordLimits, reserveAttempt, settleAttempt } from '@/server/auth/throttle';
+import { isRememberedDevice, deviceToken } from '@/server/auth/device';
+import { passwordLimits, reserveAttempt, settleAttempt, signupLimits } from '@/server/auth/throttle';
 import { describeUserAgent } from '@/server/auth/user-agent';
 import { newId, randomToken, sha256Hex } from '@/server/ids';
 import type { OrgSettings, Role } from '@/server/types';
@@ -53,7 +54,14 @@ export async function createOrganization(db: DB, userId: string, name: string, o
   return id;
 }
 
-export async function signUp(db: DB, input: { name: string; email: string; password: string; orgName: string }): Promise<{ userId: string; orgId: string }> {
+export const TOO_MANY_SIGN_UPS = 'Too many new accounts from this network. Try again in an hour.';
+
+/**
+ * Create an account and its organisation. Sign-ups are limited per IP address
+ * (`signupLimits`), because the answer for an address that already has an
+ * account would otherwise let anyone test addresses without limit.
+ */
+export async function signUp(db: DB, input: { name: string; email: string; password: string; orgName: string }, meta: { ipAddress?: string | null } = {}): Promise<{ userId: string; orgId: string }> {
   const email = normaliseEmail(input.email);
   const name = input.name.trim();
   if (name.length < 2) throw new UserError('Enter your name.');
@@ -61,6 +69,7 @@ export async function signUp(db: DB, input: { name: string; email: string; passw
   const problem = passwordProblem(input.password, { email, name });
   if (problem) throw new UserError(problem);
   if (input.orgName.trim().length < 2) throw new UserError('Enter your company name.');
+  if (!(await reserveAttempt(db, 'signup', signupLimits(meta.ipAddress)))) throw new UserError(TOO_MANY_SIGN_UPS);
   const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email));
   if (existing) throw new UserError('An account with that email already exists. Sign in instead.');
   const userId = newId('usr');
@@ -81,24 +90,31 @@ export const TOO_MANY_SIGN_INS = 'Too many sign-in attempts. Try again in a few 
  * Check an email address and password. Returns the account on success and
  * null on any failure, without saying which part was wrong. It does not start
  * a session: an account with two-step verification still owes its second step
- * (see `beginSession` in src/server/auth/mfa.ts).
+ * (see src/server/auth/sign-in.ts).
  *
- * Attempts are counted in the database (src/server/auth/throttle.ts): an
- * address is refused after 8 wrong passwords in 15 minutes and an IP address
- * after 30. A refused attempt gets the same answer whether or not the address
- * has an account, and the password is not looked at.
+ * Attempts are counted in the database (src/server/auth/throttle.ts,
+ * `passwordLimits`). A refused attempt gets the same answer whether or not the
+ * address has an account, and the password is not looked at. `deviceTokens`
+ * are the remembered-device tokens the browser sent (src/server/auth/device.ts);
+ * on success the account's current token is returned for the browser to keep.
  */
-export async function authenticate(db: DB, emailInput: string, password: string, meta: { ipAddress?: string | null } = {}): Promise<{ id: string; mfaEnabled: boolean } | null> {
+export async function authenticate(
+  db: DB,
+  emailInput: string,
+  password: string,
+  meta: { ipAddress?: string | null; deviceTokens?: string[] } = {},
+): Promise<{ id: string; mfaEnabled: boolean; deviceToken: string | null } | null> {
   const email = normaliseEmail(emailInput);
+  const [user] = validEmail(email) ? await db.select().from(users).where(eq(users.email, email)) : [];
+  const rememberedDevice = !!user && isRememberedDevice(user, meta.deviceTokens ?? []);
   // Something that is not an email address cannot be an account; it still counts against the IP address.
-  const reservation = await reserveAttempt(db, 'password', passwordLimits(validEmail(email) ? email : null, meta.ipAddress));
+  const reservation = await reserveAttempt(db, 'password', passwordLimits(validEmail(email) ? email : null, meta.ipAddress), { rememberedDevice });
   if (!reservation) throw new UserError(TOO_MANY_SIGN_INS);
-  const [user] = await db.select().from(users).where(eq(users.email, email));
   // Always run the hash so the response time does not reveal whether the account exists.
   const ok = await verifyPassword(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
   if (!user || !ok) return null;
   await settleAttempt(db, reservation, true);
-  return { id: user.id, mfaEnabled: !!user.mfaEnabledAt };
+  return { id: user.id, mfaEnabled: !!user.mfaEnabledAt, deviceToken: deviceToken(user) };
 }
 
 /** What is recorded about the device a session is started from. Best effort: both come from request headers. */
@@ -361,44 +377,93 @@ export async function findInvitation(db: DB, token: string) {
   return { id: row.inv.id, orgId: row.inv.orgId, orgName: row.orgName, email: row.inv.email, role: row.inv.role as Role, hasAccount: !!existing };
 }
 
+const INVALID_INVITATION = 'This invitation is no longer valid. Ask for a new one.';
+
+export type AcceptOutcome =
+  /** The person is now a member and may be signed in to the organisation. */
+  | { status: 'joined'; userId: string; orgId: string }
+  /**
+   * The account has two-step verification. Nothing has been joined yet: the
+   * caller starts a login challenge carrying `invitationId`, and the
+   * membership is created when the second step passes
+   * (`acceptInvitationAfterSecondStep`).
+   */
+  | { status: 'second_factor'; userId: string; invitationId: string };
+
 /**
  * Accept an invitation, creating the account if the invitee does not have one.
- * `mfaEnabled` says the existing account has two-step verification, so the
- * caller must ask for the second step before starting a session.
+ *
+ * For an existing account the password is checked. If the account has
+ * two-step verification the invitation is not used up here: joining an
+ * organisation with a password alone would let someone who knows the password
+ * put the account in an organisation they control, then recover it from there.
  */
-export async function acceptInvitation(db: DB, token: string, input: { name?: string; password: string }): Promise<{ userId: string; orgId: string; mfaEnabled: boolean }> {
-  const invalid = 'This invitation is no longer valid. Ask for a new one.';
+export async function acceptInvitation(db: DB, token: string, input: { name?: string; password: string }): Promise<AcceptOutcome> {
   const inv = await findInvitation(db, token);
-  if (!inv) throw new UserError(invalid);
+  if (!inv) throw new UserError(INVALID_INVITATION);
   const [existing] = await db.select().from(users).where(eq(users.email, inv.email));
 
   // Passwords are checked and hashed before the organisation's lock is taken: both are slow on purpose.
-  let created: { id: string; name: string; passwordHash: string } | null = null;
   if (existing) {
     // Holding the link is not enough to join as someone else, and guesses here count like guesses at sign-in.
     const reservation = await reserveAttempt(db, 'password', passwordLimits(inv.email));
     if (!reservation) throw new UserError('Too many attempts. Try again in a few minutes.');
     if (!(await verifyPassword(input.password, existing.passwordHash))) throw new UserError('That password is not correct for this account.');
     await settleAttempt(db, reservation, true);
-  } else {
-    const name = input.name?.trim() ?? '';
-    if (name.length < 2) throw new UserError('Enter your name.');
-    const problem = passwordProblem(input.password, { email: inv.email, name });
-    if (problem) throw new UserError(problem);
-    created = { id: newId('usr'), name, passwordHash: await hashPassword(input.password) };
+    if (existing.mfaEnabledAt) return { status: 'second_factor', userId: existing.id, invitationId: inv.id };
+    if (!(await joinWithInvitation(db, inv, { id: existing.id, name: existing.name, email: existing.email }))) throw new UserError(INVALID_INVITATION);
+    return { status: 'joined', userId: existing.id, orgId: inv.orgId };
   }
 
-  // The account, the membership, the used-up invitation and the audit event are written together.
+  const name = input.name?.trim() ?? '';
+  if (name.length < 2) throw new UserError('Enter your name.');
+  const problem = passwordProblem(input.password, { email: inv.email, name });
+  if (problem) throw new UserError(problem);
+  const created = { id: newId('usr'), name, email: inv.email, passwordHash: await hashPassword(input.password) };
+  if (!(await joinWithInvitation(db, inv, created, created.passwordHash))) throw new UserError(INVALID_INVITATION);
+  return { status: 'joined', userId: created.id, orgId: inv.orgId };
+}
+
+/**
+ * Finish accepting an invitation once the second step has passed. Returns the
+ * organisation joined, or null when the invitation was accepted, revoked or
+ * expired in the meantime, or is not for this account. Runs inside the caller's
+ * transaction when there is one.
+ */
+export async function acceptInvitationAfterSecondStep(db: DB, invitationId: string, userId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ inv: invitations, orgName: organizations.name })
+    .from(invitations)
+    .innerJoin(organizations, eq(organizations.id, invitations.orgId))
+    .where(eq(invitations.id, invitationId));
+  const [user] = await db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.id, userId));
+  if (!row || !user || row.inv.email !== user.email) return null;
+  const inv = { id: row.inv.id, orgId: row.inv.orgId, orgName: row.orgName, role: row.inv.role as Role };
+  return (await joinWithInvitation(db, inv, user)) ? inv.orgId : null;
+}
+
+
+/**
+ * Use up an invitation and make the person a member. The account (when
+ * `newPasswordHash` is given, it is created here), the membership, the
+ * used-up invitation and the audit event are written together. False when the
+ * invitation can no longer be used: only one request can accept it.
+ */
+async function joinWithInvitation(
+  db: DB,
+  inv: { id: string; orgId: string; orgName: string; role: Role },
+  user: { id: string; name: string; email: string },
+  newPasswordHash?: string,
+): Promise<boolean> {
   return withOrgLock(db, inv.orgId, async (tx) => {
-    // Claim the invitation: only one request can accept it.
+    const now = new Date();
     const [claimed] = await tx
       .update(invitations)
-      .set({ acceptedAt: new Date() })
-      .where(and(eq(invitations.id, inv.id), isNull(invitations.acceptedAt), isNull(invitations.revokedAt), gt(invitations.expiresAt, new Date())))
+      .set({ acceptedAt: now })
+      .where(and(eq(invitations.id, inv.id), isNull(invitations.acceptedAt), isNull(invitations.revokedAt), gt(invitations.expiresAt, now)))
       .returning({ id: invitations.id });
-    if (!claimed) throw new UserError(invalid);
-    if (created) await tx.insert(users).values({ id: created.id, email: inv.email, name: created.name, passwordHash: created.passwordHash });
-    const user = created ? { id: created.id, name: created.name, email: inv.email } : { id: existing!.id, name: existing!.name, email: existing!.email };
+    if (!claimed) return false;
+    if (newPasswordHash) await tx.insert(users).values({ id: user.id, email: user.email, name: user.name, passwordHash: newPasswordHash });
     const [already] = await tx.select({ id: memberships.id }).from(memberships).where(and(eq(memberships.orgId, inv.orgId), eq(memberships.userId, user.id)));
     if (!already) await tx.insert(memberships).values({ id: newId('mem'), orgId: inv.orgId, userId: user.id, role: inv.role });
     await recordAudit(tx, {
@@ -409,7 +474,7 @@ export async function acceptInvitation(db: DB, token: string, input: { name?: st
       entityId: user.id,
       summary: `${user.name} joined as ${ROLE_LABEL[inv.role]}`,
     });
-    return { userId: user.id, orgId: inv.orgId, mfaEnabled: !!existing?.mfaEnabledAt };
+    return true;
   });
 }
 
@@ -475,6 +540,21 @@ async function recoverableMember(db: DB, ctx: Ctx, userId: string, what: string)
   if (!m) throw new UserError('Member not found.');
   if (m.status !== 'active') throw new UserError(`${m.name} is deactivated in this organisation. Reactivate them first.`);
   if (m.role === 'owner' && actor.role !== 'owner') throw new UserError(`Only an owner can ${what} for another owner.`);
+  // Recovering an account hands over all of it, including its access to every other organisation it
+  // belongs to. Anyone can become an owner by signing up, so an owner here must not be able to do that.
+  // Demo workspaces hold sample data only and do not count. The other organisation is not named.
+  const [elsewhere] = await db
+    .select({ id: memberships.id })
+    .from(memberships)
+    .innerJoin(organizations, eq(organizations.id, memberships.orgId))
+    .where(and(eq(memberships.userId, userId), ne(memberships.orgId, ctx.orgId), eq(organizations.isDemo, false)))
+    .limit(1);
+  if (elsewhere) {
+    throw new UserError(
+      `${m.name} also belongs to another organisation, so an owner or admin here cannot ${what} for them: it would give you their access there too. ` +
+        'They can set a new password with “Forgot password?” on the sign-in page. For anything else, the person who runs this installation can help (docs/authentication.md, “Operator recovery”).',
+    );
+  }
   return { name: m.name, email: m.email };
 }
 

@@ -22,6 +22,13 @@
       "when": 1794742052664,
       "tag": "0002_deny_data_api",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794744261212,
+      "tag": "0003_invitation_second_step",
+      "breakpoints": true
     }
   ]
 }

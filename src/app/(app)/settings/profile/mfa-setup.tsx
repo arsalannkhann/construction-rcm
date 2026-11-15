@@ -21,6 +21,7 @@ export function MfaSetupFlow({ onStepChange, onDone, doneLabel }: { onStepChange
   const [step, setStepState] = useState<SetupStep>('intro');
   const [setup, setSetup] = useState<MfaSetupStart | null>(null);
   const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
   const [codes, setCodes] = useState<string[]>([]);
   const [saved, setSavedState] = useState(false);
   const { pending, run } = useAction();
@@ -33,15 +34,18 @@ export function MfaSetupFlow({ onStepChange, onDone, doneLabel }: { onStepChange
     setSavedState(next);
     onStepChange?.(step, next);
   };
-  const begin = () =>
-    run(() => startMfaSetupAction(), {
+  const begin = () => {
+    if (!password || pending) return;
+    run(() => startMfaSetupAction(password), {
       refresh: false,
       onSuccess: (data) => {
         setSetup(data);
         setCode('');
+        setPassword('');
         setStep('scan');
       },
     });
+  };
   const digits = code.replace(/\s/g, '');
   const confirm = () => {
     if (!/^\d{6}$/.test(digits) || pending) return;
@@ -56,12 +60,21 @@ export function MfaSetupFlow({ onStepChange, onDone, doneLabel }: { onStepChange
 
   if (step === 'intro') {
     return (
-      <div className="space-y-3 text-[13px] text-ink-2">
+      <form
+        className="space-y-3 text-[13px] text-ink-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          begin();
+        }}
+      >
         <p>You will need an authenticator app on your phone, such as Google Authenticator, Microsoft Authenticator, 1Password or Authy. After your password, signing in will ask for the 6-digit code it shows.</p>
-        <Button variant="primary" loading={pending} onClick={begin}>
+        <Field label="Current password" hint="To confirm it is you before your phone is linked to this account.">
+          <Input type="password" name="current-password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="h-9" />
+        </Field>
+        <Button type="submit" variant="primary" loading={pending} disabled={!password}>
           Set up two-step verification
         </Button>
-      </div>
+      </form>
     );
   }
 

@@ -4,7 +4,7 @@
  *
  * The key is stored encrypted (src/server/crypto.ts) and only counts once
  * `mfaEnabledAt` is set, which happens when the person proves their app shows
- * the right codes. Recovery codes are stored as sha256 hashes and each works
+ * the right codes. Recovery codes are stored as keyed hashes and each works
  * once. `mfaLastCounter` is the last 30-second step accepted, so a code cannot
  * be used twice.
  */
@@ -45,11 +45,16 @@ const readSecret = (stored: string) => decryptJson<string>(stored);
  * Start setting up: a new key for the authenticator app. It is stored (encrypted)
  * but does nothing until `confirmMfaSetup` succeeds. Starting again replaces it.
  * The key is returned this once, to show to its owner.
+ *
+ * Needs the current password: turning two-step verification on signs out every
+ * other session and is not undone by a password reset, so someone holding a
+ * stolen session must not be able to lock the owner out with their own phone.
  */
-export async function startMfaSetup(db: DB, userId: string): Promise<{ secret: string; formattedSecret: string; uri: string }> {
+export async function startMfaSetup(db: DB, userId: string, password: string): Promise<{ secret: string; formattedSecret: string; uri: string }> {
   const [user] = await db.select({ email: users.email, enabledAt: users.mfaEnabledAt }).from(users).where(eq(users.id, userId));
   if (!user) throw new UserError('Your session has expired. Sign in again.');
   if (user.enabledAt) throw new UserError('Two-step verification is already on for your account.');
+  await confirmPassword(db, userId, password);
   const secret = generateTotpSecret();
   await db
     .update(users)

@@ -8,9 +8,11 @@ import { completePasswordReset, requestPasswordReset, type ResetRequestOutcome }
 import { UserError } from '@/server/auth/permissions';
 import {
   clearLoginChallengeCookie,
+  deviceTokens,
   endSession,
   getSession,
   loginChallengeToken,
+  rememberThisDevice,
   requestMeta,
   sessionToken,
   setLoginChallengeCookie,
@@ -26,7 +28,7 @@ export type SignInNext = 'app' | 'verify';
 export async function loginAction(input: { email: string; password: string }): Promise<ActionResult<SignInNext>> {
   return run(async () => {
     const meta = await requestMeta();
-    const result = await signIn(await getDb(), input.email, input.password, meta);
+    const result = await signIn(await getDb(), input.email, input.password, { ...meta, deviceTokens: await deviceTokens() });
     if (!result) throw new UserError('That email and password do not match an account.');
     if (result.step === 'second_factor') {
       await setLoginChallengeCookie(result.challenge.token, result.challenge.expiresAt);
@@ -34,12 +36,13 @@ export async function loginAction(input: { email: string; password: string }): P
     }
     await clearLoginChallengeCookie();
     await setSessionCookie(result.session.token, result.session.expiresAt);
+    await rememberThisDevice(result.deviceToken);
     return 'app';
   });
 }
 
 export type VerifyOutcome =
-  | { status: 'signed_in'; recoveryCodesLeft: number | null }
+  | { status: 'signed_in'; recoveryCodesLeft: number | null; invitationNoLongerValid: boolean }
   | { status: 'wrong_code'; attemptsLeft: number }
   | { status: 'restart'; message: string };
 
@@ -51,7 +54,8 @@ export async function verifyLoginAction(code: string): Promise<ActionResult<Veri
       case 'signed_in':
         await clearLoginChallengeCookie();
         await setSessionCookie(result.session.token, result.session.expiresAt);
-        return { status: 'signed_in', recoveryCodesLeft: result.recoveryCodesLeft };
+        await rememberThisDevice(result.deviceToken);
+        return { status: 'signed_in', recoveryCodesLeft: result.recoveryCodesLeft, invitationNoLongerValid: result.invitation === 'no_longer_valid' };
       case 'wrong_code':
         return { status: 'wrong_code', attemptsLeft: result.attemptsLeft };
       case 'locked':
@@ -88,7 +92,7 @@ export async function completeResetAction(token: string, password: string): Prom
 
 export async function signupAction(input: { name: string; email: string; password: string; orgName: string }): Promise<ActionResult> {
   return run(async () => {
-    const { userId, orgId } = await signUp(await getDb(), input);
+    const { userId, orgId } = await signUp(await getDb(), input, await requestMeta());
     await startSession(userId, orgId);
     return undefined;
   });
@@ -97,14 +101,14 @@ export async function signupAction(input: { name: string; email: string; passwor
 export async function acceptInviteAction(token: string, input: { name?: string; password: string }): Promise<ActionResult<SignInNext>> {
   return run(async () => {
     const db = await getDb();
-    const { userId, orgId, mfaEnabled } = await acceptInvitation(db, token, input);
-    if (mfaEnabled) {
-      // An existing account with two-step verification still owes its second step.
-      const challenge = await createLoginChallenge(db, userId);
+    const outcome = await acceptInvitation(db, token, input);
+    if (outcome.status === 'second_factor') {
+      // An existing account with two-step verification still owes its second step; it joins when that passes.
+      const challenge = await createLoginChallenge(db, outcome.userId, { invitationId: outcome.invitationId });
       await setLoginChallengeCookie(challenge.token, challenge.expiresAt);
       return 'verify';
     }
-    await startSession(userId, orgId);
+    await startSession(outcome.userId, outcome.orgId);
     return 'app';
   });
 }

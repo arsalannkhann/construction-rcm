@@ -10,21 +10,21 @@ import { recordAudit, type AuditActor } from '@/server/audit';
 import type { Role } from '@/server/types';
 import { verifyPassword } from './password';
 import { UserError, type Ctx } from './permissions';
-import { passwordLimits, reserveAttempt, settleAttempt } from './throttle';
+import { reauthLimits, reserveAttempt, settleAttempt } from './throttle';
 
 export const normaliseEmail = (email: string) => email.trim().toLowerCase();
 export const validEmail = (email: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) && email.length <= 254;
 
 /**
  * Ask a signed-in person for their password again before something sensitive
- * (changing it, turning two-step verification off). Wrong answers count
- * against the same limit as wrong passwords at sign-in, so a session left open
- * on a shared computer cannot be used to guess the password without limit.
+ * (changing it, turning two-step verification on or off). Wrong answers are
+ * limited (`reauthLimits`), so a session left open on a shared computer cannot
+ * be used to guess the password without limit.
  */
 export async function confirmPassword(db: DB, userId: string, password: string): Promise<typeof users.$inferSelect> {
   const [user] = await db.select().from(users).where(eq(users.id, userId));
   if (!user) throw new UserError('Your current password is not correct.');
-  const reservation = await reserveAttempt(db, 'password', passwordLimits(user.email));
+  const reservation = await reserveAttempt(db, 'password', reauthLimits(user.email));
   if (!reservation) throw new UserError('Too many wrong passwords. Try again in a few minutes.');
   if (!(await verifyPassword(password, user.passwordHash))) throw new UserError('Your current password is not correct.');
   await settleAttempt(db, reservation, true);

@@ -37,6 +37,7 @@ import { newId, sha256Hex } from '@/server/ids';
 import {
   acceptInvitation,
   authenticate,
+  findInvitation,
   changePassword,
   createSession,
   destroySession,
@@ -46,6 +47,7 @@ import {
   listSessions,
   resetMemberMfa,
   resolveSession,
+  revokeInvitation,
   revokeOtherSessions,
   revokeSession,
   SESSION_IDLE_DAYS,
@@ -343,14 +345,15 @@ describe('completing a password reset', () => {
   it('is on the record of every organisation the person belongs to, without the link', async () => {
     const other = await createWorld();
     const fay = await addMember(w.db, w.orgId, w.owner.orgName, 'viewer', 'Fay Both');
-    await w.db.insert(memberships).values({ id: newId('mem'), orgId: other.orgId, userId: fay.userId, role: 'accountant' });
+    // Issued while Fay belongs only to this organisation; she joins another before using it.
     const { link } = await issueMemberPasswordReset(w.db, w.owner, fay.userId);
+    await w.db.insert(memberships).values({ id: newId('mem'), orgId: other.orgId, userId: fay.userId, role: 'accountant' });
+    // Now that she belongs to both, neither organisation's admins can issue another (tests/auth-hardening.test.ts).
+    await expect(issueMemberPasswordReset(w.db, w.owner, fay.userId)).rejects.toThrow(/also belongs to another organisation/);
     await completePasswordReset(w.db, tokenOf(link), 'fay has a new one');
 
     const issued = (await eventsFor(w.db, w.orgId, 'team.password_reset_issued')).filter((e) => e.entityId === fay.userId);
     expect(issued.map((e) => [e.actorName, e.summary])).toEqual([['Olivia Owner', 'Created a one-time password reset link for Fay Both']]);
-    const elsewhere = (await eventsFor(w.db, other.orgId, 'team.password_reset_issued')).filter((e) => e.entityId === fay.userId);
-    expect(elsewhere.map((e) => e.summary)).toEqual([`Created a one-time password reset link for Fay Both, acting as Owner of ${w.owner.orgName}`]);
     for (const orgId of [w.orgId, other.orgId]) {
       const done = (await eventsFor(w.db, orgId, 'team.password_reset_completed')).filter((e) => e.entityId === fay.userId);
       expect(done).toHaveLength(1);
@@ -419,7 +422,7 @@ describe('turning on two-step verification', () => {
   it('stores the key encrypted and does nothing until a code confirms it', async () => {
     const here = await createSession(w.db, w.accountant.userId, w.orgId);
     const elsewhere = await createSession(w.db, w.accountant.userId, w.orgId);
-    const { secret, uri } = await startMfaSetup(w.db, w.accountant.userId);
+    const { secret, uri } = await startMfaSetup(w.db, w.accountant.userId, PASSWORD);
     expect(uri).toContain(secret);
     const stored = await userRow(w.db, w.accountant.userId);
     expect(stored.mfaSecret).toBeTruthy();
@@ -446,15 +449,15 @@ describe('turning on two-step verification', () => {
     expect(await sessionRows(w.db, w.accountant.userId)).toHaveLength(1);
     expect(await getMfaStatus(w.db, w.accountant.userId)).toMatchObject({ enabled: true, recoveryCodesLeft: 10 });
 
-    await expect(startMfaSetup(w.db, w.accountant.userId)).rejects.toThrow(/already on/);
+    await expect(startMfaSetup(w.db, w.accountant.userId, PASSWORD)).rejects.toThrow(/already on/);
     const [event] = await eventsFor(w.db, w.orgId, 'team.mfa_enabled');
     // `elsewhere` and the session the password-only sign-in above created.
     expect(event).toMatchObject({ actorName: 'Ana Accountant', summary: 'Turned on two-step verification. Their other sessions (2) were signed out' });
   });
 
   it('refuses a key that was replaced by a newer setup', async () => {
-    const { secret: first } = await startMfaSetup(w.db, w.viewer.userId);
-    await startMfaSetup(w.db, w.viewer.userId);
+    const { secret: first } = await startMfaSetup(w.db, w.viewer.userId, PASSWORD);
+    await startMfaSetup(w.db, w.viewer.userId, PASSWORD);
     await expect(confirmMfaSetup(w.db, w.viewer.userId, totpCode(first, new Date()))).rejects.toThrow(/not right/);
     expect((await getMfaStatus(w.db, w.viewer.userId)).enabled).toBe(false);
   });
@@ -576,11 +579,42 @@ describe('signing in with two-step verification', () => {
     expect((await completeSecondStep(x.db, r2.challenge.token, totpCode(key, later), { now: later })).status).toBe('signed_in');
   });
 
-  it('asks an invited person with two-step verification for their code before they get a session', async () => {
+  it('joins an invited person with two-step verification only once their code is right', async () => {
     const x = await createWorld();
     const { token } = await inviteMember(x.db, x.owner, { email: w.controller.userEmail, role: 'viewer' });
-    const joined = await acceptInvitation(x.db, token, { password: PASSWORD });
-    expect(joined).toMatchObject({ userId: w.controller.userId, orgId: x.orgId, mfaEnabled: true });
+    const outcome = await acceptInvitation(x.db, token, { password: PASSWORD });
+    if (outcome.status !== 'second_factor') throw new Error('expected the second step');
+    expect(outcome.userId).toBe(w.controller.userId);
+    // The password alone made no membership and used up nothing.
+    const inX = () => x.db.select().from(memberships).where(and(eq(memberships.orgId, x.orgId), eq(memberships.userId, w.controller.userId)));
+    expect(await inX()).toEqual([]);
+    expect(await findInvitation(x.db, token)).not.toBeNull();
+
+    const challenge = await createLoginChallenge(x.db, outcome.userId, { invitationId: outcome.invitationId, now: at(base, minutes(119)) });
+    expect((await completeSecondStep(x.db, challenge.token, '000000', { now: at(base, minutes(119)) })).status).toBe('wrong_code');
+    expect(await inX()).toEqual([]);
+    const later = at(base, minutes(120));
+    const done = await completeSecondStep(x.db, challenge.token, totpCode(secret, later), { now: later });
+    if (done.status !== 'signed_in') throw new Error('expected to be signed in');
+    expect(done.invitation).toBe('joined');
+    expect(await inX()).toMatchObject([{ role: 'viewer', status: 'active' }]);
+    expect(await findInvitation(x.db, token)).toBeNull();
+    // The session opens in the organisation that was joined.
+    expect((await resolveSession(x.db, done.session.token))?.ctx).toMatchObject({ orgId: x.orgId, role: 'viewer' });
+  });
+
+  it('signs in without joining when the invitation was revoked before the second step', async () => {
+    const x = await createWorld();
+    const { id, token } = await inviteMember(x.db, x.owner, { email: w.controller.userEmail, role: 'viewer' });
+    const outcome = await acceptInvitation(x.db, token, { password: PASSWORD });
+    if (outcome.status !== 'second_factor') throw new Error('expected the second step');
+    const challenge = await createLoginChallenge(x.db, outcome.userId, { invitationId: outcome.invitationId, now: at(base, minutes(129)) });
+    await revokeInvitation(x.db, x.owner, id);
+    const later = at(base, minutes(130));
+    const done = await completeSecondStep(x.db, challenge.token, totpCode(secret, later), { now: later });
+    if (done.status !== 'signed_in') throw new Error('expected to be signed in');
+    expect(done.invitation).toBe('no_longer_valid');
+    expect(await x.db.select().from(memberships).where(and(eq(memberships.orgId, x.orgId), eq(memberships.userId, w.controller.userId)))).toEqual([]);
   });
 });
 
@@ -801,12 +835,19 @@ describe('sessions', () => {
     expect((await eventsFor(x.db, x.orgId, 'team.password_changed')).map((e) => [e.actorName, e.summary])).toEqual([['Pat Manager', 'Changed their password. Their other sessions (1) were signed out']]);
   });
 
-  it('take the client address from the first X-Forwarded-For hop, then X-Real-IP', () => {
+  it('take the client address from the right of X-Forwarded-For, never from what the client put on the left', () => {
     const h = (values: Record<string, string>) => ({ get: (name: string) => values[name] ?? null });
-    expect(clientIp(h({ 'x-forwarded-for': '203.0.113.9, 10.0.0.2', 'x-real-ip': '10.0.0.2' }))).toBe('203.0.113.9');
-    expect(clientIp(h({ 'x-real-ip': '2001:db8::1' }))).toBe('2001:db8::1');
-    expect(clientIp(h({ 'x-forwarded-for': '<script>', 'x-real-ip': '198.51.100.1' }))).toBe('198.51.100.1');
-    expect(clientIp(h({}))).toBeNull();
+    // One proxy (the default) appends the address it saw; whatever the client sent is to its left.
+    expect(clientIp(h({ 'x-forwarded-for': '6.6.6.6, 203.0.113.9' }), {})).toBe('203.0.113.9');
+    expect(clientIp(h({ 'x-forwarded-for': '203.0.113.9' }), {})).toBe('203.0.113.9');
+    // Two proxies: the second appended the first's address.
+    expect(clientIp(h({ 'x-forwarded-for': '6.6.6.6, 203.0.113.9, 10.0.0.2' }), { RCM_TRUSTED_PROXY_HOPS: '2' })).toBe('203.0.113.9');
+    expect(clientIp(h({ 'x-forwarded-for': '10.0.0.2' }), { RCM_TRUSTED_PROXY_HOPS: '2' })).toBeNull(); // fewer entries than proxies: not trusted
+    // X-Real-IP is read only when named as the platform's header.
+    expect(clientIp(h({ 'x-real-ip': '2001:db8::1' }), {})).toBeNull();
+    expect(clientIp(h({ 'x-real-ip': '2001:db8::1', 'x-forwarded-for': '6.6.6.6' }), { RCM_CLIENT_IP_HEADER: 'X-Real-IP' })).toBe('2001:db8::1');
+    expect(clientIp(h({ 'x-forwarded-for': '<script>' }), {})).toBeNull();
+    expect(clientIp(h({}), {})).toBeNull();
     expect(describeUserAgent(null)).toBe('Unknown device');
     expect(describeUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/131.0 Safari/537.36 Edg/131.0')).toBe('Edge on macOS');
   });

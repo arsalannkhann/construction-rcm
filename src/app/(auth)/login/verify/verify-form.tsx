@@ -13,8 +13,20 @@ export function VerifyForm({ attemptsLeft: initialAttempts }: { attemptsLeft: nu
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [restart, setRestart] = useState<string | null>(null);
+  const [inviteGone, setInviteGone] = useState(false);
   const [attemptsLeft, setAttemptsLeft] = useState(initialAttempts);
   const [pending, start] = useTransition();
+
+  if (inviteGone) {
+    return (
+      <div className="space-y-4">
+        <FormError message="You are signed in, but the invitation stopped being valid before you finished (it was revoked, expired or already used), so you did not join that organisation. Ask whoever invited you for a new invitation." />
+        <Link href="/overview" className="block text-[13px] font-medium text-accent hover:underline">
+          Continue
+        </Link>
+      </div>
+    );
+  }
 
   if (restart) {
     return (
@@ -39,6 +51,7 @@ export function VerifyForm({ attemptsLeft: initialAttempts }: { attemptsLeft: nu
           if (!result.ok) return setError(result.error);
           const outcome = result.data;
           if (outcome.status === 'signed_in') {
+            if (outcome.invitationNoLongerValid) return setInviteGone(true);
             window.location.assign(outcome.recoveryCodesLeft !== null && outcome.recoveryCodesLeft <= 3 ? '/settings/profile#two-step' : '/overview');
           } else if (outcome.status === 'wrong_code') {
             setAttemptsLeft(outcome.attemptsLeft);

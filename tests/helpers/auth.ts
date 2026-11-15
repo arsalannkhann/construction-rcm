@@ -22,7 +22,7 @@ export const at = (base: Date, ms: number) => new Date(base.getTime() + ms);
  */
 export async function enableMfa(db: DB, userId: string, opts: { ago?: number; keepToken?: string | null } = {}) {
   const confirmedAt = new Date(Date.now() - (opts.ago ?? minutes(10)));
-  const { secret } = await startMfaSetup(db, userId);
+  const { secret } = await startMfaSetup(db, userId, PASSWORD);
   const { recoveryCodes } = await confirmMfaSetup(db, userId, totpCode(secret, confirmedAt), opts.keepToken ?? null, { now: confirmedAt });
   return { secret, recoveryCodes, confirmedAt };
 }

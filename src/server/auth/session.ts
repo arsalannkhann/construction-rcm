@@ -4,7 +4,8 @@
  * The cookie holds a random token; only its sha256 is stored, so the sessions
  * table cannot be turned back into a working cookie. Both cookies here are
  * HttpOnly (no script can read them), SameSite=Lax (not sent on cross-site
- * form posts) and Secure in production.
+ * form posts) and Secure in production, as is the remembered-device cookie
+ * (src/server/auth/device.ts).
  */
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
@@ -12,6 +13,7 @@ import { cache } from 'react';
 import { getDb } from '@/db';
 import { appUrl, isProduction } from '@/server/config';
 import { createSession, destroySession, resolveSession, type SessionInfo } from '@/server/services/team';
+import { DEVICE_COOKIE, DEVICE_COOKIE_DAYS, parseDeviceCookie, rememberDevice } from './device';
 import type { Ctx } from './permissions';
 import { requestMetaFrom } from './request-meta';
 
@@ -95,4 +97,16 @@ export async function loginChallengeToken(): Promise<string | null> {
 
 export async function clearLoginChallengeCookie(): Promise<void> {
   (await cookies()).delete(CHALLENGE_COOKIE);
+}
+
+/** The remembered-device tokens this browser holds. */
+export async function deviceTokens(): Promise<string[]> {
+  return parseDeviceCookie((await cookies()).get(DEVICE_COOKIE)?.value);
+}
+
+/** Remember this browser for the account that just signed in. A null token (no secret key) changes nothing. */
+export async function rememberThisDevice(token: string | null): Promise<void> {
+  if (!token) return;
+  const value = rememberDevice(await deviceTokens(), token);
+  (await cookies()).set(DEVICE_COOKIE, value, authCookieOptions(new Date(Date.now() + DEVICE_COOKIE_DAYS * 86_400_000)));
 }
