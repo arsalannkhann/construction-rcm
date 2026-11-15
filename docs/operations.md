@@ -445,9 +445,21 @@ Database backup → Run workflow). It has two jobs:
 every migration is recorded, every organisation's audit trail verifies hash by
 hash, every stored file matches its SHA-256 and size, no document or exported
 file points at a missing file, and (in the drill) every table has as many rows
-as the source. Verified 2026-11-16 against a seeded database, and with planted
-damage: a deleted file, an edited audit event and altered file bytes were each
-reported and failed the check.
+as the source.
+
+Verified 2026-11-16 on this machine, not yet in GitHub Actions (below): the
+drill's exact `pg_dump` and `pg_restore` commands (client 18.7, server 18.6)
+on a seeded database restored all 32 tables, 1,978 rows, 210 audit events and
+65 files, and the check passed; the same with the production job's flags on a
+database shaped like Supabase's (its migration history, no `drizzle` schema).
+With planted damage (a deleted file, an edited audit event, altered file
+bytes, a missing migration record) each was reported and the check failed.
+
+**GitHub Actions is locked on the repository owner's account** ("The job was
+not started because your account is locked due to a billing issue", 2026-11-16),
+so neither this workflow nor the uptime check can run until the owner clears it
+under GitHub → Settings → Billing and plans. Until then, take backups by hand
+([Elsewhere](#elsewhere)) and restore-check them with `pnpm backup:check`.
 
 **Turning on the production backup (owner, about 15 minutes).** Until these are
 set, the production job logs a warning and backs up nothing.
@@ -569,7 +581,8 @@ and otherwise lists the problems: the database unreachable, a stalled queue,
 the queue not running, PDFs that cannot be read, or the scheduled run missed
 for more than a day. It shows counts only, never an organisation's data.
 
-- **GitHub Actions** (`.github/workflows/uptime.yml`) checks it every 15
+- **GitHub Actions** (`.github/workflows/uptime.yml`; it cannot run while the
+  account's Actions are locked for billing, see [Backups](#backups)) checks it every 15
   minutes, three attempts 20 seconds apart, and fails if it is not ok. GitHub
   emails a failed scheduled run to whoever last changed the workflow's
   schedule, so check that person's notification settings. Scheduled runs can
