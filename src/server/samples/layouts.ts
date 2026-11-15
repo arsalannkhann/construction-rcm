@@ -262,8 +262,8 @@ export type RenderedSection = {
 export type RenderedLayout = {
   bytes: Uint8Array;
   pageCount: number;
-  /** Document type of each page of the finished file, and the section it came from. */
-  pages: Array<{ type: DocType; section: number }>;
+  /** Document type of each page of the finished file, the section it came from, and its printed "page x of y" label if it has one. */
+  pages: Array<{ type: DocType; section: number; label: { number: number; of: number | null } | null }>;
   sections: RenderedSection[];
   /** Positions of printed values, keyed like `payApp.currentPaymentDue` (first pay application) or `waiver.signature`. */
   anchors: Record<string, Anchor>;
@@ -1064,12 +1064,13 @@ export async function renderLayout(sections: Section[], opts: LayoutOptions = {}
   }
   const groupNext = new Map<number, number>();
   const anchors: Anchors = {};
-  const pages: Array<{ type: DocType; section: number }> = [];
+  const pages: RenderedLayout['pages'] = [];
   const rendered: Array<{ kind: Section['kind']; first: number; count: number; linePages?: number[] }> = [];
 
   sections.forEach((sec, si) => {
     const before = doc.getPageCount();
     let linePages: number[] | undefined;
+    const labels: Array<{ number: number; of: number | null } | null> = [];
     if (sec.kind === 'pay_application') {
       const group = sec.group ?? 0;
       const n = (groupNext.get(group) ?? 0) + 1;
@@ -1077,11 +1078,13 @@ export async function renderLayout(sections: Section[], opts: LayoutOptions = {}
       const total = groupTotal.get(group)!;
       if (sec.legacy) {
         drawPayApplication(doc, f, sec.pkg, total);
+        labels.push({ number: n, of: total });
       } else {
         const style = { ...G702_STYLE, ...sec.style };
         const label = pageLabelText(style.pageLabel, n, total);
         if (style.form === 'own') drawOwnPayApp(doc, f, sec.pkg, style, label, anchors);
         else drawG702Variant(doc, f, sec.pkg, style, label, anchors);
+        labels.push(label ? { number: n, of: total } : null);
       }
     } else if (sec.kind === 'continuation_sheet') {
       const group = sec.group ?? 0;
@@ -1092,11 +1095,14 @@ export async function renderLayout(sections: Section[], opts: LayoutOptions = {}
       if (sec.legacy) {
         drawContinuationSheets(doc, f, sec.pkg, start, total);
         linePages = sec.pkg.lines.map((_, i) => Math.floor(i / 24));
+        for (let i = 0; i < count; i++) labels.push({ number: start + i, of: total });
       } else {
         const style = { ...G703_STYLE, ...sec.style };
-        const out = drawSheetVariant(doc, f, sec.pkg, style, (pi, n) => (style.pageLabel === 'sheet_x_of_y' ? pageLabelText(style.pageLabel, pi + 1, n) : pageLabelText(style.pageLabel, start + pi, total)));
+        const own = style.pageLabel === 'sheet_x_of_y';
+        const out = drawSheetVariant(doc, f, sec.pkg, style, (pi, n) => (own ? pageLabelText(style.pageLabel, pi + 1, n) : pageLabelText(style.pageLabel, start + pi, total)));
         if (out.pages !== count) throw new Error('Schedule page count mismatch');
         linePages = out.linePages;
+        for (let i = 0; i < count; i++) labels.push(style.pageLabel === 'none' ? null : own ? { number: i + 1, of: count } : { number: start + i, of: total });
       }
     } else if (sec.kind === 'lien_waiver') {
       if (sec.custom) drawCustomWaiver(doc, f, sec.pkg, sec.custom, anchors);
@@ -1111,7 +1117,7 @@ export async function renderLayout(sections: Section[], opts: LayoutOptions = {}
       drawInvoice(doc, f, sec.pkg);
     }
     const count = doc.getPageCount() - before;
-    for (let i = 0; i < count; i++) pages.push({ type: TYPE_OF[sec.kind], section: si });
+    for (let i = 0; i < count; i++) pages.push({ type: TYPE_OF[sec.kind], section: si, label: labels[i] ?? null });
     rendered.push({ kind: sec.kind, first: before, count, linePages });
   });
 

@@ -13,6 +13,7 @@
     "db:generate": "drizzle-kit generate",
     "seed:demo": "tsx scripts/seed-demo.ts",
     "samples": "tsx scripts/generate-samples.ts",
+    "eval:extraction": "tsx scripts/eval-extraction.ts",
     "postinstall": "node scripts/copy-pdf-worker.mjs",
     "test:pg": "vitest run --config vitest.pg.config.mts"
   },
