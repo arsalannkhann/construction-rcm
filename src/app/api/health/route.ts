@@ -1,7 +1,7 @@
 /**
  * Health check for a load balancer or uptime monitor. No sign-in, and no
- * organisation's data: database reachability, queue depth and whether this
- * process is running the queue.
+ * organisation's data: database reachability, queue depth, whether this
+ * process is running the queue, and whether it can read a PDF.
  *
  *   200 {"status":"ok" | "degraded", ...}   serving; "degraded" lists problems
  *   503 {"status":"down", ...}              the database is not answering
@@ -28,6 +28,7 @@ export async function GET() {
         stalled: health.queue.stalled,
       },
       runner: { mode: health.runner.mode, polling: health.runner.polling, lastActivityAt: health.runner.lastActivityAt?.toISOString() ?? null },
+      pdfReader: health.pdfReader,
       checkedAt: new Date().toISOString(),
     },
     { status: health.status === 'down' ? 503 : 200, headers: { 'cache-control': 'no-store' } },

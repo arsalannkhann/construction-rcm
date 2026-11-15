@@ -12,6 +12,8 @@ import { jobs, nextVersion, payApplications } from '@/db/schema';
 import { locked } from '@/db/tx';
 import { assertCan, ConflictError, UserError, type Ctx } from '@/server/auth/permissions';
 import { recordAudit } from '@/server/audit';
+import type { PdfText } from '@/server/documents/pdf-text';
+import { checkPdfReader, type ReaderCheck } from '@/server/documents/reader-check';
 import { queueHealth, requeueJob, runnerStatus, type QueueHealth } from '@/server/jobs';
 import { storageMode, type StorageMode } from '@/server/storage';
 
@@ -57,12 +59,15 @@ export type Health = {
   storage: StorageMode;
   queue: (QueueHealth & { stalled: boolean }) | null;
   runner: { mode: 'poll' | 'request'; polling: boolean; lastActivityAt: Date | null };
+  /** A test PDF was opened and its text found, with the reader uploads go through. */
+  pdfReader: ReaderCheck;
 };
 
 /** Health of the whole deployment, for a load balancer or uptime monitor. Counts only; no organisation's data. */
-export async function deploymentHealth(getDb: () => Promise<DB>): Promise<Health> {
+export async function deploymentHealth(getDb: () => Promise<DB>, deps: { readPdf?: (bytes: Uint8Array) => Promise<PdfText> } = {}): Promise<Health> {
   const runner = runnerStatus();
   const storage = storageMode();
+  const reading = checkPdfReader(deps.readPdf);
   let db: DB;
   const started = Date.now();
   try {
@@ -72,7 +77,7 @@ export async function deploymentHealth(getDb: () => Promise<DB>): Promise<Health
     console.error('[health] the database is not usable:', err);
     // A setup problem (schema behind, wrong migration mode, untrusted certificate) explains itself; anything else is an outage.
     const problem = err instanceof DatabaseSetupError ? err.message : 'The database is not answering.';
-    return { status: 'down', problems: [problem], database: { ok: false, driver: null, latencyMs: null, tls: null }, dataApi: null, storage, queue: null, runner };
+    return { status: 'down', problems: [problem], database: { ok: false, driver: null, latencyMs: null, tls: null }, dataApi: null, storage, queue: null, runner, pdfReader: await reading };
   }
   const latencyMs = Date.now() - started;
   const queue = await queueHealth(db);
@@ -91,6 +96,8 @@ export async function deploymentHealth(getDb: () => Promise<DB>): Promise<Health
   if (dataApi.rolesPresent && dataApi.tablesWithoutRls.length > 0) {
     problems.push(`${dataApi.tablesWithoutRls.length} table${dataApi.tablesWithoutRls.length === 1 ? ' has' : 's have'} row level security turned off (${dataApi.tablesWithoutRls.slice(0, 5).join(', ')}).`);
   }
+  const pdfReader = await reading;
+  if (!pdfReader.ok) problems.push('This deployment cannot read PDFs: a test document could not be opened. Uploaded packages are stored but not read. The cause is in the server log.');
   return {
     status: problems.length ? 'degraded' : 'ok',
     problems,
@@ -99,6 +106,7 @@ export async function deploymentHealth(getDb: () => Promise<DB>): Promise<Health
     storage,
     queue: { ...queue, stalled },
     runner,
+    pdfReader,
   };
 }
 

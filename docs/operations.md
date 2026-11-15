@@ -270,7 +270,8 @@ would replace the running version with the older one.
 ### Check it
 
 1. `https://<production URL>/api/health` returns `"status":"ok"`, with
-   `"tls":"verified"` and `"runner":{"mode":"request",…}`. Without
+   `"tls":"verified"`, `"runner":{"mode":"request",…}` and
+   `"pdfReader":{"ok":true}`. Without
    `DATABASE_URL` it returns 503 and says that `DATABASE_URL` is not set.
 2. Sign up, then open Settings → System status: Database *Supabase*,
    encrypted and verified; Supabase Data API *Locked*; Document processing
@@ -426,6 +427,7 @@ tokens (Procore) cannot be decrypted and the integration must be reconnected.
 |---|---|---|
 | The process dies or is restarted mid-read | The job's lease lapses after 2 minutes and it is picked up again. Uploaded files and queued work are in the database. | Nothing. |
 | A package cannot be read (corrupt file, AI service down) | Retried 3 times with increasing delay, then marked failed. The application shows the error, reviewers are notified, and it is listed under System status → Failed background work. | Fix the cause, then **Retry** there or on the application. |
+| This deployment cannot read PDFs (for example a file the reader loads at run time was not deployed) | `/api/health` reports `degraded` with `pdfReader.ok: false`; System status shows Document reading *Not working*. Uploads are stored, but their documents are marked as not readable. The cause is logged on a line starting `[health]`. | Fix and redeploy. A package read while it was broken has to be read again: remove a file from it (the package is re-read), or void it and upload it again. |
 | The database is unreachable | Requests fail with an error page; `/api/health` returns 503. Nothing is half-written: each change is one transaction. | Restore the database; the app reconnects on its own. |
 | Two people change the same application at once | The changes are applied one after the other. A decision made on figures that changed in the meantime is refused and the page refreshes. | Nothing. |
 | An email provider retries a delivery | The message is recognised by its Message-ID (or its content) and not processed twice. | Nothing. |
@@ -435,7 +437,8 @@ tokens (Procore) cannot be decrypted and the integration must be reconnected.
 
 - Poll `GET /api/health` every minute. Alert on HTTP 503, and on
   `"status":"degraded"` lasting more than 10 minutes (the problems are listed
-  in the response: a stalled queue, or the queue not running).
+  in the response: a stalled queue, the queue not running, or PDFs that cannot
+  be read).
 - `queue.failed` greater than zero means someone should look at System status.
 - Logs go to standard output. Useful prefixes: `[jobs]` (queue), `[intake]`
   (document reading), `[db]` (connections, after-commit hooks), `[health]`.

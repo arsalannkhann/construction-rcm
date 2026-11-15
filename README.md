@@ -464,7 +464,8 @@ Organisations are separated from each other by the application, not by RLS.
 
 `/api/health` (no sign-in, no organisation data) reports the database driver,
 latency and TLS state, whether Supabase's Data API exposes anything, the
-document storage mode, queue depth and stalled work, and the job runner's mode.
+document storage mode, queue depth and stalled work, the job runner's mode, and
+whether this server can open a small test PDF with the reader uploads go through.
 It returns 503 with a plain explanation when something is wrong. Settings →
 System status shows the same for administrators, plus failed background work and
 the email-intake log. Settings → Organisation shows which integrations are
@@ -521,7 +522,8 @@ the database"). In short:
    `RCM_CLIENT_IP_HEADER=x-real-ip`; optionally `ANTHROPIC_API_KEY`,
    `RESEND_API_KEY` and `EMAIL_FROM`. Redeploy after changing them.
 4. **Check** `/api/health`: `status: ok`, `database.tls: verified`,
-   `dataApi.exposedTables: 0`, `storage: database`, `runner.mode: request`.
+   `dataApi.exposedTables: 0`, `storage: database`, `runner.mode: request`,
+   `pdfReader.ok: true`.
 5. **Scheduled run**: `vercel.json` registers a daily call to `/api/jobs/run`
    (Hobby plans allow daily schedules only; on Pro it can run every few
    minutes).
@@ -614,7 +616,7 @@ another organisation, and the password prompt before two-step setup.
 | Supabase project `construction-rcm` | Schema applied (migrations 0000–0004, recorded under the repository's versions). The Data API, probed from outside with both public keys, refuses every table. |
 | Docker image and Compose stack | Built and run to a healthy state on 2026-11-15, before that day's authentication changes; not rebuilt since. |
 | Signed-in use of the live site | On 2026-11-16 the owner signed up on the live site, and a project, a subcontractor and a subcontract with a three-line schedule of values ($500,000.00, retainage 10% / 10%) were created through the interface and confirmed in the Supabase database. |
-| Uploads and reading on the live site | On 2026-11-16 the five sample PDFs were uploaded as one package, including a 5.9 MB file sent in 4 MiB parts; every stored object matches its original byte for byte (SHA-256). The first reading failed for every file: pdf.js's worker was not in the deployed functions (fixed in [PR #2](https://github.com/arsalannkhann/construction-rcm/pull/2); see Limitations). After the fix, the four extra files were removed from the package through the interface ([PR #3](https://github.com/arsalannkhann/construction-rcm/pull/3)) and the package was read again: the 4-page file was split into pay application, schedule of values, lien waiver and one unreadable page; it was read as application #1 for the period to 2026-09-30, matched to SC-2301-16, with $99,000.00 requested and verified and $11,000.00 retainage, all equal to the generator's figures. The only open finding was the unreadable page (`doc.unreadable_pages`), with 26 checks passed. Each removal was audited and every background job succeeded on its first attempt. |
+| Uploads and reading on the live site | On 2026-11-16 the five sample PDFs were uploaded as one package, including a 5.9 MB file sent in 4 MiB parts; every stored object matches its original byte for byte (SHA-256). The first reading failed for every file: pdf.js's worker was not in the deployed functions (fixed in [PR #2](https://github.com/arsalannkhann/construction-rcm/pull/2); the health check now opens a test PDF so this shows as `degraded`). After the fix, the four extra files were removed from the package through the interface ([PR #3](https://github.com/arsalannkhann/construction-rcm/pull/3)) and the package was read again: the 4-page file was split into pay application, schedule of values, lien waiver and one unreadable page; it was read as application #1 for the period to 2026-09-30, matched to SC-2301-16, with $99,000.00 requested and verified and $11,000.00 retainage, all equal to the generator's figures. The only open finding was the unreadable page (`doc.unreadable_pages`), with 26 checks passed. Each removal was audited and every background job succeeded on its first attempt. |
 
 **Not verified, because it needs credentials, documents or infrastructure that
 were not available:**
@@ -646,12 +648,6 @@ were not available:**
 - **Tenant isolation is enforced in application code**, with tests. Row-level
   security only shuts out Supabase's public API roles; it does not separate
   organisations from each other.
-- **The health check does not open a PDF.** On the first live deployment
-  `/api/health` reported `ok` while no PDF could be read, because pdf.js's
-  worker had been left out of the deployed functions (fixed; the reader now
-  loads it itself, and `tests/pdf-worker.test.ts` reproduces the missing
-  file). A read of a small embedded PDF in the health check would catch a
-  regression of this kind.
 - **No separate worker or object storage.** Background work runs inside the
   app (a polling runner in each long-lived process, or on Vercel right after
   the request that queued it plus a scheduled run), and documents are stored

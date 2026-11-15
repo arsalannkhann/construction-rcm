@@ -49,6 +49,38 @@ describe('the health check', () => {
     expect(behind.problems[0]).toMatch(/0099_x not applied/);
   });
 
+  it('opens a test PDF, so a deployment that cannot read documents is not reported healthy', async () => {
+    const w = await createWorld();
+    const health = await deploymentHealth(async () => w.db);
+    expect(health.pdfReader).toEqual({ ok: true });
+    expect(health.problems.join(' ')).not.toMatch(/PDF/);
+  });
+
+  it('reports a deployment that cannot read PDFs as degraded, without exposing the cause', async () => {
+    // What the first live deployment did: pdf.js's worker was missing from the deployed files.
+    const missingWorker = async (): Promise<never> => {
+      throw new Error("Setting up fake worker failed: Cannot find module '/var/task/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'");
+    };
+    const w = await createWorld();
+    const health = await deploymentHealth(async () => w.db, { readPdf: missingWorker });
+    expect(health.pdfReader).toEqual({ ok: false });
+    expect(health.status).toBe('degraded');
+    expect(health.problems.join(' ')).toMatch(/cannot read PDFs/);
+    expect(JSON.stringify(health)).not.toMatch(/var\/task|worker/);
+
+    // Opening the file but not finding its text is a failure too.
+    const blank = await deploymentHealth(async () => w.db, { readPdf: async () => ({ pageCount: 1, hasTextLayer: false, pages: [] }) });
+    expect(blank.pdfReader).toEqual({ ok: false });
+  });
+
+  it('still checks the PDF reader when the database is down', async () => {
+    const health = await deploymentHealth(async () => {
+      throw new Error('connect ECONNREFUSED');
+    });
+    expect(health.status).toBe('down');
+    expect(health.pdfReader).toEqual({ ok: true });
+  });
+
   it('reports the connection’s encryption: none for the embedded database', async () => {
     const w = await createWorld();
     const health = await deploymentHealth(async () => w.db);
