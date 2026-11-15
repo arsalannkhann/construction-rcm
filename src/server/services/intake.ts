@@ -215,6 +215,27 @@ function waiverIdentity(sha256: string, w: ExtractedWaiver): string {
 }
 
 /**
+ * Documents read at the same time. With AI reading on, a document takes a model
+ * call of several seconds to a minute; one after another, a package of a dozen
+ * would outlast a serverless function's time limit.
+ */
+const READ_CONCURRENCY = 4;
+
+/** `fn` over `items` with at most `limit` running at once; results in the order of `items`. */
+async function mapInOrder<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/**
  * Read every document in the package and build (or rebuild) the application from them.
  *
  * Reading is slow (a model call per document when AI reading is on), so it
@@ -233,11 +254,10 @@ export async function processApplication(db: DB, orgId: string, appId: string, o
   if (!docs) return;
 
   try {
-    const readings: Reading[] = [];
-    for (const doc of docs) {
+    const readings: Reading[] = await mapInOrder(docs, READ_CONCURRENCY, async (doc) => {
       const bytes = await getObject(doc.storageKey);
-      readings.push({ doc, outcome: await extractDocument({ filename: doc.filename, mimeType: doc.mimeType, bytes }, opts.extract) });
-    }
+      return { doc, outcome: await extractDocument({ filename: doc.filename, mimeType: doc.mimeType, bytes }, opts.extract) };
+    });
     await withOrgLock(db, orgId, (tx) => applyReading(tx, orgId, appId, readings, now));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

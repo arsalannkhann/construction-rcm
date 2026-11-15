@@ -16,6 +16,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -665,6 +666,31 @@ export const storedObjects = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('stored_objects_org').on(t.orgId)],
+);
+
+/**
+ * Pieces of a file on its way in, for hosting that caps the size of a single
+ * request (Vercel: 4.5 MB). The browser sends a large file in parts; the
+ * request that creates the application, or adds documents to one, joins them,
+ * checks that they add up, and deletes them. Parts nobody claimed are removed
+ * after a few hours. Each part belongs to the member who sent it.
+ */
+export const uploadParts = pgTable(
+  'upload_parts',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    orgId: text('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    /** Chosen by the browser: random, and only meaningful together with the user. */
+    uploadId: text('upload_id').notNull(),
+    part: integer('part').notNull(),
+    bytes: bytea('bytes').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.uploadId, t.part] }), index('upload_parts_created').on(t.createdAt)],
 );
 
 /** Every message that reached the email-intake address, including the ones that were turned away. */

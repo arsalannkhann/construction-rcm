@@ -27,7 +27,7 @@ export async function GET() {
         oldestQueuedSeconds: health.queue.oldestQueuedAt ? Math.round((Date.now() - health.queue.oldestQueuedAt.getTime()) / 1000) : null,
         stalled: health.queue.stalled,
       },
-      runner: { polling: health.runner.polling, lastActivityAt: health.runner.lastActivityAt?.toISOString() ?? null },
+      runner: { mode: health.runner.mode, polling: health.runner.polling, lastActivityAt: health.runner.lastActivityAt?.toISOString() ?? null },
       checkedAt: new Date().toISOString(),
     },
     { status: health.status === 'down' ? 503 : 200, headers: { 'cache-control': 'no-store' } },

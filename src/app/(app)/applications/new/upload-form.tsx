@@ -6,6 +6,7 @@ import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Panel } from '@/components/ui/data';
 import { Field, FormError, Select } from '@/components/ui/form';
+import { buildUploadForm, UploadError } from '@/lib/upload-form';
 import { cn } from '@/lib/utils';
 
 type ContractOption = { id: string; label: string; group: string };
@@ -22,6 +23,7 @@ export function UploadForm({ contracts, preselected, aiConfigured, samples }: { 
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
 
   const add = (incoming: FileList | File[] | null) => {
     if (!incoming) return;
@@ -42,19 +44,19 @@ export function UploadForm({ contracts, preselected, aiConfigured, samples }: { 
     setBusy(true);
     setError(null);
     try {
-      const form = new FormData();
-      for (const f of files) form.append('files', f);
-      if (contractId) form.append('contractId', contractId);
+      const form = await buildUploadForm(files, contractId ? { contractId } : {}, setProgress);
+      setProgress(null);
       const res = await fetch('/api/applications', { method: 'POST', body: form });
       const json = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
       if (!res.ok || !json.id) {
-        setError(json.error ?? 'The upload could not be completed. Nothing was saved.');
+        setError(json.error ?? (res.status === 413 ? 'The upload is larger than this server accepts in one go. Try fewer files at a time.' : 'The upload could not be completed. Nothing was saved.'));
         setBusy(false);
         return;
       }
       router.push(`/applications/${json.id}`);
-    } catch {
-      setError('The upload did not complete. Check your connection and try again.');
+    } catch (err) {
+      setError(err instanceof UploadError ? err.message : 'The upload did not complete. Check your connection and try again.');
+      setProgress(null);
       setBusy(false);
     }
   };
@@ -149,7 +151,7 @@ export function UploadForm({ contracts, preselected, aiConfigured, samples }: { 
             : 'AI reading is not configured on this deployment. Digitally produced PDFs are read by the rule-based parser; scans and photos are stored and have to be keyed by hand.'}
         </p>
         <Button variant="primary" size="lg" loading={busy} disabled={files.length === 0} onClick={submit}>
-          Upload and process
+          {progress !== null ? `Uploading ${Math.round(progress * 100)}%` : 'Upload and process'}
         </Button>
       </div>
 

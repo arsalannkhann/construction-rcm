@@ -4,6 +4,9 @@ import { apiCtx, apiError } from '@/server/http';
 import { kick } from '@/server/jobs';
 import { applicationStatus } from '@/server/services/queries';
 
+/** Serverless hosting: the package is read after the response is sent, within this limit (src/server/jobs.ts). */
+export const maxDuration = 300;
+
 /** Polled by the processing screen. */
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await apiCtx();

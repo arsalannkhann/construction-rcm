@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { dataDir, isInMemory } from '@/server/config';
-import { connectPool, isSupabaseHost, type TlsMode } from './connection';
+import { connectPool, isSupabaseHost, missingDatabaseUrl, type TlsMode } from './connection';
 import { assertMigrationsApplied, assertSchemaNotAppliedExternally, migrationMode } from './migrations';
 
 export type DB = PgDatabase<PgQueryResultHKT, Record<string, never>>;
@@ -93,6 +93,8 @@ async function open(): Promise<Handle> {
     return { db: db as unknown as DB, close: () => pool.end(), driver: 'postgres', tls, supabase: isSupabaseHost(url) };
   }
 
+  const missing = missingDatabaseUrl();
+  if (missing) throw missing;
   const { PGlite } = await import('@electric-sql/pglite');
   const { drizzle } = await import('drizzle-orm/pglite');
   const { migrate } = await import('drizzle-orm/pglite/migrator');

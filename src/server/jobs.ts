@@ -17,13 +17,24 @@
  *     be retried by hand.
  *   - Nobody kicked the runner (the enqueueing transaction committed on
  *     another instance, or a retry delay elapsed). The runner also polls.
+ *
+ * On serverless hosting (`jobRunnerMode() === 'request'`, the default on
+ * Vercel) there is no process to poll from: nothing runs between requests.
+ * There the work runs right after the response of the request that queued it,
+ * kept alive with Next.js `after()`, and stops taking new jobs after
+ * REQUEST_BUDGET_MS so the platform's time limit never cuts one off half-way.
+ * Whatever is left, a retry whose delay has passed, or a job abandoned when an
+ * instance was stopped, is picked up by the next request that looks: a page
+ * view (`kickIfIdle`), the processing screen's status check, or the scheduled
+ * call to /api/jobs/run.
  */
 import os from 'node:os';
 import { and, asc, eq, gte, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { after } from 'next/server';
 import { getDb, type DB } from '@/db';
 import { jobs } from '@/db/schema';
 import { afterCommit, outsideTransaction } from '@/db/tx';
-import { isInMemory } from './config';
+import { isInMemory, jobRunnerMode, type JobRunnerMode } from './config';
 import { newId, randomToken } from './ids';
 
 type Run = (db: DB, orgId: string, payload: Record<string, unknown>) => Promise<void>;
@@ -46,6 +57,14 @@ export const MAX_ATTEMPTS = 3;
 export const LEASE_MS = 2 * 60 * 1000;
 const HEARTBEAT_MS = 30 * 1000;
 const POLL_MS = 5 * 1000;
+/**
+ * In request mode, stop taking new jobs this long after starting. The functions
+ * that run the queue may live 300 seconds (`maxDuration`); a job taken just
+ * before the budget runs out still has 150 seconds to finish.
+ */
+export const REQUEST_BUDGET_MS = 150 * 1000;
+/** In request mode, a page view looks at the queue at most this often per instance. */
+const IDLE_KICK_MS = 15 * 1000;
 const KEEP_SUCCEEDED_MS = 7 * 24 * 60 * 60 * 1000;
 /** Failed jobs stay visible on the system status screen for a month; the audit trail keeps the record for good. */
 const KEEP_FAILED_MS = 30 * 24 * 60 * 60 * 1000;
@@ -67,30 +86,58 @@ export async function enqueueJob(db: DB, orgId: string, type: string, payload: R
   return id;
 }
 
+/**
+ * Keep a serverless function alive until `work` settles, although the response
+ * has already gone. Outside a request (the poller, a script) there is nothing
+ * to extend and `after()` refuses; the work simply runs.
+ */
+function keepAlive(work: Promise<unknown>): void {
+  try {
+    after(work);
+  } catch {
+    /* not inside a request */
+  }
+}
+
 /** Start draining in the background if not already doing so. */
 export function kick(): void {
   if (g.__rcmDraining) {
     g.__rcmKickAgain = true;
     return;
   }
+  const deadline = jobRunnerMode() === 'request' ? Date.now() + REQUEST_BUDGET_MS : undefined;
   // The runner must not inherit a caller's transaction.
   outsideTransaction(() => {
     g.__rcmDraining = (async () => {
       try {
         do {
           g.__rcmKickAgain = false;
-          await drain(await getDb());
-        } while (g.__rcmKickAgain);
+          await drain(await getDb(), { deadline });
+        } while (g.__rcmKickAgain && (deadline === undefined || Date.now() < deadline));
       } catch (err) {
         console.error('[jobs] runner stopped with an error (it will start again on the next poll):', err);
       } finally {
         g.__rcmDraining = undefined;
       }
     })();
+    keepAlive(g.__rcmDraining);
   });
 }
 
-/** Called once at server start: resume anything queued or abandoned, then keep polling. */
+/**
+ * Request mode only: look at the queue if this instance has not done so in the
+ * last few seconds. Called on every signed-in page view, so queued work (a
+ * retry whose delay has passed, a job an instance abandoned) moves whenever
+ * anyone is using the app. The look happens after the response is sent.
+ */
+export function kickIfIdle(): void {
+  if (isInMemory() || jobRunnerMode() !== 'request' || g.__rcmDraining) return;
+  if (Date.now() - (g.__rcmRunnerActivity ?? 0) < IDLE_KICK_MS) return;
+  g.__rcmRunnerActivity = Date.now();
+  kick();
+}
+
+/** Called once at server start: resume anything queued or abandoned, then keep polling. Not used in request mode. */
 export function startJobRunner(): void {
   kick();
   if (g.__rcmPoller) return;
@@ -142,12 +189,17 @@ async function exhausted(db: DB, job: Job, error: string): Promise<void> {
   }
 }
 
-/** Run queued jobs until none are runnable. Returns how many ran. */
-export async function drain(db: DB): Promise<number> {
+/**
+ * Run queued jobs until none are runnable, or until `deadline` (epoch ms) has
+ * passed: then no new job is taken and the rest wait for the next drain.
+ * Returns how many ran.
+ */
+export async function drain(db: DB, opts: { deadline?: number } = {}): Promise<number> {
   g.__rcmRunnerActivity = Date.now();
   let ran = 0;
   await giveUpOnAbandoned(db);
   for (;;) {
+    if (opts.deadline !== undefined && Date.now() >= opts.deadline) break;
     const job = await claim(db);
     if (!job) break;
     const handler = handlers.get(job.type);
@@ -215,7 +267,7 @@ export async function queueHealth(db: DB, orgId?: string): Promise<QueueHealth> 
   return { queued: of('queued')?.n ?? 0, running: of('running')?.n ?? 0, failed: of('failed')?.n ?? 0, oldestQueuedAt: oldest ? new Date(oldest) : null };
 }
 
-/** Whether this process is running the queue, and when it last looked at it. */
-export function runnerStatus(): { polling: boolean; lastActivityAt: Date | null } {
-  return { polling: !!g.__rcmPoller, lastActivityAt: g.__rcmRunnerActivity ? new Date(g.__rcmRunnerActivity) : null };
+/** How the queue is run here, whether this process is polling it, and when it last looked at it. */
+export function runnerStatus(): { mode: JobRunnerMode; polling: boolean; lastActivityAt: Date | null } {
+  return { mode: jobRunnerMode(), polling: !!g.__rcmPoller, lastActivityAt: g.__rcmRunnerActivity ? new Date(g.__rcmRunnerActivity) : null };
 }

@@ -58,7 +58,16 @@ export default async function SystemStatusPage() {
         ]
       : []),
     { name: 'Document storage', tone: health.storage === 'memory' ? 'warn' : 'pass', status: health.storage === 'database' ? 'In the database' : health.storage === 'disk' ? 'On disk' : 'In memory', detail: STORAGE_TEXT[health.storage] },
-    health.runner.polling
+    health.runner.mode === 'request'
+      ? {
+          name: 'Document processing',
+          tone: health.queue?.stalled ? 'warn' : 'pass',
+          status: health.queue?.stalled ? 'Falling behind' : 'On request',
+          detail: `Serverless hosting: packages are read right after they are uploaded, and anything left over is picked up when someone uses the app or the scheduled check runs${health.runner.lastActivityAt ? `. This instance last looked at the queue ${formatRelative(health.runner.lastActivityAt)}` : ''}. ${ours.queued} queued and ${ours.running} in progress for ${ctx.orgName}.${
+            health.queue?.stalled ? ' Work has been waiting more than ten minutes: check that the scheduled call to /api/jobs/run is set up (docs/operations.md, Vercel).' : ''
+          }`,
+        }
+      : health.runner.polling
       ? {
           name: 'Document processing',
           tone: health.queue?.stalled ? 'warn' : 'pass',

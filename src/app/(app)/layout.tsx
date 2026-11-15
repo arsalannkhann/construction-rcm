@@ -2,12 +2,17 @@ import { getDb } from '@/db';
 import { AppShell } from '@/components/shell/app-shell';
 import { can } from '@/server/auth/permissions';
 import { requireCtx } from '@/server/auth/session';
+import { kickIfIdle } from '@/server/jobs';
 import { listNotifications, unreadCount } from '@/server/services/notify';
 import { queueCounts } from '@/server/services/queries';
 import { listMyOrganizations } from '@/server/services/team';
 
+/** Serverless hosting: long enough for queued document reading to finish after the page is sent (src/server/jobs.ts). */
+export const maxDuration = 300;
+
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const ctx = await requireCtx();
+  kickIfIdle();
   const db = await getDb();
   const organizations = await listMyOrganizations(db, ctx.userId);
   const unread = await unreadCount(db, ctx);

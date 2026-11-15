@@ -22,6 +22,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
     "@electric-sql/pglite": "^0.5.16",
+    "@vercel/functions": "^3.11.3",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.4",
     "geist": "^1.9.2",

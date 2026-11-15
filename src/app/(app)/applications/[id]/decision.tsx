@@ -10,6 +10,7 @@ import { Checkbox, Field, Input, Select, Textarea } from '@/components/ui/form';
 import { Dialog, Menu, MenuItem, MenuLabel, MenuSeparator, Tooltip } from '@/components/ui/overlay';
 import { messageWordingProblem } from '@/lib/message-wording';
 import { formatMoney } from '@/lib/money';
+import { buildUploadForm, UploadError } from '@/lib/upload-form';
 import { useAction } from '@/lib/use-action';
 import { can, ROLE_LABEL } from '@/server/auth/permissions';
 import type { Role } from '@/server/types';
@@ -49,8 +50,7 @@ export function DecisionBar() {
     if (!files || files.length === 0) return;
     setUploading(true);
     try {
-      const form = new FormData();
-      for (const f of Array.from(files)) form.append('files', f);
+      const form = await buildUploadForm(Array.from(files));
       const res = await fetch(`/api/applications/${app.id}/documents`, { method: 'POST', body: form });
       const json = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) toast.error(json.error ?? 'The documents could not be added.');
@@ -58,8 +58,8 @@ export function DecisionBar() {
         toast.success('Documents added. Reading the package again.');
         router.refresh();
       }
-    } catch {
-      toast.error('The upload did not complete. Check your connection and try again.');
+    } catch (err) {
+      toast.error(err instanceof UploadError ? err.message : 'The upload did not complete. Check your connection and try again.');
     } finally {
       setUploading(false);
       if (fileInput.current) fileInput.current.value = '';

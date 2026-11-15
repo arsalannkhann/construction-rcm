@@ -53,7 +53,8 @@ function readCa(value: string | undefined): string | null {
 
 /** The node-postgres pool settings for DATABASE_URL and the environment. */
 export function connectionConfig(url: string, env: Env = process.env): PoolConfig {
-  const max = Number(env.DATABASE_POOL_MAX) || 10;
+  // On serverless hosting every instance has its own pool; keep each one small.
+  const max = Number(env.DATABASE_POOL_MAX) || (env.VERCEL ? 3 : 10);
   const ca = readCa(env.DATABASE_CA_CERT);
   if (!ca) return { connectionString: url, max };
   // node-postgres lets TLS settings in the URL override the `ssl` option, so take them out.
@@ -78,6 +79,18 @@ export function tlsMode(config: PoolConfig, env: Env = process.env): TlsMode {
   const envMode = env.PGSSLMODE;
   if (!envMode || envMode === 'disable') return 'off';
   return envMode === 'no-verify' ? 'unverified' : 'verified';
+}
+
+/**
+ * Without DATABASE_URL the app falls back to the embedded database on local
+ * disk. Serverless hosting has no writable disk that outlives a request, so
+ * there it says what is missing instead of failing on a read-only file system.
+ */
+export function missingDatabaseUrl(env: Env = process.env): DatabaseSetupError | null {
+  if (env.DATABASE_URL || !env.VERCEL) return null;
+  return new DatabaseSetupError(
+    'DATABASE_URL is not set. On Vercel, add it under Project Settings → Environment Variables (for Supabase, the session pooler connection string), together with DATABASE_CA_CERT, then redeploy. See docs/operations.md, "Vercel".',
+  );
 }
 
 /** Supabase's hosts, where TLS is always available and a connection without it is a mistake. */
@@ -117,6 +130,11 @@ export async function connectPool(url: string, env: Env = process.env): Promise<
   // A connection that drops while idle (a database restart, a failover) is replaced on next use.
   // Without a listener, node-postgres would take the whole process down with it.
   pool.on('error', (err) => console.error('[db] an idle database connection failed and will be replaced:', err.message));
+  if (env.VERCEL) {
+    // Fluid compute suspends idle instances; this closes idle connections first, so they do not hold pooler slots while frozen.
+    const { attachDatabasePool } = await import('@vercel/functions');
+    attachDatabasePool(pool);
+  }
   try {
     const client = await pool.connect();
     return { pool, client, tls: tlsMode(config, env) };

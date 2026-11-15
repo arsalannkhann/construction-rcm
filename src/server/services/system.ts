@@ -56,7 +56,7 @@ export type Health = {
   dataApi: DataApiExposure | null;
   storage: StorageMode;
   queue: (QueueHealth & { stalled: boolean }) | null;
-  runner: { polling: boolean; lastActivityAt: Date | null };
+  runner: { mode: 'poll' | 'request'; polling: boolean; lastActivityAt: Date | null };
 };
 
 /** Health of the whole deployment, for a load balancer or uptime monitor. Counts only; no organisation's data. */
@@ -79,7 +79,7 @@ export async function deploymentHealth(getDb: () => Promise<DB>): Promise<Health
   const stalled = !!queue.oldestQueuedAt && Date.now() - queue.oldestQueuedAt.getTime() > STALL_MS;
   const problems: string[] = [];
   if (stalled) problems.push(`Document processing is not keeping up: the oldest queued job has waited more than ${STALL_MS / 60_000} minutes.`);
-  if (!runner.polling) problems.push('This process is not running the document-processing queue.');
+  if (runner.mode === 'poll' && !runner.polling) problems.push('This process is not running the document-processing queue.');
   const connection = await dbConnection();
   if (connection.supabase && connection.tls === 'off') {
     problems.push('The connection to Supabase is not encrypted. Set DATABASE_CA_CERT to the project’s CA certificate; see docs/operations.md.');
