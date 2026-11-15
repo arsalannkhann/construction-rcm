@@ -14,22 +14,15 @@ Record the result of every step: the date, the commit (`git rev-parse HEAD`),
 pass or fail, and what Procore showed. Then update the documents listed in
 [After the run](#after-the-run).
 
-## Before you start: one known defect
+## What the push does about lost answers
 
-**A push whose answer is lost can create a second invoice.** If Procore does not
-answer the request that creates the invoice (a timeout, a dropped connection or
-a 5xx), the app records the push as failed, says "Nothing was created in
-Procore", and lets someone send it again. Procore may in fact have created the
-invoice, and sending again would create a second one. The duplicate check
-described in the brief for this integration (list the subcontract's invoices
-and look for one with the application number before creating) is not
-implemented. Until it is:
-
-- after any failed push whose error says Procore could not be reached or
-  returned a server error, look at the subcontract's invoices in Procore before
-  sending again;
-- step 12 below measures whether Procore itself refuses a second invoice with
-  the same number, which decides how serious this is.
+Before creating an invoice, the push lists the subcontract's invoices and stops
+if one already has the application's number. A push whose create request got
+no usable answer is recorded as *no answer* (status `unknown`), not as failed,
+and sending it again adopts the invoice that request created instead of making
+a second one ([procore-api-notes.md](procore-api-notes.md), "One invoice per
+application"). That has been tested against the emulator only. Step 12 checks
+the two things it assumes about Procore.
 
 ## What you need
 
@@ -198,17 +191,28 @@ Transfers row should say why:
 
 Record each answer; each one changes a "could not verify" row in the notes.
 
-1. **Duplicate invoice numbers.** In Procore, create a draft invoice by hand on
-   the subcontract with the number of an approved application that has not
-   been pushed. Then push that application. Does Procore refuse it, or create
-   a second invoice with the same number? (This decides how serious the defect
-   at the top of this page is.) Delete the extra invoice afterwards.
-2. **Closed billing periods.** Close the billing period from step 4 and push
+1. **An existing invoice number.** In Procore, create a draft invoice by hand
+   on the subcontract with the number of an approved application that has not
+   been pushed. Then push that application. **Expect:** the app refuses with
+   "Procore already has an invoice numbered …", naming the invoice, and the
+   subcontract's invoice count in Procore does not change. Delete the invoice
+   you created afterwards.
+2. **A new invoice is listed at once.** Straight after a push that created an
+   invoice (step 10), list the subcontract's invoices with curl and a sandbox
+   token: `GET /rest/v1.1/requisitions?project_id=<project>&filters[commitment_id]=<subcontract>`
+   with the `Procore-Company-Id` header. **Expect:** the new invoice is in the
+   list with its `invoice_number`. Recovery after a lost answer depends on
+   this; if the list lags, record by how long.
+3. **Whether Procore refuses a repeated number itself.** The app no longer
+   depends on it, but record it: send step 10's create request a second time
+   with curl and note whether Procore answers 4xx or creates a second invoice.
+   Delete any extra invoice afterwards.
+4. **Closed billing periods.** Close the billing period from step 4 and push
    another application dated inside it. Is it accepted?
-3. **Missing company header.** The HTTP status Procore returns for "Missing
+5. **Missing company header.** The HTTP status Procore returns for "Missing
    Procore-Company-Id header!" (the emulator uses 403). Send any API call
    without the header, with curl and a sandbox token.
-4. **Token request encoding.** Whether `/oauth/token` also accepts
+6. **Token request encoding.** Whether `/oauth/token` also accepts
    `application/x-www-form-urlencoded` (the app sends multipart form-data, as
    Procore's guides do).
 
@@ -252,4 +256,4 @@ revokes the fresh one, so this only matters if that changes.)
 Production credentials are a separate step: promote a version of the app, set
 `PROCORE_ENV=production` with the production pair, and repeat steps 6, 7 and 14
 against the customer's company with their Procore administrator. Do not push
-to a production company until the duplicate-invoice defect is fixed.
+to a production company until steps 10 to 12 have passed in the sandbox.

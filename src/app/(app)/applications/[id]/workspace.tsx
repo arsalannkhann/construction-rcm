@@ -23,7 +23,7 @@ export type Permissions = { review: boolean; approve: boolean; signoff: boolean;
 export type Extras = {
   me: { id: string; name: string };
   emailConfigured: boolean;
-  procore: { configured: boolean; connected: boolean; available: boolean; reason: string | null };
+  procore: { configured: boolean; connected: boolean; available: boolean; reason: string | null; warning: string | null };
 };
 export type TabKey = 'findings' | 'summary' | 'lines' | 'compliance' | 'activity';
 type Spot = { documentId: string; page: number; bbox?: BBox | null };

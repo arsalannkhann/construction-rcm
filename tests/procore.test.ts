@@ -50,6 +50,7 @@ const VENDOR = { loneStar: 8101, gulfCoast: 8102, dormant: 8103 };
 const CONTRACT = { electrical: 9201, hvac: 9202, concrete: 9203, painting: 9204 };
 
 type Requisition = { authorization: string | undefined; companyId: string | undefined; body: Record<string, any> };
+type Invoice = { id: number; invoice_number: string; commitment_id: number; period_id: number; status: string };
 
 class ProcoreEmulator {
   url = '';
@@ -109,7 +110,12 @@ class ProcoreEmulator {
   grants: string[] = [];
   revoked: string[] = [];
   requests: Array<{ method: string; path: string; query: Record<string, string>; companyId: string | undefined }> = [];
+  /** The create requests that reached Procore. */
   requisitions: Requisition[] = [];
+  /** Every invoice Procore holds, whether this app created it or someone entered it in Procore. */
+  invoices: Invoice[] = [];
+  /** Create the next invoice, then lose the answer: drop the connection, answer 502, or answer 201 without an id. */
+  afterNextRequisition: 'drop' | 'bad-gateway' | 'no-id' | null = null;
   /**
    * Paths that answer 429 a number of times before behaving. As documented, a
    * 429 carries X-Rate-Limit-Reset (Unix seconds, `resetIn` seconds after the
@@ -136,6 +142,12 @@ class ProcoreEmulator {
 
   requestsTo(path: string) {
     return this.requests.filter((r) => r.path === path);
+  }
+
+  addInvoice(fields: Omit<Invoice, 'id'>): Invoice {
+    const invoice = { id: 77001 + this.invoices.length, ...fields };
+    this.invoices.push(invoice);
+    return invoice;
   }
 
   private issue() {
@@ -278,6 +290,15 @@ class ProcoreEmulator {
     if (req.method === 'GET' && (m = /^\/rest\/v1\.0\/projects\/(\d+)\/billing_periods$/.exec(path))) {
       return Number(m[1]) === PROJECT ? page(this.billingPeriods) : json(404, { message: 'Not found' });
     }
+    if (req.method === 'GET' && path === '/rest/v1.1/requisitions') {
+      if (!projectParam) return json(400, { message: 'project_id is required' });
+      if (projectParam !== String(PROJECT)) return json(404, { message: 'Not found' });
+      const filter = url.searchParams.get('filters[commitment_id]');
+      return page(
+        this.invoices.filter((i) => !filter || String(i.commitment_id) === filter),
+        { default: 30, max: 100 },
+      );
+    }
     if (req.method === 'POST' && path === '/rest/v1.1/requisitions') {
       if (req.headers['content-type'] !== 'application/json') return json(415, { message: 'JSON expected' });
       const body = JSON.parse(raw) as Record<string, any>;
@@ -306,7 +327,16 @@ class ProcoreEmulator {
       }
       if (Object.keys(errors).length > 0) return json(422, { errors });
       this.requisitions.push({ authorization: req.headers.authorization, companyId, body });
-      return json(201, { id: 77000 + this.requisitions.length, status: 'draft', invoice_number: r.invoice_number });
+      const invoice = this.addInvoice({ invoice_number: r.invoice_number, commitment_id: body.commitment_id, period_id: r.period_id, status: 'draft' });
+      const lose = this.afterNextRequisition;
+      this.afterNextRequisition = null;
+      if (lose === 'drop') {
+        req.socket.destroy();
+        return;
+      }
+      if (lose === 'bad-gateway') return json(502, { message: 'Bad gateway' });
+      if (lose === 'no-id') return json(201, { status: 'draft', invoice_number: r.invoice_number });
+      return json(201, { id: invoice.id, status: 'draft', invoice_number: r.invoice_number });
     }
     return json(404, { message: 'Not found' });
   }
@@ -406,6 +436,8 @@ describe('reading Procore values', () => {
     expect(outcomeUnknown(new ProcoreRateLimitError(429, 5))).toBe(false);
     expect(outcomeUnknown(new ProcoreApiError(422, 'invalid'))).toBe(false);
     expect(outcomeUnknown(new Error('bug'))).toBe(false);
+    // A success whose body could not be read: the write happened.
+    expect(outcomeUnknown(new ProcoreApiError(201, 'the response was not JSON'))).toBe(true);
   });
 });
 
@@ -833,17 +865,25 @@ describe('import and push', () => {
     period(1, '2026-09-30', { '1': { work: D(50000) }, '2': { work: D(60000) }, '3': { stored: D(10000) } }),
     period(2, '2026-10-31', { '2': { work: D(90000.5) } }),
     period(3, '2026-11-30', { '2': { work: D(20000) }, '001': { work: D(12000) } }),
+    period(4, '2026-12-31', { '3': { work: D(25000) } }),
+    period(5, '2027-01-31', { '3': { work: D(25000) } }),
+    period(6, '2027-02-28', { '3': { work: D(25000) } }),
   ];
   const pkg = (index: number) => {
     let prior = null;
     for (let i = 0; i < index; i++) prior = stateAfter(buildPackage(parties, billing, prior, periods[i]!));
     return buildPackage(parties, billing, prior, periods[index]!);
   };
-  /** Submit application `index` on the imported electrical subcontract and approve it. */
+  /**
+   * Submit application `index` on the imported electrical subcontract and approve it. Periods after
+   * November 2026 are received five days after they end, as they would be, not before they happen.
+   */
   const approved = async (index: number) => {
-    const app = await submit(w, pkg(index), { contractId: electricalId });
+    const periodTo = periods[index]!.periodTo;
+    const now = index >= 3 ? new Date(Date.parse(`${periodTo}T12:00:00Z`) + 5 * 86_400_000) : undefined;
+    const app = await submit(w, pkg(index), { contractId: electricalId, now });
     expect(await openFindings(w, app.id)).toEqual([]);
-    await approveApplication(w.db, w.controller, app.id);
+    await approveApplication(w.db, w.controller, app.id, { now });
     return app.id;
   };
 
@@ -1003,10 +1043,10 @@ describe('import and push', () => {
     // Not approved yet.
     const pending = await submit(w, pkg(0), { contractId: electricalId });
     expect(await openFindings(w, pending.id)).toEqual([]);
-    expect(await canPushToProcore(w.db, w.controller, pending.id)).toEqual({ available: false, reason: 'Only approved applications can be sent to Procore.' });
+    expect(await canPushToProcore(w.db, w.controller, pending.id)).toEqual({ available: false, reason: 'Only approved applications can be sent to Procore.', warning: null });
     await expect(pushToProcore(w.db, w.controller, pending.id)).rejects.toThrow('Only approved applications can be sent to Procore.');
     await approveApplication(w.db, w.controller, pending.id);
-    expect(await canPushToProcore(w.db, w.controller, pending.id)).toEqual({ available: true, reason: null });
+    expect(await canPushToProcore(w.db, w.controller, pending.id)).toEqual({ available: true, reason: null, warning: null });
 
     // A role without export rights.
     expect(await canPushToProcore(w.db, w.pm, pending.id)).toMatchObject({ available: false, reason: expect.stringMatching(/role/) });
@@ -1036,7 +1076,7 @@ describe('import and push', () => {
     // Not connected: an organisation with no Procore connection of its own.
     const theirs = await submit(outsider, packageFor(outsider, 0, null));
     await approveApplication(outsider.db, outsider.controller, theirs.id);
-    expect(await canPushToProcore(outsider.db, outsider.controller, theirs.id)).toEqual({ available: false, reason: 'Procore is not connected. Connect it in Settings → Integrations.' });
+    expect(await canPushToProcore(outsider.db, outsider.controller, theirs.id)).toEqual({ available: false, reason: 'Procore is not connected. Connect it in Settings → Integrations.', warning: null });
 
     // None of that touched Procore or recorded a transfer.
     expect(emu.requisitions).toHaveLength(0);
@@ -1048,7 +1088,7 @@ describe('import and push', () => {
     const tokens = await storedTokens(w);
 
     const result = await pushToProcore(w.db, w.controller, app!.id);
-    expect(result).toEqual({ transferId: expect.stringMatching(/^trf_/), status: 'completed', externalRef: '77001', error: null });
+    expect(result).toEqual({ transferId: expect.stringMatching(/^trf_/), status: 'completed', externalRef: '77001', error: null, adopted: false });
 
     expect(emu.requisitions).toHaveLength(1);
     const received = emu.requisitions[0]!;
@@ -1086,7 +1126,7 @@ describe('import and push', () => {
     expect(JSON.stringify(event)).not.toContain(tokens.accessToken);
 
     // It cannot be sent twice.
-    expect(await canPushToProcore(w.db, w.controller, app!.id)).toEqual({ available: false, reason: 'This application was already sent to Procore (invoice 77001).' });
+    expect(await canPushToProcore(w.db, w.controller, app!.id)).toEqual({ available: false, reason: 'This application was already sent to Procore (invoice 77001).', warning: null });
     await expect(pushToProcore(w.db, w.controller, app!.id)).rejects.toThrow(/already sent to Procore/);
     expect(emu.requisitions).toHaveLength(1);
   });
@@ -1097,7 +1137,7 @@ describe('import and push', () => {
     const before = posts();
 
     const failed = await pushToProcore(w.db, w.controller, appId);
-    expect(failed).toEqual({ transferId: expect.stringMatching(/^trf_/), status: 'failed', externalRef: null, error: 'No billing period in Procore covers Oct 31, 2026. Create it in Procore and try again.' });
+    expect(failed).toEqual({ transferId: expect.stringMatching(/^trf_/), status: 'failed', externalRef: null, error: 'No billing period in Procore covers Oct 31, 2026. Create it in Procore and try again.', adopted: false });
     expect(posts()).toBe(before); // nothing was sent, and no billing period was created
     expect(emu.requests.some((r) => r.method === 'POST' && r.path.endsWith('/billing_periods'))).toBe(false);
     expect(emu.requisitions).toHaveLength(1);
@@ -1113,7 +1153,7 @@ describe('import and push', () => {
     expect(notices.map((n) => n.userId)).toEqual([w.owner.userId]);
     expect(notices[0]).toMatchObject({ href: `/applications/${appId}`, body: failed.error });
     // Still available to try again.
-    expect(await canPushToProcore(w.db, w.controller, appId)).toEqual({ available: true, reason: null });
+    expect(await canPushToProcore(w.db, w.controller, appId)).toEqual({ available: true, reason: null, warning: null });
 
     // The period now exists, but Procore refuses the invoice.
     emu.billingPeriods.push({ id: 6002, start_date: '2026-10-01', end_date: '2026-10-31', due_date: '2026-11-10', status: 'open' });
@@ -1182,5 +1222,145 @@ describe('import and push', () => {
     expect(await outsider.db.select().from(integrations).where(eq(integrations.orgId, outsider.orgId))).toHaveLength(0);
     expect(await procoreStatus(w.db, w.owner)).toMatchObject({ connected: true, companyId: String(COMPANY.id) });
     expect(await listProcoreProjects(w.db, w.owner)).toHaveLength(2);
+  });
+
+  const invoicePosts = () => emu.requests.filter((r) => r.method === 'POST' && r.path === '/rest/v1.1/requisitions').length;
+  const invoiceLists = () => emu.requests.filter((r) => r.method === 'GET' && r.path === '/rest/v1.1/requisitions');
+  const transfersOf = (appId: string) => w.db.select().from(transfers).where(eq(transfers.payApplicationId, appId));
+  const auditOf = async (appId: string, action: string) => (await w.db.select().from(auditEvents).where(and(eq(auditEvents.payApplicationId, appId), eq(auditEvents.action, action))))[0];
+
+  it('records a lost answer as unknown, and sending again finds the invoice instead of creating a second one', async () => {
+    emu.billingPeriods.push({ id: 6004, start_date: '2026-12-01', end_date: '2026-12-31', due_date: '2027-01-10', status: 'open' });
+    const appId = await approved(3); // application #4, period to Dec 31, 2026
+    const posts = invoicePosts();
+    const invoices = emu.invoices.length;
+
+    // Procore creates the invoice, and the connection drops before its answer arrives.
+    emu.afterNextRequisition = 'drop';
+    const lost = await pushToProcore(w.db, w.controller, appId);
+    expect(lost).toEqual({
+      transferId: expect.stringMatching(/^trf_/),
+      status: 'unknown',
+      externalRef: null,
+      error: 'Procore did not answer the request that creates the invoice (the connection failed). Procore may have created the invoice. Sending again checks Procore first and will not create a second one.',
+      adopted: false,
+    });
+    expect(invoicePosts()).toBe(posts + 1);
+    expect(emu.invoices).toHaveLength(invoices + 1);
+    const created = emu.invoices.at(-1)!;
+    expect(created).toMatchObject({ invoice_number: '4', commitment_id: CONTRACT.electrical, period_id: 6004 });
+
+    // Recorded as what it is: not a success, and not a failure that created nothing.
+    let rows = await transfersOf(appId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: lost.transferId, kind: 'procore', status: 'unknown', externalRef: null, error: lost.error, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect((await appRow(w, appId)).transferStatus).toBe('failed');
+    const unanswered = await auditOf(appId, 'transfer.procore_unanswered');
+    expect(unanswered!.summary).toContain('Procore may have created the invoice');
+    expect(unanswered!.summary).not.toContain('Nothing was created');
+    expect(await auditOf(appId, 'transfer.procore_failed')).toBeUndefined();
+    const notices = await w.db.select().from(notifications).where(and(eq(notifications.orgId, w.orgId), eq(notifications.type, 'integration.failed'), eq(notifications.href, `/applications/${appId}`)));
+    expect(notices.map((n) => [n.userId, n.title])).toEqual([[w.owner.userId, 'Procore did not answer: Lone Star Electric, LLC application #4']]);
+    const warning = 'An earlier attempt to send this application got no answer from Procore, which may have created the invoice. Sending again checks Procore first and will not create a second one.';
+    expect(await canPushToProcore(w.db, w.controller, appId)).toEqual({ available: true, reason: null, warning });
+
+    // Someone also entered an invoice numbered 4 by hand: it can no longer be told which one the lost request created.
+    const byHand = emu.addInvoice({ invoice_number: ' 4 ', commitment_id: CONTRACT.electrical, period_id: 6004, status: 'draft' });
+    const ambiguous = await pushToProcore(w.db, w.controller, appId);
+    expect(ambiguous).toMatchObject({ status: 'failed', externalRef: null, adopted: false });
+    expect(ambiguous.error).toBe(
+      `Procore already has 2 invoices numbered 4 on subcontract HP-07 (invoices ${created.id}, ${byHand.id}). An earlier attempt from here got no answer, and it cannot be told which of them, if any, it created. ` +
+        'Nothing was sent. Remove or renumber the extra invoices in Procore, then send again.',
+    );
+    expect(invoicePosts()).toBe(posts + 1);
+    emu.invoices = emu.invoices.filter((i) => i !== byHand);
+
+    // Sending again lists the subcontract's invoices first, finds the one the lost request created, and records it.
+    const lists = invoiceLists().length;
+    const retry = await pushToProcore(w.db, w.controller, appId);
+    expect(retry).toEqual({ transferId: expect.stringMatching(/^trf_/), status: 'completed', externalRef: String(created.id), error: null, adopted: true });
+    expect(invoicePosts()).toBe(posts + 1);
+    expect(emu.invoices).toHaveLength(invoices + 1);
+    expect(invoiceLists()).toHaveLength(lists + 1);
+    expect(invoiceLists().at(-1)!.query).toMatchObject({ project_id: String(PROJECT), 'filters[commitment_id]': String(CONTRACT.electrical), per_page: '100' });
+
+    rows = await transfersOf(appId);
+    expect(rows.map((r) => r.status).sort()).toEqual(['completed', 'failed', 'unknown']);
+    expect(rows.find((r) => r.status === 'completed')).toMatchObject({ id: retry.transferId, externalRef: String(created.id) });
+    expect((await appRow(w, appId)).transferStatus).toBe('synced');
+    const adopted = await auditOf(appId, 'transfer.procore_adopted');
+    expect(adopted!.summary).toBe(
+      `An earlier attempt to send Lone Star Electric, LLC application #4 got no answer from Procore. Procore has one invoice numbered 4 on subcontract HP-07 (invoice ${created.id}), ` +
+        'so it was recorded as this application’s invoice and no second one was created. Check its lines in Procore.',
+    );
+    expect(await canPushToProcore(w.db, w.controller, appId)).toEqual({ available: false, reason: `This application was already sent to Procore (invoice ${created.id}).`, warning: null });
+  });
+
+  it('refuses to create an invoice whose number the subcontract already has in Procore', async () => {
+    emu.billingPeriods.push({ id: 6005, start_date: '2027-01-01', end_date: '2027-01-31', due_date: '2027-02-10', status: 'open' });
+    const appId = await approved(4); // application #5
+    // Someone entered invoice 5 on this subcontract in Procore by hand. Invoice 5 on another subcontract is not in the way.
+    const byHand = emu.addInvoice({ invoice_number: '5', commitment_id: CONTRACT.electrical, period_id: 6005, status: 'under_review' });
+    emu.addInvoice({ invoice_number: '5', commitment_id: CONTRACT.hvac, period_id: 6005, status: 'draft' });
+    const posts = invoicePosts();
+
+    const refused = await pushToProcore(w.db, w.controller, appId);
+    expect(refused).toEqual({
+      transferId: expect.stringMatching(/^trf_/),
+      status: 'failed',
+      externalRef: null,
+      error: `Procore already has an invoice numbered 5 on subcontract HP-07 (invoice ${byHand.id}). Nothing was sent. If that invoice is this application, it is already in Procore; if not, change its number in Procore and send again.`,
+      adopted: false,
+    });
+    expect(invoicePosts()).toBe(posts);
+    expect(await transfersOf(appId)).toMatchObject([{ status: 'failed', error: refused.error }]);
+    expect((await auditOf(appId, 'transfer.procore_failed'))!.summary).toContain('Nothing was created in Procore.');
+    expect(await canPushToProcore(w.db, w.controller, appId)).toEqual({ available: true, reason: null, warning: null });
+
+    // Renumbered in Procore. This time Procore creates the invoice but answers without its id.
+    byHand.invoice_number = '5-A';
+    emu.afterNextRequisition = 'no-id';
+    const noId = await pushToProcore(w.db, w.controller, appId);
+    expect(noId).toMatchObject({ status: 'unknown', externalRef: null, error: 'Procore accepted the request that creates the invoice but did not return its id. Procore may have created the invoice. Sending again checks Procore first and will not create a second one.' });
+    expect(invoicePosts()).toBe(posts + 1);
+    const created = emu.invoices.at(-1)!;
+
+    const retry = await pushToProcore(w.db, w.controller, appId);
+    expect(retry).toMatchObject({ status: 'completed', externalRef: String(created.id), adopted: true });
+    expect(invoicePosts()).toBe(posts + 1);
+  });
+
+  it('leaves alone a push another server is making, and finishes one a server never recorded', async () => {
+    emu.billingPeriods.push({ id: 6006, start_date: '2027-02-01', end_date: '2027-02-28', due_date: '2027-03-10', status: 'open' });
+    const appId = await approved(5); // application #6
+    const posts = invoicePosts();
+    const lists = invoiceLists().length;
+
+    // Another server has claimed this push and is talking to Procore.
+    await w.db.insert(transfers).values({ id: 'trf_other_server', orgId: w.orgId, payApplicationId: appId, kind: 'procore', status: 'sending', createdBy: w.controller.userId });
+    const busy = 'This application is being sent to Procore right now. Wait a moment and look again.';
+    expect(await canPushToProcore(w.db, w.controller, appId)).toEqual({ available: false, reason: busy, warning: null });
+    await expect(pushToProcore(w.db, w.controller, appId)).rejects.toThrow(busy);
+    expect(invoicePosts()).toBe(posts);
+    expect(invoiceLists()).toHaveLength(lists);
+    await w.db.delete(transfers).where(eq(transfers.id, 'trf_other_server'));
+
+    // A server sends the invoice, gets a server error back, and stops before it records anything: only its claim is left.
+    emu.afterNextRequisition = 'bad-gateway';
+    const first = await pushToProcore(w.db, w.controller, appId);
+    expect(first).toMatchObject({ status: 'unknown', error: expect.stringMatching(/^Procore answered the request that creates the invoice with a server error \(502\)\. Procore may have created the invoice\./) });
+    const created = emu.invoices.at(-1)!;
+    await w.db.update(transfers).set({ status: 'sending', error: null, createdAt: new Date(Date.now() - 10 * 60_000) }).where(eq(transfers.id, first.transferId));
+    expect(await canPushToProcore(w.db, w.controller, appId)).toMatchObject({ available: true, warning: expect.stringContaining('got no answer from Procore') });
+
+    const retry = await pushToProcore(w.db, w.controller, appId);
+    expect(retry).toMatchObject({ status: 'completed', externalRef: String(created.id), adopted: true });
+    expect(invoicePosts()).toBe(posts + 1);
+    const rows = await transfersOf(appId);
+    expect(rows.find((r) => r.id === first.transferId)).toMatchObject({
+      status: 'unknown',
+      error: 'The server sending this stopped before it recorded Procore’s answer. Procore may have created the invoice. Sending again checks Procore first and will not create a second one.',
+    });
+    expect(rows.find((r) => r.id === retry.transferId)).toMatchObject({ status: 'completed', externalRef: String(created.id) });
   });
 });

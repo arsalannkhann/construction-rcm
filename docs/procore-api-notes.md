@@ -222,7 +222,8 @@ The body as sent (verified field by field against R-REQ):
 | `invoice_number` is a string | Verified (R-REQ; REQTUT shows it returned as `"123"`) |
 | Commitments are invoiced `progressive` or `simplified`. On `simplified`, a new invoice keeps only the lines billed in the request, and a save that fails the cross-invoice totals returns 400 with per-line `errors.line_items` | Verified (R-REQ) |
 | Several invoices can exist for one commitment in one billing period | Verified (S-ONBEHALF) |
-| Whether Procore refuses a second invoice with the same `invoice_number` on one commitment | Could not verify (validation step 12). The push does not yet check for an existing invoice before creating one: see the known defect below |
+| Whether Procore refuses a second invoice with the same `invoice_number` on one commitment | Could not verify (validation step 12). The push does not rely on it: it lists the commitment's invoices and checks the number itself before creating one (see below) |
+| Whether the invoice list shows an invoice as soon as it has been created | Could not verify (validation step 12). Recovering from a lost answer depends on it |
 | Whether Procore accepts an invoice in a **closed** billing period | Could not verify |
 | Update and delete work only on the latest, open invoice | Verified (REQTUT) |
 | Retainage fields (`work_completed_retainage_retained_this_period` and others) are for Admin users | Verified (R-REQ) |
@@ -264,19 +265,40 @@ the Directory.
 - The push sends the **approved line items** (work this period, materials
   presently stored) as a `draft` invoice. Procore computes its own totals and
   retainage. We send no retainage amounts and no status other than `draft`.
-- **Duplicate invoices: not yet prevented (known defect).** The create request
-  is never resent automatically (the client repeats only GETs), and once a push
-  has succeeded the app refuses to send that application again. But the push
-  does **not** list the commitment's invoices before creating one. If the create
-  times out, loses its connection or gets a 5xx, the push is recorded as failed
-  with the summary "Nothing was created in Procore", which may be untrue, and a
-  person can send it again, which may create a second invoice. The intended
-  design, not yet built: before creating, list the commitment's invoices
-  (`GET /rest/v1.1/requisitions?project_id=&filters[commitment_id]=`) and look
-  for one whose `invoice_number` equals the application number; adopt it after
-  an earlier attempt from this app whose outcome was unknown, and otherwise
-  refuse and name it. `outcomeUnknown()` in `client.ts` already tells those
-  failures apart. Whether Procore itself refuses a repeated `invoice_number` is
-  unverified (validation step 12).
+- **One invoice per application, even when an answer is lost.** The create
+  request is never resent automatically (the client repeats only GETs). Each
+  push (`src/server/integrations/procore/push.ts`):
+  1. **claims** the application with a `transfers` row in status `sending`,
+     written under the organisation lock, so no other request on any server
+     can push the same application while the claim is fresh (6 minutes, longer
+     than a server function may run);
+  2. **lists the commitment's invoices**
+     (`GET /rest/v1.1/requisitions?project_id=&filters[commitment_id]=&per_page=100`,
+     every page) and looks for one whose `invoice_number` equals the
+     application number;
+  3. if there is one, **refuses** and names it, unless an earlier attempt from
+     here sent exactly the same request (same SHA-256, stored on its row
+     before it went out) and got no answer, and that is the only match: then
+     it **adopts** that invoice, records it as this application's, and says so
+     in the audit log ("no second one was created. Check its lines in
+     Procore");
+  4. otherwise **creates** the invoice, once.
+
+  The outcome is recorded as it is: `completed` with the invoice id, `failed`
+  when nothing was created ("Nothing was created in Procore"), or `unknown`
+  when the request went out and no usable answer came back (a timeout, a
+  dropped connection, a 5xx or 503, a 2xx without an id or with an unreadable
+  body; `outcomeUnknown()` in `client.ts`). `unknown` says Procore may have
+  created the invoice and that sending again checks first. A claim left in
+  `sending` by a server that stopped is treated as `unknown` once it is stale.
+  All of this is tested against the emulator (`tests/procore.test.ts`), not
+  against Procore. The adoption rests on two facts the documentation gives
+  (the list endpoint, its `invoice_number` and `commitment_id` fields) and on
+  one that is unverified: that the list reflects a just-created invoice
+  straight away. Whether Procore itself refuses a repeated `invoice_number` is
+  unverified (validation step 12); the push does not depend on it. A Procore
+  user who may create invoices but not list them now gets Procore's refusal of
+  the list, and nothing is created: the push does not create an invoice it
+  could not first look for.
 - A push is possible only for contracts imported from Procore, because only those
   carry Procore line ids. Billing on change-order lines is not pushed yet.

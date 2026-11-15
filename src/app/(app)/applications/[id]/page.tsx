@@ -28,7 +28,7 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
   }
 
   const status = await procoreStatus(db, ctx);
-  const push = data.app.status === 'approved' ? await canPushToProcore(db, ctx, id) : { available: false, reason: null };
+  const push = data.app.status === 'approved' ? await canPushToProcore(db, ctx, id) : { available: false, reason: null, warning: null };
 
   return (
     <ReviewWorkspace
@@ -45,7 +45,7 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
       extras={{
         me: { id: ctx.userId, name: ctx.userName },
         emailConfigured: emailConfig().configured,
-        procore: { configured: status.configured, connected: status.connected, available: push.available, reason: push.reason },
+        procore: { configured: status.configured, connected: status.connected, available: push.available, reason: push.reason, warning: push.warning },
       }}
     />
   );

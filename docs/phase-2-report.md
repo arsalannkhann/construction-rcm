@@ -4,6 +4,9 @@ Written on 2026-11-15. Covers the work from the Phase 1 MVP (commit `d7eedb0`)
 to `main` at `21eac45`, plus the commit that adds this report: 40 commits, six
 merged pull requests, about 36,000 lines added across 173 files. Times are UTC.
 
+Updated on 2026-11-16: the Procore duplicate-invoice defect found while writing
+this report (issue 12) has been fixed. The statements about it below say so.
+
 ## Where it stands
 
 Construction RCM now runs as a hosted service on real infrastructure:
@@ -24,7 +27,8 @@ Four things stand between the two:
 2. **Procore, AI reading and email have never been run against the real
    services.** No credentials exist for them. Each is optional, the product works
    end to end without them, and the interface says when one is not configured.
-   The Procore push also has a known duplicate-invoice defect (section 7).
+   A duplicate-invoice defect in the Procore push, found while writing this
+   report, has since been fixed and tested against the emulator (issue 12).
 3. **Hosting is on free plans.** Vercel Hobby is for non-commercial use, and
    Supabase Free pauses idle projects and does not offer downloadable backups.
    Upgrading is a purchasing decision for the account owner.
@@ -61,7 +65,7 @@ The issues that mattered most, by customer impact and financial risk:
 | 9 | Medium | **The Procore notes were wrong in several places.** Procore sends no `Retry-After` on a 429. A refresh spends the refresh token even when its answer is lost. Revoke works differently from what the notes said, the vendor shape was wrong, and statuses and page limits were missing. Two concurrent token renewals could break the connection, and writes could be retried. | A connected Procore would fail in ways the emulator could not show. |
 | 10 | Medium | **Strangers could keep an account locked by guessing wrong passwords.** The throttle also trusted a client-supplied `X-Forwarded-For` entry. Low: unlimited sign-ups per address, two-step setup without the password, and recovery codes stored as plain SHA-256. | Denial of access; a throttle that could be bypassed. |
 | 11 | Medium | **Removing a file from a package existed only on the server.** The interface never called it. | A wrong file in a package, or a package read while the reader was broken, could only be voided and uploaded again. |
-| 12 | Medium | **The Procore push can create a duplicate invoice** after a lost response, and the notes claimed a check that does not exist (found while writing this report; section 7). | A second draft invoice in Procore. Procore is configured nowhere yet. |
+| 12 | Medium | **The Procore push could create a duplicate invoice** after a lost response, and the notes claimed a check that did not exist (found while writing this report). **Fixed on 2026-11-16** (section 2, Procore). | A second draft invoice in Procore. Procore is configured nowhere yet. |
 
 ## 2. What changed, and why
 
@@ -216,6 +220,14 @@ printed total and no AI output is used as the result of a calculation.
 - **Token renewal** happens once at a time across servers, and the new pair is
   stored before it is used. A renewal that gets no answer is not mistaken for a
   lost connection.
+- **One invoice per application** (added on 2026-11-16, after this report was
+  first written). A push claims the application in the database, so no other
+  server can push it at the same time. It lists the subcontract's invoices
+  before creating one and refuses when the number is already there. A create
+  request that gets no usable answer is recorded as "no answer", not "failed",
+  and sending again adopts the invoice that request created instead of making
+  a second. Tested against the emulator, including a dropped connection, a 502,
+  an answer without an id and a server that stopped mid-push.
 - [procore-validation.md](procore-validation.md) is the exact sandbox
   procedure, added with this report.
 
@@ -277,7 +289,7 @@ No construction-lien attorney has reviewed the rules.
 | Stepped retainage, releases, change orders, prior billing, resubmissions, partial approval, amendments, duplicate periods, rounding, concurrent reviews | **Resolved**, as listed in section 2. Other contract terms are flagged for a person. Final-payment and retainage-release billing workflows remain future work. |
 | Extraction reliability | **Partly.** Safe on the synthetic corpus (declines instead of guessing); accuracy on real documents unmeasured. |
 | Lien waivers distinguish completeness from legal determination | **Resolved** (unchanged from Phase 1). |
-| Procore checked against official documentation | **Partly.** The notes were verified and the client hardened, but nothing has run against a Procore account, and the duplicate-invoice defect is open. |
+| Procore checked against official documentation | **Partly.** The notes were verified and the client hardened, but nothing has run against a Procore account. The duplicate-invoice defect found while writing this report was fixed on 2026-11-16, against the emulator. |
 | Email: no duplicates, no unauthorised submissions, no misleading messages | **Resolved** in code and tests. Never run with a real provider. |
 | Onboarding without the demo workspace; demo data kept separate | **Resolved.** The demo is its own organisation, flagged and deletable, and the onboarding steps are in `operations.md`. |
 | Deployable, monitorable, recoverable by a small team | **Partly.** Deployment is done and documented. Monitoring and backups still have to be set up (section 8). |
@@ -322,6 +334,10 @@ Run on 2026-11-15 at `21eac45`, Node 22.22.0:
 | Synthetic extraction gate (inside `pnpm test`) | 0 confidently wrong values; floors held |
 | Production deployment of `21eac45` | Ready. `/api/health`: `ok`, TLS verified, Data API locked, `pdfReader.ok: true` |
 
+After the duplicate-invoice fix on 2026-11-16 (three new Procore tests):
+`pnpm test` 429 passed, 3 skipped; `pnpm test:pg` 432 passed; typecheck clean;
+build succeeds.
+
 The production database is PostgreSQL 17 (Supabase). The suite runs on PGlite
 and on 18.6, not on 17; everything run live so far has worked on 17.
 
@@ -350,7 +366,7 @@ directly against hand-computed figures.
 |---|---|---|
 | **Real-document accuracy is unmeasured.** | Run the pilot protocol: double-key the first packages and measure with `pnpm eval:extraction --set real`. Nothing is paid on the reader alone meanwhile. | Needs customer documents |
 | **Scans and photos cannot be read** without AI. The text reader declines them and they are keyed by hand. | An `ANTHROPIC_API_KEY` (paid). Then measure it the same way. | Owner (paid service) |
-| **Procore push can create a duplicate invoice** after a lost response: it records "failed", says nothing was created, and can be sent again. | Implement the documented check (list the subcontract's invoices first, adopt or refuse), with emulator tests, then run [procore-validation.md](procore-validation.md). Until then, check Procore before re-sending a failed push. | Engineering; a Procore developer account |
+| **The duplicate-invoice check assumes Procore lists a new invoice straight away.** If its list lags, a retry soon after a lost answer could miss the invoice. (The duplicate-invoice defect itself was fixed on 2026-11-16.) | Step 12 of [procore-validation.md](procore-validation.md) measures it. | A Procore developer account |
 | **Procore has never run against Procore.** | The sandbox procedure. | A Procore developer account |
 | **Email is not set up.** Invitations and reset links are shown to copy, and messages stay drafts. | Resend key and a verified sending domain; an inbound provider and `INBOUND_EMAIL_SECRET`. On Vercel, inbound messages over 4.5 MB are refused. | Owner (provider accounts) |
 | **Free hosting plans.** Vercel Hobby is non-commercial and allows only a daily schedule. Supabase Free: 500 MB (19 MB used), paused after a week of low activity, backups not downloadable. | Vercel Pro and a paid Supabase plan before a customer's real billing. | Owner (purchasing) |
@@ -378,8 +394,8 @@ where things stand.
 3. Whether to set up **Resend** (invitations, messages, password-reset email)
    and an **inbound email provider**.
 4. **Procore:** leave it unconfigured for the first pilot unless the customer
-   needs it. If they do, the duplicate-invoice fix and the sandbox validation
-   come first.
+   needs it. If they do, the sandbox validation
+   ([procore-validation.md](procore-validation.md)) comes first.
 
 ### B. Before the customer signs in
 

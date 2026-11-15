@@ -453,8 +453,11 @@ Organisations are separated from each other by the application, not by RLS.
   and returns transcribed text; our code parses and grounds it.
 - **Procore** (`src/server/integrations/procore`): OAuth with one token renewal
   at a time across processes, import of projects and subcontracts, push of an
-  approved application's contract line items. Built from the public API
-  documentation ([docs/procore-api-notes.md](docs/procore-api-notes.md)).
+  approved application's contract line items. A push claims the application
+  first, lists the subcontract's invoices before creating one, and records a
+  lost answer as "no answer" rather than "failed", so sending again cannot make
+  a second invoice. Built from the public API documentation
+  ([docs/procore-api-notes.md](docs/procore-api-notes.md)).
 - **Resend**: invitations and messages to subcontractors. Without a key they
   are saved and labelled "not sent".
 - **Inbound email** (`/api/inbound/email/:token`): a provider posts a received
@@ -556,12 +559,12 @@ its documented API.
 
 ## What is and is not verified
 
-Status on 2026-11-15, `main`. The phase as a whole is summarised in
+Status on 2026-11-16, `main`. The phase as a whole is summarised in
 [docs/phase-2-report.md](docs/phase-2-report.md).
 
-**Verified by automated tests.** `pnpm test`: 426 passed, 3 skipped (the
+**Verified by automated tests.** `pnpm test`: 429 passed, 3 skipped (the
 skipped tests need a PostgreSQL server). `pnpm test:pg` on PostgreSQL 18.6:
-429 passed. `pnpm typecheck` is clean and `pnpm build` succeeds, on Node 22.
+432 passed. `pnpm typecheck` is clean and `pnpm build` succeeds, on Node 22.
 Covered:
 
 - Money parsing and rounding; every reconciliation check, including stepped
@@ -593,8 +596,9 @@ Covered:
   order, retried parts, missing parts refused, parts invisible to other members
   and organisations, expiry) (`tests/serverless.test.ts`).
 - The AI engine's parsing, grounding and failure handling, with a **stubbed**
-  client. The Procore client, OAuth renewal and push, against a **local
-  emulator** of the documented API.
+  client. The Procore client, OAuth renewal and push, including a create
+  request whose answer is lost and a retry that finds the invoice instead of
+  creating a second one, against a **local emulator** of the documented API.
 
 **Verified by hand in a browser**, on the embedded database: the Phase 1
 workflow (sign-up, demo workspace, queue, upload, review with evidence
@@ -628,7 +632,7 @@ were not available:**
 | Two-step, rejection and the schedule on the live site | Two-step verification and rejecting an application have not been run on the live deployment. The daily scheduled run has not been seen to fire. |
 | Claude reading real documents | Never called live (no API key). Accuracy on real pay applications is unmeasured. |
 | Real subcontractor documents | None available. The evaluation harness is ready (`pnpm eval:extraction`, `eval/real/README.md`); scores on the synthetic corpus are a regression signal only. How to measure it, the synthetic results and a pilot protocol: [docs/extraction-evaluation.md](docs/extraction-evaluation.md). |
-| Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`); the sandbox procedure is [docs/procore-validation.md](docs/procore-validation.md). Known defect: a push whose answer is lost is recorded as failed and can be sent again, which may create a second draft invoice. |
+| Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`) and tested against an emulator of it; the sandbox procedure is [docs/procore-validation.md](docs/procore-validation.md). The duplicate-invoice check assumes Procore lists a new invoice straight away (validation step 12). |
 | Outbound email (Resend) | Never sent. |
 | Inbound email | The webhook logic is tested; no provider has been pointed at it. |
 
@@ -660,9 +664,9 @@ were not available:**
   request limit; browser uploads are not limited this way.
 - **Procore push** covers contract line items on subcontracts imported from
   Procore. It does not push change-order billing or unit-price contracts, and
-  needs an existing Procore billing period. It does not yet check Procore for
-  an existing invoice before creating one, so after a push whose answer was
-  lost, look in Procore before sending again.
+  needs an existing Procore billing period. It refuses when the subcontract
+  already has an invoice with the application's number, and there is no button
+  to link an application to an invoice someone entered in Procore by hand.
 - **Payments are not tracked**, so "unconditional waiver for the previous
   payment" is a policy check, not a check against a payment.
 - **CSV export is generic**, not an import file for a specific accounting system.

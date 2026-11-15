@@ -76,12 +76,12 @@ export class ProcoreApiError extends Error {
 
 /**
  * Whether a failed write may still have been carried out by Procore. True for a
- * timeout, a dropped connection, a 5xx, or a 503 throttle. False for a definite
- * refusal (4xx, 429).
+ * timeout, a dropped connection, a 5xx, a 503 throttle, or a success whose body
+ * could not be read. False for a definite refusal (4xx, 429).
  */
 export function outcomeUnknown(err: unknown): boolean {
   if (err instanceof ProcoreRateLimitError) return err.status !== 429;
-  if (err instanceof ProcoreApiError) return err.status === 0 || err.status >= 500;
+  if (err instanceof ProcoreApiError) return err.status === 0 || (err.status >= 200 && err.status < 300) || err.status >= 500;
   return false;
 }
 

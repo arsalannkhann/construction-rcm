@@ -243,6 +243,10 @@ export default async function IntegrationsSettingsPage({ searchParams }: { searc
               <Strong>Needs an existing billing period:</Strong> one in Procore that covers the application’s period-to date. It does not create billing periods; if none covers the date, the push fails and says so.
             </li>
             <li>
+              <Strong>Creates one invoice per application:</Strong> before creating it, it looks at the subcontract’s invoices in Procore and stops if one already has the application’s number. If Procore does not answer, the push is marked
+              “no answer”, not failed; sending again finds the invoice that request created instead of making a second.
+            </li>
+            <li>
               <Strong>Does not yet push change-order billing:</Strong> an application that bills against a change-order line this period is exported by file instead.
             </li>
             <li>
