@@ -17,6 +17,7 @@ import { DEVICE_COOKIE, DEVICE_COOKIE_DAYS, parseDeviceCookie, rememberDevice } 
 import type { Ctx } from './permissions';
 import { requestMetaFrom } from './request-meta';
 
+/** next.config.ts sends visitors without this cookie to the public website at `/`; keep the two names the same. */
 const COOKIE = 'rcm_session';
 /** Set between a correct password and a correct second-step code. */
 const CHALLENGE_COOKIE = 'rcm_login';
