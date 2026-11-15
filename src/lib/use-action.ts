@@ -29,6 +29,8 @@ export function useAction() {
         }
         if (!result.ok) {
           toast.error(result.error);
+          // Someone else changed the record: show what it looks like now.
+          if (result.conflict) router.refresh();
           return;
         }
         if (options.success) toast.success(typeof options.success === 'function' ? options.success(result.data) : options.success);

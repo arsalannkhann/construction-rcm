@@ -1,14 +1,21 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/db';
-import { InboundRejected, parseInboundJson, parseInboundMime, receiveInboundEmail } from '@/server/services/inbound';
+import { InboundRejected, parseInboundJson, parseInboundMime, presentedSecret, receiveInboundEmail } from '@/server/services/inbound';
 
 const MAX_BYTES = 40 * 1024 * 1024;
 
-/** Webhook for an inbound-email provider. Authenticated by the intake token in the path plus a shared secret. */
+/**
+ * Webhook for an inbound-email provider. Authenticated by the intake token in
+ * the path plus a shared secret. A message that is delivered correctly but is
+ * not usable (a duplicate, no attachments, an unknown sender under the strict
+ * policy) is answered with 200 and what happened to it, so the provider does
+ * not retry; only a delivery problem gets an error status.
+ */
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }) {
   try {
     const { token } = await params;
-    const secret = new URL(request.url).searchParams.get('secret') ?? request.headers.get('x-inbound-secret');
+    const declared = Number(request.headers.get('content-length') ?? '0');
+    if (declared > MAX_BYTES) return NextResponse.json({ error: 'Message too large.' }, { status: 413 });
     const raw = new Uint8Array(await request.arrayBuffer());
     if (raw.byteLength > MAX_BYTES) return NextResponse.json({ error: 'Message too large.' }, { status: 413 });
     const type = request.headers.get('content-type') ?? '';
@@ -24,7 +31,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
     } else {
       message = await parseInboundMime(raw);
     }
-    const result = await receiveInboundEmail(await getDb(), token, secret, message);
+    const result = await receiveInboundEmail(await getDb(), token, presentedSecret(request), message);
     return NextResponse.json(result);
   } catch (err) {
     if (err instanceof InboundRejected) return NextResponse.json({ error: err.message }, { status: err.status });

@@ -23,6 +23,7 @@ import type {
   FindingData,
   FindingRefs,
   OrgSettings,
+  RetainageTerms,
   Severity,
   Tri,
   VerifiedHeader,
@@ -74,7 +75,11 @@ export type ReconInput = {
   today: string;
   project: { name: string; state: string | null };
   subcontractor: { name: string };
-  contract: { number: string; originalAmount: number; retainageWorkBps: number; retainageStoredBps: number };
+  contract: { number: string; originalAmount: number; retainageWorkBps: number; retainageStoredBps: number; retainageTerms?: RetainageTerms | null };
+  /** Retainage releases recorded on the contract that are in force (not void). */
+  retainageReleases?: Array<{ id: string; amount: number; effectiveOn: string; note: string | null }>;
+  /** How the package arrived. Only email carries a sender to vouch for. */
+  intake?: { via: 'upload' | 'email'; senderEmail: string | null; sender: 'contact' | 'domain' | 'team' | 'unknown' };
   changeOrders: Array<{ id: string; number: string; title: string; amount: number; status: string }>;
   sov: Array<{ id: string; itemNo: string; description: string; scheduledValue: number }>;
   prior: ReconPrior | null;
@@ -142,6 +147,97 @@ export type ReconOutput = {
 
 const OPEN_SIBLING = new Set(['processing', 'needs_matching', 'needs_review', 'pending_approval', 'on_hold']);
 
+// ── Retainage ───────────────────────────────────────────────────────────────
+
+export type RetainageResult = {
+  work: number;
+  stored: number;
+  total: number;
+  /** Portion of recorded releases that was applied (never more than there is to release). */
+  released: number;
+  /** How the figure was arrived at, in words. */
+  basis: string;
+  /** True when the contract's terms or a release change the answer from the flat rate. */
+  special: boolean;
+};
+
+/**
+ * Retainage to hold on a given amount of completed work and stored material.
+ *
+ *   flat          base rate × completed work
+ *   future_work   base rate up to the threshold, the reduced rate on work beyond it
+ *   all_work      base rate until the threshold is reached, then the reduced rate on everything
+ *
+ * The threshold is a share of the contract sum to date, measured on completed
+ * work (not stored material), so the answer depends only on the totals and not
+ * on the order in which the work was billed. Releases come off last and can
+ * never take retainage below zero.
+ */
+export function computeRetainage(args: {
+  work: number;
+  stored: number;
+  contractSum: number;
+  workBps: number;
+  storedBps: number;
+  terms?: RetainageTerms | null;
+  released?: number;
+}): RetainageResult {
+  const { work, stored, contractSum, workBps, storedBps } = args;
+  const reduction = args.terms?.reduction ?? null;
+  const $ = (n: number) => formatMoney(n);
+  let onWork: number;
+  let basis: string;
+  if (!reduction || work <= 0) {
+    onWork = applyBps(work, workBps);
+    basis = `${formatBps(workBps)} of completed work (${$(work)})`;
+  } else {
+    const threshold = applyBps(contractSum, reduction.atPercentBps);
+    const at = `${formatBps(reduction.atPercentBps)} of the contract sum (${$(threshold)})`;
+    if (reduction.appliesTo === 'future_work') {
+      const below = Math.min(work, threshold);
+      const beyond = Math.max(work - threshold, 0);
+      onWork = applyBps(below, workBps) + applyBps(beyond, reduction.toBps);
+      basis =
+        beyond > 0
+          ? `${formatBps(workBps)} of completed work up to ${at}, plus ${formatBps(reduction.toBps)} of the ${$(beyond)} beyond it`
+          : `${formatBps(workBps)} of completed work (${$(work)}); the rate changes to ${formatBps(reduction.toBps)} for work beyond ${at}`;
+    } else if (work >= threshold) {
+      onWork = applyBps(work, reduction.toBps);
+      basis = `${formatBps(reduction.toBps)} of completed work (${$(work)}), the reduced rate that applies once ${at} is complete`;
+    } else {
+      onWork = applyBps(work, workBps);
+      basis = `${formatBps(workBps)} of completed work (${$(work)}); the rate drops to ${formatBps(reduction.toBps)} on all work once ${at} is complete`;
+    }
+  }
+  const onStored = applyBps(stored, storedBps);
+  if (stored !== 0 || storedBps !== workBps) basis += ` plus ${formatBps(storedBps)} of stored material (${$(stored)})`;
+
+  const gross = onWork + onStored;
+  const released = Math.min(Math.max(args.released ?? 0, 0), Math.max(gross, 0));
+  if (released > 0) basis += `, less ${$(released)} released`;
+  // A release comes out of retainage on completed work first.
+  const workAfter = Math.max(onWork - released, 0);
+  const total = gross - released;
+  return { work: workAfter, stored: total - workAfter, total, released, basis, special: !!reduction || released > 0 };
+}
+
+/** Split `total` across `weights` in proportion, in whole cents, so the parts add up exactly. */
+export function allocate(total: number, weights: number[]): number[] {
+  const whole = sum(weights);
+  if (whole === 0 || total === 0) return weights.map(() => 0);
+  const exact = weights.map((w) => (total * w) / whole);
+  const parts = exact.map((x) => Math.trunc(x));
+  let remainder = total - sum(parts);
+  const step = remainder >= 0 ? 1 : -1;
+  // Hand the leftover cents to the parts that lost the most to truncation.
+  const order = exact.map((x, i) => ({ i, lost: Math.abs(x - Math.trunc(x)) })).sort((a, b) => b.lost - a.lost || a.i - b.i);
+  for (let k = 0; remainder !== 0; k = (k + 1) % order.length) {
+    parts[order[k]!.i]! += step;
+    remainder -= step;
+  }
+  return parts;
+}
+
 // ── Engine ──────────────────────────────────────────────────────────────────
 
 export function reconcile(input: ReconInput): ReconOutput {
@@ -192,10 +288,21 @@ export function reconcile(input: ReconInput): ReconOutput {
   const workToDate = sum(verifiedLines.map((l) => l.previous + l.thisPeriod));
   const storedToDate = sum(verifiedLines.map((l) => l.stored));
   const totalCompletedStored = workToDate + storedToDate;
+  // A release counts from the period it takes effect in. With no period read yet, count them all.
+  const releasesInForce = (input.retainageReleases ?? []).filter((r) => !app.periodTo || r.effectiveOn <= app.periodTo);
+  const releasedToDate = sum(releasesInForce.map((r) => r.amount));
+  const retainageFor = (work: number, stored: number) =>
+    computeRetainage({ work, stored, contractSum: contractSumToDate, workBps: contract.retainageWorkBps, storedBps: contract.retainageStoredBps, terms: contract.retainageTerms, released: releasedToDate });
   // Retainage is computed on the totals (as the G702 does), not summed from per-line rounding.
-  const retainageWork = applyBps(workToDate, contract.retainageWorkBps);
-  const retainageStored = applyBps(storedToDate, contract.retainageStoredBps);
-  const retainageTotal = retainageWork + retainageStored;
+  const held = retainageFor(workToDate, storedToDate);
+  const retainageWork = held.work;
+  const retainageStored = held.stored;
+  const retainageTotal = held.total;
+  if (held.special) {
+    // With a stepped rate or a release there is no per-line rate; share the total out in proportion.
+    const shares = allocate(retainageTotal, verifiedLines.map((l) => l.retainage));
+    verifiedLines.forEach((l, i) => (l.retainage = shares[i]!));
+  }
   const totalEarnedLessRetainage = totalCompletedStored - retainageTotal;
   const lessPreviousCertificates = prior?.totalEarnedLessRetainage ?? 0;
   const currentPaymentDue = totalEarnedLessRetainage - lessPreviousCertificates;
@@ -214,6 +321,8 @@ export function reconcile(input: ReconInput): ReconOutput {
     balanceToFinish: contractSumToDate - totalEarnedLessRetainage,
     priorApplicationNumber: prior?.applicationNumber ?? null,
     excludedLines: unmatched.length,
+    retainageReleased: held.released,
+    retainageBasis: held.basis,
   };
 
   // The subcontractor reports earlier billing but we hold no history for this contract.
@@ -225,6 +334,24 @@ export function reconcile(input: ReconInput): ReconOutput {
   const segments = input.documents.flatMap((d) => d.segments.map((s) => ({ ...s, documentId: d.id })));
   const hasType = (t: DocumentSegment['type']) => segments.some((s) => s.type === t);
   const firstOf = (t: DocumentSegment['type']) => segments.find((s) => s.type === t);
+
+  // A package that arrived by email is only as trustworthy as its sender.
+  if (input.intake?.via === 'email') {
+    const { senderEmail, sender } = input.intake;
+    const known = sender !== 'unknown';
+    checks.push({
+      code: 'intake.sender',
+      subjectKey: '',
+      category: 'documents',
+      severity: 'blocking',
+      outcome: known ? 'pass' : 'fail',
+      title: known ? 'Sent from a known address' : 'Sent from an address that is not on file',
+      detail: known
+        ? `Received by email from ${senderEmail}, ${sender === 'contact' ? `the contact address on file for ${input.subcontractor.name}` : sender === 'domain' ? `which is on the same email domain as the contact on file for ${input.subcontractor.name}` : 'a member of your team'}.`
+        : `This package arrived by email from ${senderEmail ?? 'an unknown address'}, which is not the contact on file for ${input.subcontractor.name} and is not anyone on your team. Anyone who knows the intake address can send to it, and a sender address can be forged.`,
+      action: known ? undefined : `Confirm with ${input.subcontractor.name} that they sent it. If the address is theirs, add it to the subcontractor’s record and this clears by itself.`,
+    });
+  }
 
   const payAppSeg = firstOf('pay_application');
   checks.push(
@@ -834,7 +961,10 @@ export function reconcile(input: ReconInput): ReconOutput {
         });
       }
 
-      if (v.total > s.scheduledValue + tol) {
+      // A deduct (negative scheduled value, e.g. a deductive change order) is billed as a credit:
+      // the valid range runs from the scheduled value up to zero, the mirror image of a normal line.
+      const deduct = s.scheduledValue < 0;
+      if (!deduct && v.total > s.scheduledValue + tol) {
         over++;
         checks.push({
           code: 'sov.overbilled',
@@ -848,9 +978,26 @@ export function reconcile(input: ReconInput): ReconOutput {
           data: { expected: s.scheduledValue, actual: v.total, delta: v.total - s.scheduledValue },
           refs: { lineId: line.id, sovLineId: s.id, tab: 'lines' },
         });
+      } else if (deduct && (v.total < s.scheduledValue - tol || v.total > tol)) {
+        over++;
+        const tooMuchCredit = v.total < s.scheduledValue - tol;
+        checks.push({
+          code: 'sov.overbilled',
+          subjectKey: line.id,
+          category: 'schedule',
+          severity: 'blocking',
+          outcome: 'fail',
+          title: tooMuchCredit ? `${lineLabel(line)}: more credit taken than the deduct allows` : `${lineLabel(line)}: a deduct is billed as a charge`,
+          detail: tooMuchCredit
+            ? `This line is a deduct of ${$(s.scheduledValue)}. Credit to date would be ${$(v.total)}, ${$(s.scheduledValue - v.total)} more than the deduct.`
+            : `This line is a deduct of ${$(s.scheduledValue)}, so it can only reduce the billing. The application shows ${$(v.total)} billed against it.`,
+          action: 'Check the sign and the amount on this line against the change order.',
+          data: { expected: s.scheduledValue, actual: v.total, delta: v.total - s.scheduledValue },
+          refs: { lineId: line.id, sovLineId: s.id, tab: 'lines' },
+        });
       }
 
-      if ((line.thisPeriod ?? 0) < 0 || (line.stored ?? 0) < 0) {
+      if (!deduct && ((line.thisPeriod ?? 0) < 0 || (line.stored ?? 0) < 0)) {
         checks.push({
           code: 'sov.negative_billing',
           subjectKey: line.id,
@@ -1011,15 +1158,11 @@ export function reconcile(input: ReconInput): ReconOutput {
     // it in here would make a correctly calculated retainage look wrong.
     const basisWork = workToDate + sum(unmatched.map((l) => (l.previous ?? 0) + (l.thisPeriod ?? 0)));
     const basisStored = storedToDate + sum(unmatched.map((l) => l.stored ?? 0));
-    const expectedRetainage = unmatched.length > 0 ? applyBps(basisWork, contract.retainageWorkBps) + applyBps(basisStored, contract.retainageStoredBps) : retainageTotal;
+    const expected = unmatched.length > 0 ? retainageFor(basisWork, basisStored) : held;
+    const expectedRetainage = expected.total;
     const ok = near(claimedRetainage, expectedRetainage);
     const delta = claimedRetainage - expectedRetainage;
-    const basis =
-      `${formatBps(contract.retainageWorkBps)} of completed work (${$(basisWork)})` +
-      (basisStored !== 0 || contract.retainageStoredBps !== contract.retainageWorkBps
-        ? ` plus ${formatBps(contract.retainageStoredBps)} of stored material (${$(basisStored)})`
-        : '') +
-      (unmatched.length > 0 ? ', counting the lines that are not on the contract' : '');
+    const basis = expected.basis + (unmatched.length > 0 ? ', counting the lines that are not on the contract' : '');
     checks.push({
       code: 'ret.amount',
       subjectKey: '',
@@ -1030,21 +1173,29 @@ export function reconcile(input: ReconInput): ReconOutput {
       detail: ok
         ? `${$(expectedRetainage)} — ${basis}.`
         : `The contract requires ${basis} = ${$(expectedRetainage)}. The application withholds ${$(claimedRetainage)}, ${$(Math.abs(delta))} ${delta < 0 ? 'short. Under-withholding releases money the contract says to hold back.' : 'more than required.'}`,
-      action: ok ? undefined : 'The verified payment applies the contract rate. If a retainage reduction has been agreed, update the contract terms first.',
+      action: ok ? undefined : 'The verified payment applies the contract’s terms. If a reduced rate or a release of retainage has been agreed, record it on the contract first; this then clears by itself.',
       data: { expected: expectedRetainage, actual: claimedRetainage, delta },
       refs: { field: 'retainageTotal', tab: 'summary' },
     });
 
     if (prior?.retainageTotal != null && claimedRetainage < prior.retainageTotal - tol) {
+      // Retainage going down means previously withheld money is being billed. That is fine when the
+      // contract's own terms or a recorded release account for it, and a red flag when nothing does.
+      const authorised = prior.retainageTotal - expectedRetainage; // how far the contract lets it fall
+      const billed = prior.retainageTotal - claimedRetainage;
+      const explained = authorised > 0 && billed <= authorised + tol;
       checks.push({
         code: 'ret.release',
         subjectKey: '',
         category: 'retainage',
         severity: 'warning',
-        outcome: 'fail',
-        title: 'Retainage held would go down',
-        detail: `Retainage was ${$(prior.retainageTotal)} after the last approved application and is ${$(claimedRetainage)} on this one. That bills ${$(prior.retainageTotal - claimedRetainage)} of previously withheld retainage.`,
-        action: 'Confirm a retainage release was authorised before approving.',
+        outcome: explained ? 'pass' : 'fail',
+        title: explained ? 'Retainage released per the contract' : 'Retainage held would go down',
+        detail: explained
+          ? `Retainage goes from ${$(prior.retainageTotal)} after the last approved application to ${$(claimedRetainage)}, paying out ${$(billed)}. The contract’s retainage terms and recorded releases allow up to ${$(authorised)}.`
+          : `Retainage was ${$(prior.retainageTotal)} after the last approved application and is ${$(claimedRetainage)} on this one. That bills ${$(billed)} of previously withheld retainage` +
+            (authorised > 0 ? `, but the contract’s terms and recorded releases only account for ${$(authorised)}.` : ', and no release or reduced rate is recorded on the contract.'),
+        action: explained ? undefined : 'Confirm a release was authorised. If it was, record it on the contract; the verified payment then includes it.',
         data: { expected: prior.retainageTotal, actual: claimedRetainage, delta: claimedRetainage - prior.retainageTotal },
         refs: { field: 'retainageTotal', tab: 'summary' },
       });

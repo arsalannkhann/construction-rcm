@@ -5,10 +5,12 @@ import { PermissionError } from '@/server/auth/permissions';
 import { readPdfText } from '@/server/documents/pdf-text';
 import { renderPackage } from '@/server/samples/pdf';
 import { createBatchExport, createExport, getTransferFile, listAwaitingTransfer, renderLineCsv, renderSummaryCsv } from '@/server/services/exports';
-import { InboundRejected, parseInboundJson, parseInboundMime, receiveInboundEmail } from '@/server/services/inbound';
+import { InboundRejected, listInboundMessages, parseInboundJson, parseInboundMime, presentedSecret, receiveInboundEmail } from '@/server/services/inbound';
 import { processApplication } from '@/server/services/intake';
-import { approveApplication, reopenApplication, voidApplication } from '@/server/services/review';
-import { createWorld, getApp, packageFor, stateAfter, submit, type World } from './helpers/world';
+import { updateSubcontractor } from '@/server/services/records';
+import { acceptFinding, approveApplication, reopenApplication, voidApplication } from '@/server/services/review';
+import { updatePolicy } from '@/server/services/team';
+import { createWorld, getApp, openFindings, packageFor, stateAfter, submit, type World } from './helpers/world';
 
 describe('exports', () => {
   let w: World;
@@ -154,7 +156,8 @@ describe('email intake', () => {
   });
 
   it('turns the attachments of a provider webhook into a billing package', async () => {
-    const result = await receiveInboundEmail(w.db, token, 'test-inbound-secret', parseInboundJson(postmark()));
+    const result = await receiveInboundEmail(w.db, token, 'test-inbound-secret', parseInboundJson({ ...postmark(), MessageID: 'pm-0001' }));
+    if (result.outcome !== 'accepted') throw new Error(`expected the message to be accepted, got ${result.outcome}`);
     expect(result.files).toEqual(['PayApp-01.pdf']);
     expect(result.ignored).toEqual(['logo.png']); // signature images are not billing documents
 
@@ -162,10 +165,83 @@ describe('email intake', () => {
     expect(app).toMatchObject({ status: 'processing', receivedVia: 'email', senderEmail: 'billing@lonestarelectric.example', submittedBy: null, orgId: w.orgId });
     await processApplication(w.db, w.orgId, result.id);
     const processed = await getApp(w, result.id);
+    // billing@ is on the same company domain as the contact on file, so the sender is accepted as known.
     expect(processed).toMatchObject({ status: 'needs_review', contractId: w.contractId, applicationNumber: 1, openBlocking: 0 });
     const docs = await w.db.select().from(documents).where(eq(documents.payApplicationId, result.id));
     expect(docs).toHaveLength(1);
     expect(docs[0]).toMatchObject({ source: 'email', filename: 'PayApp-01.pdf' });
+  });
+
+  it('processes a message once, however many times the provider delivers it', async () => {
+    const before = await w.db.select().from(payApplications).where(eq(payApplications.orgId, w.orgId));
+    // The provider retries the same webhook, twice at the same moment.
+    const again = await Promise.all([
+      receiveInboundEmail(w.db, token, 'test-inbound-secret', parseInboundJson({ ...postmark(), MessageID: 'pm-0001' })),
+      receiveInboundEmail(w.db, token, 'test-inbound-secret', parseInboundJson({ ...postmark(), MessageID: 'pm-0001' })),
+    ]);
+    expect(again.map((r) => r.outcome)).toEqual(['duplicate', 'duplicate']);
+    expect(await w.db.select().from(payApplications).where(eq(payApplications.orgId, w.orgId))).toHaveLength(before.length);
+
+    // The sender's own Message-ID header wins over the provider's id, so a re-delivery under a new provider id is still caught.
+    const withHeader = (pmId: string) => parseInboundJson({ ...postmark(), MessageID: pmId, Headers: [{ Name: 'Message-ID', Value: '<abc123@lonestarelectric.example>' }] });
+    expect((await receiveInboundEmail(w.db, token, 'test-inbound-secret', withHeader('pm-0002'))).outcome).toBe('accepted');
+    expect((await receiveInboundEmail(w.db, token, 'test-inbound-secret', withHeader('pm-0003'))).outcome).toBe('duplicate');
+
+    // With no id at all, identical sender, subject and attachments is the same message.
+    const bare = () => parseInboundJson({ ...postmark(), Subject: 'Pay App 1 (no id)' });
+    expect((await receiveInboundEmail(w.db, token, 'test-inbound-secret', bare())).outcome).toBe('accepted');
+    expect((await receiveInboundEmail(w.db, token, 'test-inbound-secret', bare())).outcome).toBe('duplicate');
+  });
+
+  it('accepts a package from an unknown address but blocks its approval until someone vouches for it', async () => {
+    const w2 = await createWorld();
+    const { organizations } = await import('@/db/schema');
+    const [org] = await w2.db.select().from(organizations).where(eq(organizations.id, w2.orgId));
+    const bytes = await renderPackage(packageFor(w2, 0, null));
+    const message = parseInboundJson({ From: 'someone@elsewhere.example', Subject: 'Pay app', MessageID: 'x-1', Attachments: [{ Name: 'payapp.pdf', ContentType: 'application/pdf', Content: Buffer.from(bytes).toString('base64') }] });
+    const result = await receiveInboundEmail(w2.db, org!.intakeToken, 'test-inbound-secret', message);
+    if (result.outcome !== 'accepted') throw new Error('expected accepted');
+    await processApplication(w2.db, w2.orgId, result.id);
+
+    const open = await openFindings(w2, result.id);
+    expect(open.map((f) => f.code)).toEqual(['intake.sender']);
+    expect(open[0]).toMatchObject({ severity: 'blocking' });
+    await expect(approveApplication(w2.db, w2.controller, result.id)).rejects.toThrow(/blocking finding/);
+    // An accountant cannot wave it through; it takes an approver, with a reason.
+    await expect(acceptFinding(w2.db, w2.accountant, open[0]!.id, 'Looks fine to me')).rejects.toBeInstanceOf(PermissionError);
+
+    // Putting the address on the subcontractor's record clears it without anyone overriding anything.
+    await updateSubcontractor(w2.db, w2.owner, w2.subcontractorId, { name: w2.parties.sub.name, trade: 'Electrical', contactName: 'Maria Alvarez', contactEmail: 'someone@elsewhere.example' });
+    expect(await openFindings(w2, result.id)).toEqual([]);
+  });
+
+  it('turns unknown senders away under the strict policy, logs it and tells the team', async () => {
+    const w3 = await createWorld();
+    const { organizations, inboundMessages, notifications } = await import('@/db/schema');
+    const [org] = await w3.db.select().from(organizations).where(eq(organizations.id, w3.orgId));
+    await updatePolicy(w3.db, w3.owner, { unknownSenderPolicy: 'reject' });
+    const bytes = Buffer.from(await renderPackage(packageFor(w3, 0, null))).toString('base64');
+    const from = (address: string, id: string) => parseInboundJson({ From: address, Subject: 'Pay app', MessageID: id, Attachments: [{ Name: 'payapp.pdf', ContentType: 'application/pdf', Content: bytes }] });
+
+    const stranger = await receiveInboundEmail(w3.db, org!.intakeToken, 'test-inbound-secret', from('someone@elsewhere.example', 's-1'));
+    expect(stranger).toMatchObject({ outcome: 'rejected', reason: expect.stringContaining('not on file') });
+    await receiveInboundEmail(w3.db, org!.intakeToken, 'test-inbound-secret', from('someone@elsewhere.example', 's-2'));
+    expect(await w3.db.select().from(payApplications).where(eq(payApplications.orgId, w3.orgId))).toHaveLength(0);
+
+    const log = await listInboundMessages(w3.db, w3.owner);
+    expect(log.map((m) => m.outcome)).toEqual(['rejected', 'rejected']);
+    expect(log[0]).toMatchObject({ fromEmail: 'someone@elsewhere.example', payApplicationId: null });
+    // Two rejections from the same address in a day produce one round of notifications, not two.
+    const notes = await w3.db.select().from(notifications).where(eq(notifications.type, 'intake.sender_rejected'));
+    const mine = notes.filter((n) => n.orgId === w3.orgId);
+    expect(new Set(mine.map((n) => n.userId)).size).toBe(mine.length);
+    expect(mine.length).toBeGreaterThan(0);
+
+    // The contact on file, and a member of the team forwarding a package, still get through.
+    expect((await receiveInboundEmail(w3.db, org!.intakeToken, 'test-inbound-secret', from('Maria <maria@lonestarelectric.example>', 's-3'))).outcome).toBe('accepted');
+    expect((await receiveInboundEmail(w3.db, org!.intakeToken, 'test-inbound-secret', from(w3.accountant.userEmail, 's-4'))).outcome).toBe('accepted');
+    // Another organisation's log does not show any of this.
+    expect((await w3.db.select().from(inboundMessages).where(eq(inboundMessages.orgId, w.orgId))).some((m) => m.messageId.startsWith('s-'))).toBe(false);
   });
 
   it('accepts a raw message as well', async () => {
@@ -196,10 +272,21 @@ describe('email intake', () => {
     expect(message.attachments[0]!.bytes.byteLength).toBe(pdf.byteLength);
   });
 
-  it('refuses a message with nothing to process', async () => {
-    const empty = parseInboundJson({ From: 'a@b.example', Subject: 'hello', Attachments: [] });
-    await expect(receiveInboundEmail(w.db, token, 'test-inbound-secret', empty)).rejects.toBeInstanceOf(InboundRejected);
-    await expect(receiveInboundEmail(w.db, token, 'test-inbound-secret', empty)).rejects.toMatchObject({ status: 422 });
+  it('logs a message with nothing to process instead of asking the provider to retry it', async () => {
+    const empty = parseInboundJson({ From: 'a@b.example', Subject: 'hello', MessageID: 'empty-1', Attachments: [] });
+    const result = await receiveInboundEmail(w.db, token, 'test-inbound-secret', empty);
+    expect(result).toEqual({ outcome: 'rejected', reason: 'The message had no attachments.' });
+    const log = await listInboundMessages(w.db, w.owner, 100);
+    expect(log.find((m) => m.messageId === 'empty-1')).toMatchObject({ outcome: 'rejected', fromEmail: 'a@b.example', subject: 'hello' });
     expect(() => parseInboundJson('nope')).toThrow(InboundRejected);
+  });
+
+  it('reads the shared secret from a header, a bearer token or basic auth before the query string', () => {
+    const req = (headers: Record<string, string>, url = 'https://rcm.example.test/api/inbound/email/tok') => new Request(url, { method: 'POST', headers });
+    expect(presentedSecret(req({ 'x-inbound-secret': 'a-secret' }))).toBe('a-secret');
+    expect(presentedSecret(req({ authorization: 'Bearer b-secret' }))).toBe('b-secret');
+    expect(presentedSecret(req({ authorization: `Basic ${Buffer.from('postmark:c-secret').toString('base64')}` }))).toBe('c-secret');
+    expect(presentedSecret(req({}, 'https://rcm.example.test/api/inbound/email/tok?secret=d-secret'))).toBe('d-secret');
+    expect(presentedSecret(req({}))).toBeNull();
   });
 });

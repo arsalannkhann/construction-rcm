@@ -82,3 +82,11 @@ export class UserError extends Error {
     this.name = 'UserError';
   }
 }
+
+/** The record changed since the person last saw it. The UI reloads the page data when it gets one of these. */
+export class ConflictError extends UserError {
+  constructor(message = 'This application was changed by someone else while you had it open. The page has been updated: check the figures and findings again before deciding.') {
+    super(message);
+    this.name = 'ConflictError';
+  }
+}

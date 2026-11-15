@@ -4,9 +4,9 @@
  * carry their own message; anything else is logged and reported generically.
  */
 import { unstable_rethrow } from 'next/navigation';
-import { PermissionError, UserError } from '@/server/auth/permissions';
+import { ConflictError, PermissionError, UserError } from '@/server/auth/permissions';
 
-export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
+export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string; /** The record changed underneath the request; the caller should reload it. */ conflict?: boolean };
 
 export async function run<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
   try {
@@ -14,6 +14,7 @@ export async function run<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
   } catch (err) {
     // redirect() and notFound() work by throwing; let them through.
     unstable_rethrow(err);
+    if (err instanceof ConflictError) return { ok: false, error: err.message, conflict: true };
     if (err instanceof UserError || err instanceof PermissionError) return { ok: false, error: err.message };
     console.error('[action] unexpected error:', err);
     return { ok: false, error: 'Something went wrong on our side. Please try again.' };
