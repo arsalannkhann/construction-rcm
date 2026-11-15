@@ -19,6 +19,10 @@ next-env.d.ts
 public/pdfjs
 samples/out
 
+# customer documents for extraction evaluation: never commit them (docs/extraction-evaluation.md)
+/eval/real/*
+!/eval/real/README.md
+
 # tooling / OS
 .DS_Store
 .claude
