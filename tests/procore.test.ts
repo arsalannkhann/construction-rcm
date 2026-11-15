@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditEvents, changeOrders, contracts, integrations, notifications, payApplications, projects, sovLines, subcontractors, transfers } from '@/db/schema';
 import { PermissionError } from '@/server/auth/permissions';
 import { decryptJson, encryptJson } from '@/server/crypto';
-import { createProcoreClient, ProcoreAuthError, ProcoreRateLimitError, requestedWaitMs } from '@/server/integrations/procore/client';
+import { createProcoreClient, linkHasNext, outcomeUnknown, parseJson, ProcoreApiError, ProcoreAuthError, ProcoreRateLimitError, rateLimitWait, retryAfterMs } from '@/server/integrations/procore/client';
 import { toHundredths } from '@/server/integrations/procore/import';
 import {
   beginConnect,
@@ -103,9 +103,19 @@ class ProcoreEmulator {
   revoked: string[] = [];
   requests: Array<{ method: string; path: string; query: Record<string, string>; companyId: string | undefined }> = [];
   requisitions: Requisition[] = [];
-  /** Paths that answer 429 a number of times before behaving. */
-  throttle = new Map<string, { times: number; retryAfter: string }>();
+  /**
+   * Paths that answer 429 a number of times before behaving. As documented, a
+   * 429 carries X-Rate-Limit-Reset (Unix seconds, `resetIn` seconds after the
+   * Date header) and no Retry-After.
+   */
+  throttle = new Map<string, { times: number; resetIn: number }>();
   throttled = 0;
+  /** Paths that answer with these statuses, in order, before behaving (503 carries Retry-After when given). */
+  faults = new Map<string, Array<{ status: number; retryAfter?: string }>>();
+  /** How list responses describe their pages: everything documented, or only Per-Page. */
+  pagingHeaders: 'all' | 'per-page-only' = 'all';
+  /** Simulates a server that ignores `page` and always answers page 1. */
+  ignorePage = false;
   rejectNextRequisition: { status: number; body: unknown } | null = null;
 
   async start(): Promise<void> {
@@ -135,14 +145,30 @@ class ProcoreEmulator {
     const raw = Buffer.concat(chunks).toString('utf8');
     const url = new URL(req.url ?? '/', 'http://emulator');
     const path = url.pathname;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    // Procore measures rate-limit resets against its Date header; second precision, like a real one.
+    const dated = { Date: new Date(nowSeconds * 1000).toUTCString() };
+    const limits = { 'X-Rate-Limit-Limit': '100', 'X-Rate-Limit-Remaining': '99', 'X-Rate-Limit-Reset': String(nowSeconds + 10) };
     const json = (status: number, data: unknown, headers: Record<string, string> = {}) => {
-      res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
+      res.writeHead(status, { 'Content-Type': 'application/json', ...dated, ...headers });
       res.end(JSON.stringify(data));
     };
-    const page = (rows: unknown[]) => {
-      const perPage = Number(url.searchParams.get('per_page') ?? 100);
-      const n = Number(url.searchParams.get('page') ?? 1);
-      json(200, rows.slice((n - 1) * perPage, n * perPage), { Total: String(rows.length), 'Per-Page': String(perPage) });
+    /** A documented list response. Per-endpoint default and maximum page sizes come from the reference pages. */
+    const page = (rows: unknown[], sizes: { default: number; max: number } = { default: 100, max: 100 }) => {
+      const perPage = Math.min(Number(url.searchParams.get('per_page') ?? sizes.default) || sizes.default, sizes.max);
+      const n = this.ignorePage ? 1 : Number(url.searchParams.get('page') ?? 1);
+      const last = Math.max(1, Math.ceil(rows.length / perPage));
+      const headers: Record<string, string> = { ...limits, 'Per-Page': String(perPage) };
+      if (this.pagingHeaders === 'all') {
+        headers.Total = String(rows.length);
+        // Built like the documented example, which leaves the request's other query parameters out.
+        const at = (p: number, rel: string) => `<${this.url}${path}?page=${p}&per_page=${perPage}>; rel="${rel}"`;
+        const links = [];
+        if (n > 1) links.push(at(1, 'first'), at(n - 1, 'prev'));
+        if (n < last) links.push(at(last, 'last'), at(n + 1, 'next'));
+        if (links.length) headers.Link = links.join(', ');
+      }
+      json(200, rows.slice((n - 1) * perPage, n * perPage), headers);
     };
 
     // ── OAuth ──
@@ -186,8 +212,10 @@ class ProcoreEmulator {
     if (throttle && throttle.times > 0) {
       throttle.times -= 1;
       this.throttled += 1;
-      return json(429, { message: 'Rate limit exceeded' }, { 'Retry-After': throttle.retryAfter, 'X-Rate-Limit-Limit': '3600', 'X-Rate-Limit-Remaining': '0' });
+      return json(429, { message: 'Rate limit exceeded' }, { 'X-Rate-Limit-Limit': '100', 'X-Rate-Limit-Remaining': '0', 'X-Rate-Limit-Reset': String(nowSeconds + throttle.resetIn) });
     }
+    const fault = this.faults.get(path)?.shift();
+    if (fault) return json(fault.status, { message: 'Service unavailable' }, fault.retryAfter ? { 'Retry-After': fault.retryAfter } : {});
 
     if (req.method === 'GET' && path === '/rest/v1.0/companies') return page(this.companies);
     if (!companyId || !this.companies.some((c) => String(c.id) === companyId)) return json(403, { message: 'Procore-Company-Id header is missing or names a company this user cannot access' });
@@ -196,7 +224,7 @@ class ProcoreEmulator {
     let m: RegExpExecArray | null;
     if (req.method === 'GET' && path === '/rest/v1.1/projects') {
       if (url.searchParams.get('company_id') !== companyId) return json(400, { message: 'company_id is required' });
-      return page(this.projects);
+      return page(this.projects, { default: 100, max: 300 });
     }
     if (req.method === 'GET' && (m = /^\/rest\/v1\.1\/projects\/(\d+)\/vendors$/.exec(path))) {
       return Number(m[1]) === PROJECT ? page(this.vendors) : json(404, { message: 'Not found' });
@@ -316,12 +344,38 @@ describe('reading Procore values', () => {
     expect(toHundredths(null)).toBeNull();
   });
 
-  it('reads how long a rate-limited response asks us to wait', () => {
+  it('reads how long a rate-limited response asks us to wait, by Procore’s clock', () => {
     const now = Date.parse('2026-11-15T12:00:00Z');
-    expect(requestedWaitMs(new Headers({ 'Retry-After': '3' }), now)).toBe(3000);
-    expect(requestedWaitMs(new Headers({ 'Retry-After': 'Sun, 15 Nov 2026 12:00:10 GMT' }), now)).toBe(10_000);
-    expect(requestedWaitMs(new Headers({ 'X-Rate-Limit-Reset': String(now / 1000 + 42) }), now)).toBe(42_000);
-    expect(requestedWaitMs(new Headers(), now)).toBeNull();
+    const reset = (inSeconds: number, date?: string) => new Headers({ 'X-Rate-Limit-Reset': String(now / 1000 + inSeconds), ...(date ? { Date: date } : {}) });
+    expect(rateLimitWait(reset(7), now)).toEqual({ ms: 7000, window: 'spike' });
+    expect(rateLimitWait(reset(10), now)).toEqual({ ms: 10_000, window: 'spike' });
+    expect(rateLimitWait(reset(1800), now)).toEqual({ ms: 1_800_000, window: 'hourly' });
+    // Our clock runs 5 s fast; Procore's Date header is the reference, so the wait is still 7 s.
+    expect(rateLimitWait(reset(7, 'Sun, 15 Nov 2026 12:00:00 GMT'), now + 5000)).toEqual({ ms: 7000, window: 'spike' });
+    expect(rateLimitWait(reset(-3), now)).toEqual({ ms: 0, window: 'spike' });
+    // A 429 with no headers: assume the spike window, as Procore's sample does.
+    expect(rateLimitWait(new Headers(), now)).toEqual({ ms: 10_000, window: 'spike' });
+    // Retry-After only matters on a 503.
+    expect(retryAfterMs(new Headers({ 'Retry-After': '3' }), now)).toBe(3000);
+    expect(retryAfterMs(new Headers({ 'Retry-After': 'Sun, 15 Nov 2026 12:00:10 GMT' }), now)).toBe(10_000);
+    expect(retryAfterMs(new Headers(), now)).toBeNull();
+    expect(linkHasNext('<https://x/a?page=2>; rel="next", <https://x/a?page=9>; rel="last"')).toBe(true);
+    expect(linkHasNext('<https://x/a?page=1>; rel="first", <https://x/a?page=8>; rel="prev"')).toBe(false);
+  });
+
+  it('parses ids beyond 2^53 exactly instead of rounding them', () => {
+    const parsed = parseJson('{"id": 9007199254740993, "small": 562949953421400, "amount": "12.50", "rate": 1.25e2, "note": "id 9007199254740993 in text", "list": [-9007199254740995, 3]}') as Record<string, unknown>;
+    expect(parsed).toEqual({ id: '9007199254740993', small: 562949953421400, amount: '12.50', rate: 125, note: 'id 9007199254740993 in text', list: ['-9007199254740995', 3] });
+    expect(parseJson('[1, 2.5, "x"]')).toEqual([1, 2.5, 'x']);
+  });
+
+  it('knows which failed writes may still have happened', () => {
+    expect(outcomeUnknown(new ProcoreApiError(0, 'no response', true))).toBe(true);
+    expect(outcomeUnknown(new ProcoreApiError(502, 'bad gateway'))).toBe(true);
+    expect(outcomeUnknown(new ProcoreRateLimitError(503, 5))).toBe(true);
+    expect(outcomeUnknown(new ProcoreRateLimitError(429, 5))).toBe(false);
+    expect(outcomeUnknown(new ProcoreApiError(422, 'invalid'))).toBe(false);
+    expect(outcomeUnknown(new Error('bug'))).toBe(false);
   });
 });
 
@@ -520,51 +574,144 @@ describe('connecting', () => {
 // ── The client ──────────────────────────────────────────────────────────────
 
 describe('the REST client', () => {
+  let accessToken: string;
   let client: ReturnType<typeof createProcoreClient>;
+  /** A client that records the waits it would make instead of making them. */
+  const recording = () => {
+    const waits: number[] = [];
+    const c = createProcoreClient({ apiBase: emu.url, companyId: String(COMPANY.id), token: async () => accessToken, sleep: async (ms) => void waits.push(ms), random: () => 0 });
+    return { client: c, waits };
+  };
   beforeAll(async () => {
     configure();
     const w = await createWorld();
     await connect(w, 'code-client');
-    const { accessToken } = await storedTokens(w);
+    accessToken = (await storedTokens(w)).accessToken;
     client = createProcoreClient({ apiBase: emu.url, companyId: String(COMPANY.id), token: async () => accessToken });
   });
 
-  it('follows pagination to the end', async () => {
+  it('follows pagination to the end and stops where Procore says the list ends', async () => {
     const path = `/rest/v1.0/work_order_contracts/${CONTRACT.electrical}/line_items`;
     const seen = emu.requestsTo(path).length;
     const rows = await client.getAll<{ id: number }>(path, { project_id: String(PROJECT) }, { perPage: 2 });
     expect(rows.map((r) => r.id)).toEqual([LINE.fixtures, LINE.mobilization, LINE.roughIn]);
-    expect(emu.requestsTo(path).slice(seen).map((r) => [r.query.page, r.query.per_page])).toEqual([
-      ['1', '2'],
-      ['2', '2'],
+    // Page URLs are built here, keeping project_id; the Link header only says whether there is a next page.
+    expect(emu.requestsTo(path).slice(seen).map((r) => [r.query.page, r.query.per_page, r.query.project_id])).toEqual([
+      ['1', '2', String(PROJECT)],
+      ['2', '2', String(PROJECT)],
     ]);
-    // A full last page stops on the Total header instead of asking for an empty one.
+    // A full last page has no `next` link, so no empty page is requested.
     const again = emu.requestsTo(path).length;
     expect(await client.getAll(path, { project_id: String(PROJECT) }, { perPage: 3 })).toHaveLength(3);
     expect(emu.requestsTo(path).length).toBe(again + 1);
   });
 
-  it('waits out a short rate limit and gives up on a long one', async () => {
+  it('reads every page when Procore caps the page size and only says so in Per-Page', async () => {
+    emu.pagingHeaders = 'per-page-only';
+    const projectsPath = '/rest/v1.1/projects';
+    const extra = Array.from({ length: 301 }, (_, i) => ({ id: PROJECT + 100 + i, name: `Project ${i}`, project_number: null, active: true }));
+    const saved = emu.projects;
+    emu.projects = [...saved, ...extra];
+    try {
+      const seen = emu.requestsTo(projectsPath).length;
+      // We ask for 500 a page; the emulator, like the reference, caps projects at 300.
+      const rows = await client.getAll(projectsPath, { company_id: String(COMPANY.id) }, { perPage: 500 });
+      expect(rows).toHaveLength(303);
+      expect(emu.requestsTo(projectsPath).length).toBe(seen + 2);
+    } finally {
+      emu.projects = saved;
+      emu.pagingHeaders = 'all';
+    }
+  });
+
+  it('refuses a server that keeps answering with the same page', async () => {
+    emu.ignorePage = true;
+    try {
+      const path = `/rest/v1.0/work_order_contracts/${CONTRACT.electrical}/line_items`;
+      const seen = emu.requestsTo(path).length;
+      const err = await client.getAll(path, { project_id: String(PROJECT) }, { perPage: 2 }).catch((e) => e);
+      expect(err).toBeInstanceOf(ProcoreApiError);
+      expect(err.message).toMatch(/repeated the previous page/);
+      expect(emu.requestsTo(path).length).toBe(seen + 2);
+    } finally {
+      emu.ignorePage = false;
+    }
+  });
+
+  it('waits out the spike window by X-Rate-Limit-Reset and gives up on the hourly one', async () => {
     const path = `/rest/v1.0/projects/${PROJECT}/billing_periods`;
-    emu.throttle.set(path, { times: 1, retryAfter: '1' });
+    // Spike window: reset 3 s after Procore's Date header. No Retry-After is sent, as documented.
+    emu.throttle.set(path, { times: 1, resetIn: 3 });
+    const spike = recording();
+    expect(await spike.client.getAll(path)).toHaveLength(1);
+    expect(spike.waits).toHaveLength(1);
+    expect(spike.waits[0]).toBeGreaterThan(2000);
+    expect(spike.waits[0]).toBeLessThanOrEqual(3000);
+
+    // Hourly window: one request, then a clear error saying how long, and nothing more is sent.
+    emu.throttle.set(path, { times: 5, resetIn: 1800 });
+    const hourly = recording();
+    const before = emu.requestsTo(path).length;
+    const err = await hourly.client.getAll(path).catch((e) => e);
+    expect(err).toBeInstanceOf(ProcoreRateLimitError);
+    expect(err.status).toBe(429);
+    expect(err.retryAfterSeconds).toBeGreaterThan(1790);
+    expect(emu.requestsTo(path).length).toBe(before + 1);
+    // The spent hourly limit is remembered: the next call fails fast without spending quota.
+    await expect(hourly.client.get(path)).rejects.toBeInstanceOf(ProcoreRateLimitError);
+    expect(emu.requestsTo(path).length).toBe(before + 1);
+    expect(hourly.waits).toEqual([]);
+    emu.throttle.delete(path);
+
+    // Spike limits four times in a row: three retries, then stop.
+    emu.throttle.set(path, { times: 5, resetIn: 0 });
+    const stubborn = recording();
+    const tries = emu.requestsTo(path).length;
+    await expect(stubborn.client.getAll(path)).rejects.toBeInstanceOf(ProcoreRateLimitError);
+    expect(emu.requestsTo(path).length).toBe(tries + 4);
+    emu.throttle.delete(path);
+
+    // Real waiting, once, to show the pause actually happens.
+    emu.throttle.set(path, { times: 1, resetIn: 1 });
     const started = Date.now();
     expect(await client.getAll(path)).toHaveLength(1);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(500);
+  });
 
-    emu.throttle.set(path, { times: 5, retryAfter: '1800' });
+  it('retries reads through server errors with backoff, and honours Retry-After on a 503', async () => {
+    const path = `/rest/v1.0/projects/${PROJECT}/billing_periods`;
+    emu.faults.set(path, [{ status: 502 }, { status: 500 }, { status: 503, retryAfter: '2' }]);
+    const { client: c, waits } = recording();
     const before = emu.requestsTo(path).length;
-    const err = await client.getAll(path).catch((e) => e);
-    expect(err).toBeInstanceOf(ProcoreRateLimitError);
-    expect(err).toMatchObject({ status: 429, retryAfterSeconds: 1800 });
-    expect(emu.requestsTo(path).length).toBe(before + 1); // no pointless retries
-    emu.throttle.delete(path);
+    expect(await c.getAll(path)).toHaveLength(1);
+    expect(emu.requestsTo(path).length).toBe(before + 4);
+    expect(waits).toEqual([500, 1000, 2000]);
 
-    // Three 429s in a row: two retries, then stop.
-    emu.throttle.set(path, { times: 3, retryAfter: '0' });
-    const tries = emu.requestsTo(path).length;
-    await expect(client.getAll(path)).rejects.toBeInstanceOf(ProcoreRateLimitError);
-    expect(emu.requestsTo(path).length).toBe(tries + 3);
-    emu.throttle.delete(path);
+    // A 503 asking for longer than a request should wait is reported, with the wait.
+    emu.faults.set(path, [{ status: 503, retryAfter: '120' }]);
+    await expect(recording().client.get(path)).rejects.toMatchObject({ name: 'ProcoreRateLimitError', status: 503, retryAfterSeconds: 120 });
+    // Four 500s: three retries, then the error.
+    emu.faults.set(path, [{ status: 500 }, { status: 500 }, { status: 500 }, { status: 500 }]);
+    await expect(recording().client.get(path)).rejects.toMatchObject({ name: 'ProcoreApiError', status: 500 });
+    expect(emu.faults.get(path)).toEqual([]);
+  });
+
+  it('never repeats a write, whatever the answer', async () => {
+    const path = '/rest/v1.1/requisitions';
+    const posts = () => emu.requests.filter((r) => r.method === 'POST' && r.path === path).length;
+    for (const failure of [{ throttle: true }, { status: 500 }, { status: 502 }, { status: 503, retryAfter: '1' }]) {
+      if ('throttle' in failure) emu.throttle.set(path, { times: 1, resetIn: 0 });
+      else emu.faults.set(path, [failure]);
+      const { client: c, waits } = recording();
+      const before = posts();
+      const err = await c.post(path, { project_id: PROJECT }).catch((e) => e);
+      expect(posts()).toBe(before + 1);
+      expect(waits).toEqual([]);
+      expect(outcomeUnknown(err)).toBe(!('throttle' in failure));
+      emu.throttle.delete(path);
+      emu.faults.delete(path);
+    }
+    expect(emu.requisitions).toHaveLength(0);
   });
 
   it('reports other failures with a short excerpt and never the token', async () => {
@@ -622,7 +769,7 @@ describe('import and push', () => {
 
     // The vendor list is rate limited once; the import waits and carries on.
     const vendorsPath = `/rest/v1.1/projects/${PROJECT}/vendors`;
-    emu.throttle.set(vendorsPath, { times: 1, retryAfter: '1' });
+    emu.throttle.set(vendorsPath, { times: 1, resetIn: 0 });
     const throttled = emu.throttled;
     const result = await importProject(w.db, w.owner, String(PROJECT));
     expect(emu.throttled).toBe(throttled + 1);

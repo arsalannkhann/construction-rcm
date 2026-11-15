@@ -94,7 +94,7 @@ export async function friendly<T>(fn: () => Promise<T>): Promise<T> {
 
 function clientFor(db: DB, orgId: string, companyId: string | null): ProcoreClient {
   const cfg = requireProcoreConfig();
-  return createProcoreClient({ apiBase: cfg.apiBase, companyId, token: (opts) => getAccessToken(db, orgId, opts) });
+  return createProcoreClient({ apiBase: cfg.apiBase, companyId, limiterKey: `${cfg.apiBase}|${orgId}`, token: (opts) => getAccessToken(db, orgId, opts) });
 }
 
 /** A client bound to the organisation's connection and chosen company. */
