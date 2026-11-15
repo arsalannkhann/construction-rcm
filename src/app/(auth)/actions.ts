@@ -70,14 +70,19 @@ export async function requestResetAction(email: string): Promise<ActionResult<Re
   return run(async () => requestPasswordReset(await getDb(), email, { defer: (work) => after(work) }));
 }
 
-/** Sets the new password. Does not sign in: the person signs in with it, and their second step if they have one. */
+/**
+ * Sets the new password. Does not sign in: the person signs in with it, and their second step if they have one.
+ * On success it sends the browser to the sign-in page, which confirms the change. Staying on the reset page
+ * would not work: clearing the cookies re-renders it, and by then the link is used up, so it would read
+ * "no longer valid" right after a successful reset.
+ */
 export async function completeResetAction(token: string, password: string): Promise<ActionResult> {
   return run(async () => {
     await completePasswordReset(await getDb(), token, password);
     // Whatever this browser was signed in as before is signed out too.
     await endSession();
     await clearLoginChallengeCookie();
-    return undefined;
+    redirect('/login?reset=done');
   });
 }
 

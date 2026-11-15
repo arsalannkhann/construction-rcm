@@ -1,9 +1,6 @@
 'use client';
 
-import { CircleCheck } from 'lucide-react';
-import Link from 'next/link';
 import { useState, useTransition } from 'react';
-import { Notice } from '@/components/settings/notice';
 import { Button } from '@/components/ui/button';
 import { Field, FormError, Input } from '@/components/ui/form';
 import { PASSWORD_HINT, passwordProblem } from '@/server/auth/password-rules';
@@ -13,26 +10,12 @@ export function ResetForm({ token, email }: { token: string; email: string }) {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
   const [pending, start] = useTransition();
 
   // The same rule the server applies, shown before submitting.
   const problem = password.length > 0 ? passwordProblem(password, { email }) : null;
   const mismatch = confirm.length > 0 && confirm !== password;
   const ready = password.length > 0 && !problem && confirm === password;
-
-  if (done) {
-    return (
-      <div className="space-y-4">
-        <Notice tone="pass" icon={<CircleCheck strokeWidth={1.9} />}>
-          Your new password is set, and the account was signed out everywhere.
-        </Notice>
-        <Link href="/login" className="block text-[13px] font-medium text-accent hover:underline">
-          Sign in with your new password
-        </Link>
-      </div>
-    );
-  }
 
   return (
     <form
@@ -42,9 +25,9 @@ export function ResetForm({ token, email }: { token: string; email: string }) {
         if (!ready || pending) return;
         setError(null);
         start(async () => {
+          // On success the server sends the browser to the sign-in page, which confirms the change.
           const result = await completeResetAction(token, password);
-          if (!result.ok) setError(result.error);
-          else setDone(true);
+          if (result && !result.ok) setError(result.error);
         });
       }}
     >
