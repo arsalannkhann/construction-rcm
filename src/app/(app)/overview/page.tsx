@@ -1,5 +1,5 @@
 import { ArrowRight, Check, CircleDashed } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { getDb } from '@/db';
 import { BillingByPeriod, FindingsByCategory, PipelineBar, TurnaroundTrend } from '@/components/charts';
 import { DemoWorkspaceCard } from '@/components/demo/demo-workspace-card';

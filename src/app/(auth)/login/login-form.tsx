@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, FormError, Input } from '@/components/ui/form';

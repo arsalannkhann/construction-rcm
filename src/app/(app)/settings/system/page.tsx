@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { getDb } from '@/db';
 import { Badge, EmptyState, PageHeader, Panel, PanelHeader, Table, Td, Th } from '@/components/ui/data';
 import { formatDateTime, formatRelative } from '@/lib/utils';

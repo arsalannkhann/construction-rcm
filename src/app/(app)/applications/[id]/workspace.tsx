@@ -1,7 +1,7 @@
 'use client';
 
 import { ArrowLeft, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { Money, StatusBadge } from '@/components/ui/data';
 import { Tooltip } from '@/components/ui/overlay';

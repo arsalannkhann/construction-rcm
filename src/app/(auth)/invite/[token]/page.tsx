@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { getDb } from '@/db';
 import { ROLE_LABEL } from '@/server/auth/permissions';
 import { findInvitation } from '@/server/services/team';

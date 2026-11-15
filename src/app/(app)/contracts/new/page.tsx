@@ -1,5 +1,5 @@
 import { Building2, Users } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { getDb } from '@/db';
 import { BackLink, CannotEditRecords } from '@/components/records/page-parts';
 import { buttonClass } from '@/components/ui/button';

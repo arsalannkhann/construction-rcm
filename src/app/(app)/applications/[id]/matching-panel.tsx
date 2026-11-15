@@ -1,7 +1,7 @@
 'use client';
 
 import { FileQuestion } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { useState } from 'react';
 import { Button, buttonClass } from '@/components/ui/button';
 import { Badge, Money } from '@/components/ui/data';

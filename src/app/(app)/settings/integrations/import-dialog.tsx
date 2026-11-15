@@ -1,7 +1,7 @@
 'use client';
 
 import { CircleCheck, Download, FolderOpen, Loader2, TriangleAlert } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Notice } from '@/components/settings/notice';

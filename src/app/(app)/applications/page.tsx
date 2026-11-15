@@ -1,5 +1,5 @@
 import { ArrowUpFromLine, Inbox, Mail } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { getDb } from '@/db';
 import { buttonClass } from '@/components/ui/button';
 import { Avatar, Badge, EmptyState, Money, Page, PageHeader, Panel, StatusBadge, Table, Td, Th } from '@/components/ui/data';

@@ -1,5 +1,5 @@
 import { Building2, Plus } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { getDb } from '@/db';
 import { RecordStatusBadge } from '@/components/records/figures';
 import { buttonClass } from '@/components/ui/button';

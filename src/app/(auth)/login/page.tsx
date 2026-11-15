@@ -1,5 +1,5 @@
 import { CircleCheck } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { redirect } from 'next/navigation';
 import { Notice } from '@/components/settings/notice';
 import { getSession } from '@/server/auth/session';

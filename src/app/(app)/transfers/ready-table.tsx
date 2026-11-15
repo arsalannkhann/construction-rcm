@@ -1,7 +1,7 @@
 'use client';
 
 import { FileSpreadsheet } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { useState } from 'react';
 import { batchExportAction } from '@/app/(app)/applications/actions';
 import { Button } from '@/components/ui/button';

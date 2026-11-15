@@ -1,5 +1,5 @@
 import { ArrowLeft, Lock } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import * as React from 'react';
 import { EmptyState, Panel } from '@/components/ui/data';
 import { can, ROLE_LABEL } from '@/server/auth/permissions';

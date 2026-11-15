@@ -1,5 +1,5 @@
 import { Users } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { getDb } from '@/db';
 import { Badge, EmptyState, Money, Page, PageHeader, Panel, Table, Td, Th } from '@/components/ui/data';
 import { can } from '@/server/auth/permissions';
