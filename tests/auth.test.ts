@@ -141,11 +141,11 @@ describe('TOTP (RFC 6238 / RFC 4226)', () => {
   });
 
   it('builds an otpauth URI and a QR code for it', async () => {
-    const uri = otpauthUri({ secret: seedBase32, account: 'ana@example.test', issuer: 'Construction RCM' });
-    expect(uri.startsWith('otpauth://totp/Construction%20RCM:ana%40example.test?')).toBe(true);
+    const uri = otpauthUri({ secret: seedBase32, account: 'ana@example.test', issuer: 'Zephric' });
+    expect(uri.startsWith('otpauth://totp/Zephric:ana%40example.test?')).toBe(true);
     const query = new URL(uri).searchParams;
     expect(query.get('secret')).toBe(seedBase32);
-    expect(query.get('issuer')).toBe('Construction RCM');
+    expect(query.get('issuer')).toBe('Zephric');
     expect([query.get('algorithm'), query.get('digits'), query.get('period')]).toEqual(['SHA1', '6', '30']);
     const qr = await qrSvgDataUri(uri);
     expect(qr.startsWith('data:image/svg+xml;base64,')).toBe(true);

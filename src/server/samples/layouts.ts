@@ -1053,7 +1053,7 @@ export async function renderLayout(sections: Section[], opts: LayoutOptions = {}
     doc.setCreationDate(stamp);
     doc.setModificationDate(stamp);
   }
-  doc.setProducer('Construction RCM sample generator');
+  doc.setProducer('Zephric sample generator');
   const f = await fonts(doc);
 
   // Pages of the numbered set (pay application + schedule) in each group.
@@ -1130,7 +1130,7 @@ export async function renderLayout(sections: Section[], opts: LayoutOptions = {}
   if (dropped.size > 0 || (opts.rotate?.length ?? 0) > 0) {
     const src = await PDFDocument.load(bytes);
     const out = await PDFDocument.create();
-    out.setProducer('Construction RCM sample generator');
+    out.setProducer('Zephric sample generator');
     if (first) {
       const stamp = new Date(`${first.applicationDate}T12:00:00Z`);
       out.setCreationDate(stamp);

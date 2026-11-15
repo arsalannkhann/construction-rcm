@@ -1,6 +1,6 @@
 # Authentication
 
-This page describes how people sign in to Construction RCM. It covers what each
+This page describes how people sign in to Zephric. It covers what each
 part does, where the code is, what an operator can do when someone is locked
 out, and where single sign-on (SSO) would fit. Finance teams approve real money
 here, so every rule below is enforced in the server, not only in the screens.

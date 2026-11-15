@@ -13,7 +13,7 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { and, eq, inArray, like, lt, ne } from 'drizzle-orm';
+import { and, eq, inArray, like, lt, ne, or } from 'drizzle-orm';
 import type { DB } from '@/db';
 import { changeOrders, contracts, findings, memberships, notifications, organizations, payApplications, projects, sessions, sovLines, subcontractors, users } from '@/db/schema';
 import { recordAudit } from '@/server/audit';
@@ -31,7 +31,9 @@ import { createOrganization } from './team';
 
 const DEMO_ORG_NAME = 'Northline Constructors (Demo)';
 const GC = { name: 'Northline Constructors, Inc.', address: '4100 Guadalupe St, Suite 300, Austin, TX 78751' };
-const DEMO_EMAIL_DOMAIN = 'demo.construction-rcm.invalid';
+const DEMO_EMAIL_DOMAIN = 'demo.zephric.invalid';
+/** Domain the fictitious colleagues had before the Zephric rename, still matched on removal. */
+const OLD_DEMO_EMAIL_DOMAIN = 'demo.construction-rcm.invalid';
 const SAMPLE_CONTRACT = 'SC-2312-22';
 
 const D = (dollars: number) => Math.round(dollars * 100);
@@ -610,7 +612,10 @@ export async function deleteDemoWorkspace(db: DB, ctx: Ctx): Promise<void> {
   }
   await db.delete(organizations).where(eq(organizations.id, org.id));
   // The fictitious colleagues exist only for this workspace.
-  const fictitious = await db.select({ id: users.id }).from(users).where(like(users.email, `%@${DEMO_EMAIL_DOMAIN}`));
+  const fictitious = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(or(like(users.email, `%@${DEMO_EMAIL_DOMAIN}`), like(users.email, `%@${OLD_DEMO_EMAIL_DOMAIN}`)));
   const stillUsed = fictitious.length ? await db.select({ userId: memberships.userId }).from(memberships).where(inArray(memberships.userId, fictitious.map((u) => u.id))) : [];
   const orphans = fictitious.filter((u) => !stillUsed.some((m) => m.userId === u.id)).map((u) => u.id);
   if (orphans.length) await db.delete(users).where(inArray(users.id, orphans));

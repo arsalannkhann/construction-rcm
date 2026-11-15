@@ -1,4 +1,4 @@
-# Operating Construction RCM
+# Operating Zephric
 
 How to deploy it, keep it healthy, back it up, recover it, and onboard the
 first customer. Written for whoever runs the pilot deployment.

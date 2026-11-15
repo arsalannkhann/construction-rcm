@@ -25,7 +25,7 @@ export function messageWordingProblem(status: string, text: string): { level: 'b
   if (payment) {
     return {
       level: 'confirm',
-      reason: 'The message says a payment has been or will be made. Construction RCM records approvals; it does not issue or track payments. Confirm it in your accounting system, then tick the box to send.',
+      reason: 'The message says a payment has been or will be made. Zephric records approvals; it does not issue or track payments. Confirm it in your accounting system, then tick the box to send.',
     };
   }
   return null;
