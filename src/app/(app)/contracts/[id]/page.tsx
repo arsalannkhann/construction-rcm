@@ -7,11 +7,13 @@ import { BackLink } from '@/components/records/page-parts';
 import { buttonClass } from '@/components/ui/button';
 import { EmptyState, Money, Page, PageHeader, Panel, PanelHeader, Stat, StatusBadge, Table, Td, Th } from '@/components/ui/data';
 import { formatBps, formatMoney, percentOf } from '@/lib/money';
+import { describeRetainageTerms } from '@/lib/retainage';
 import { formatDate, pluralize } from '@/lib/utils';
 import { can } from '@/server/auth/permissions';
 import { requireCtx } from '@/server/auth/session';
 import { getContractDetail } from '@/server/services/records-queries';
 import { ChangeOrdersPanel } from './change-orders';
+import { RetainagePanel } from './retainage-panel';
 import { SchedulePanel } from './schedule-panel';
 import { TermsDialogButton } from './terms-dialog';
 
@@ -26,6 +28,8 @@ export default async function ContractPage({ params }: { params: Promise<{ id: s
   const { contract, project, subcontractor, position, baseline, applications } = detail;
   const canWrite = can(ctx.role, 'records:write');
   const canUpload = can(ctx.role, 'application:upload');
+  const canApprove = can(ctx.role, 'application:approve');
+  const retainageTerms = describeRetainageTerms(contract.retainageWorkBps, contract.retainageTerms);
   const approvedCos = detail.changeOrders.filter((c) => c.status === 'approved').length;
   const pendingCos = detail.changeOrders.filter((c) => c.status === 'pending').length;
   const percentComplete = percentOf(position.completedStored, position.contractSum);
@@ -67,7 +71,7 @@ export default async function ContractPage({ params }: { params: Promise<{ id: s
               cents={position.completedStored}
               note={position.latestApproved ? `${percentComplete === null ? '' : `${percentComplete}% of the contract sum, `}through ${through}` : 'No application approved yet'}
             />
-            <Figure label="Retainage held" cents={position.retainageHeld} note={`${formatBps(contract.retainageWorkBps)} on completed work · ${formatBps(contract.retainageStoredBps)} on stored materials`} />
+            <Figure label="Retainage held" cents={position.retainageHeld} note={`${retainageTerms} on completed work · ${formatBps(contract.retainageStoredBps)} on stored materials`} />
             <Figure label="Balance to finish" cents={position.balanceToFinish} note="Contract sum less total earned, so it includes retainage" />
           </Figures>
           {baseline && !position.latestApproved ? (
@@ -92,6 +96,7 @@ export default async function ContractPage({ params }: { params: Promise<{ id: s
                     originalAmount: contract.originalAmount,
                     retainageWorkBps: contract.retainageWorkBps,
                     retainageStoredBps: contract.retainageStoredBps,
+                    retainageTerms: contract.retainageTerms,
                     executedOn: contract.executedOn,
                     status: contract.status,
                   }}
@@ -107,7 +112,7 @@ export default async function ContractPage({ params }: { params: Promise<{ id: s
               <Money cents={contract.originalAmount} />
             </Stat>
             <Stat label="Retainage on completed work">
-              <span className="num">{formatBps(contract.retainageWorkBps)}</span>
+              <span className="num">{retainageTerms}</span>
             </Stat>
             <Stat label="Retainage on stored materials">
               <span className="num">{formatBps(contract.retainageStoredBps)}</span>
@@ -123,6 +128,16 @@ export default async function ContractPage({ params }: { params: Promise<{ id: s
         />
 
         <ChangeOrdersPanel contractId={contract.id} changeOrders={detail.changeOrders} canWrite={canWrite} />
+
+        <RetainagePanel
+          contractId={contract.id}
+          terms={`${retainageTerms} on completed work and ${formatBps(contract.retainageStoredBps)} on stored materials`}
+          held={position.retainageHeld}
+          hasApproval={!!position.latestApproved}
+          pending={detail.releasePending}
+          releases={detail.releases}
+          canApprove={canApprove}
+        />
 
         {baseline ? (
           <Panel>

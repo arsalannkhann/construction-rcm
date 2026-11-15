@@ -2,7 +2,7 @@
  * Read models for pages. Everything here is scoped to ctx.orgId; nothing
  * returns a row from another organisation.
  */
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import type { DB } from '@/db';
 import {
   auditEvents,
@@ -154,8 +154,33 @@ export async function getReviewData(db: DB, ctx: Ctx, id: string) {
         .orderBy(projects.name, subcontractors.name)
     : [];
 
+  // Other submissions with this application number on this contract (a corrected resubmission, or a duplicate),
+  // and any submission this one replaced or was replaced by.
+  const related =
+    contract && app.applicationNumber !== null
+      ? await db
+          .select({ id: payApplications.id, applicationNumber: payApplications.applicationNumber, status: payApplications.status, receivedAt: payApplications.receivedAt, claimedAmount: payApplications.claimedAmount, supersededById: payApplications.supersededById })
+          .from(payApplications)
+          .where(
+            and(
+              eq(payApplications.orgId, ctx.orgId),
+              ne(payApplications.id, app.id),
+              or(
+                and(eq(payApplications.contractId, contract.id), eq(payApplications.applicationNumber, app.applicationNumber)),
+                eq(payApplications.supersededById, app.id),
+                app.supersededById ? eq(payApplications.id, app.supersededById) : sql`false`,
+              ),
+            ),
+          )
+          .orderBy(asc(payApplications.receivedAt))
+      : [];
+  const sameNumber = related.filter((r) => r.status !== 'void' && r.applicationNumber === app.applicationNumber);
+
   return {
     app,
+    sameNumber,
+    replaces: related.filter((r) => r.supersededById === app.id),
+    replacedBy: related.find((r) => r.id === app.supersededById) ?? null,
     contract: contract ?? null,
     project: project ?? null,
     subcontractor: subcontractor ?? null,

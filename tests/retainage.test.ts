@@ -9,6 +9,7 @@ import { PermissionError, UserError } from '@/server/auth/permissions';
 import { allocate, computeRetainage, reconcile } from '@/server/recon/engine';
 import type { SamplePackage } from '@/server/samples/pdf';
 import { createRetainageRelease, updateContract, voidRetainageRelease } from '@/server/services/records';
+import { getContractDetail } from '@/server/services/records-queries';
 import { classifySender } from '@/server/services/reconcile';
 import { approveApplication } from '@/server/services/review';
 import { cleanInput } from './helpers/recon-fixture';
@@ -261,6 +262,13 @@ describe('retainage releases through the services', () => {
     await expect(voidRetainageRelease(w.db, w.controller, release!.id, 'Recorded in error')).rejects.toThrow(/was approved with this release counted/);
   });
 
+  it('shows on the contract which application billed the release', async () => {
+    const detail = (await getContractDetail(w.db, w.viewer, w.contractId))!;
+    expect(detail.releases).toHaveLength(1);
+    expect(detail.releases[0]).toMatchObject({ amount: D(5000), status: 'approved', createdByName: 'Carlos Controller', countedIn: { applicationNumber: 2 } });
+    expect(detail.releasePending).toBe(0);
+  });
+
   it('re-checks open applications when a release is recorded or cancelled', async () => {
     const w2 = await createWorld();
     const first = packageFor(w2, 0, null);
@@ -274,10 +282,16 @@ describe('retainage releases through the services', () => {
 
     const id = await createRetainageRelease(w2.db, w2.controller, w2.contractId, { amount: D(4000), effectiveOn: '2026-10-01', note: 'Agreed with the owner' });
     expect(await openFindings(w2, app.id)).toEqual([]);
+    const pending = (await getContractDetail(w2.db, w2.controller, w2.contractId))!;
+    expect(pending.releasePending).toBe(D(4000));
+    expect(pending.releases[0]).toMatchObject({ status: 'approved', countedIn: null });
     expect((await getApp(w2, app.id)).verifiedAmount).toBe(D(107500));
 
     await voidRetainageRelease(w2.db, w2.controller, id, 'Owner withdrew the approval');
     expect((await openFindings(w2, app.id)).map((f) => f.code).sort()).toEqual(unrecorded);
+    const voided = (await getContractDetail(w2.db, w2.controller, w2.contractId))!;
+    expect(voided.releasePending).toBe(0);
+    expect(voided.releases[0]).toMatchObject({ status: 'void', voidedByName: 'Carlos Controller' });
     expect((await getApp(w2, app.id)).verifiedAmount).toBe(D(103500));
   });
 

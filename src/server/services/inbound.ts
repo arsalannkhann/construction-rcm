@@ -193,7 +193,7 @@ export async function receiveInboundEmail(db: DB, token: string, presented: stri
             type: 'intake.sender_rejected',
             title: 'An emailed billing package was turned away',
             body: `From ${message.from ?? 'an unknown address'}${message.subject ? `, “${message.subject.slice(0, 80)}”` : ''}. Add the address to the subcontractor’s record and ask them to send it again.`,
-            href: '/settings/organization',
+            href: '/settings/system#intake',
           });
         }
         return { outcome: 'rejected', reason };

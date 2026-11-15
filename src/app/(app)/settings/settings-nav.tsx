@@ -9,6 +9,7 @@ const ITEMS = [
   { href: '/settings/team', label: 'Team' },
   { href: '/settings/policy', label: 'Review policy' },
   { href: '/settings/integrations', label: 'Integrations' },
+  { href: '/settings/system', label: 'System status' },
   { href: '/settings/profile', label: 'Profile' },
 ];
 

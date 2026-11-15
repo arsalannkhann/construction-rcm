@@ -9,11 +9,12 @@ import { Textarea } from '@/components/ui/form';
 import { Dialog } from '@/components/ui/overlay';
 import { formatDelta } from '@/lib/money';
 import { useAction } from '@/lib/use-action';
-import { cn, formatRelative } from '@/lib/utils';
+import { cn, formatDate, formatRelative } from '@/lib/utils';
 import type { ReviewData } from '@/server/services/queries';
 import type { FindingCategory } from '@/server/types';
 import { FINDING_CATEGORIES, FINDING_CATEGORY_LABEL } from '@/server/types';
-import { acceptFindingAction, adoptScheduleAction, confirmSignatureAction, reopenFindingAction, setOpeningBalancesAction } from '../actions';
+import { SubcontractorDialogButton } from '../../subcontractors/subcontractor-dialog';
+import { acceptFindingAction, adoptScheduleAction, confirmSignatureAction, reopenFindingAction, setOpeningBalancesAction, supersedeAction } from '../actions';
 import { useWorkspace } from './workspace';
 
 type Finding = ReviewData['findings'][number];
@@ -31,6 +32,34 @@ export function FindingsPanel() {
 
   return (
     <div className="space-y-6 px-5 py-4">
+      {data.replacedBy ? (
+        <div className="flex items-start gap-3 rounded-lg border border-line bg-canvas/60 px-4 py-3 text-xs text-ink-2">
+          <Info className="mt-0.5 size-4 shrink-0 text-ink-3" />
+          <p>
+            This submission was replaced by a corrected one received {formatDate(new Date(data.replacedBy.receivedAt).toISOString().slice(0, 10))} and is void.{' '}
+            <Link href={`/applications/${data.replacedBy.id}`} className="font-medium text-accent hover:underline">
+              Open the replacement
+            </Link>
+          </p>
+        </div>
+      ) : null}
+      {data.replaces.length > 0 ? (
+        <div className="flex items-start gap-3 rounded-lg border border-line bg-canvas/60 px-4 py-3 text-xs text-ink-2">
+          <Info className="mt-0.5 size-4 shrink-0 text-ink-3" />
+          <p>
+            This submission replaced{' '}
+            {data.replaces.map((r, i) => (
+              <span key={r.id}>
+                {i > 0 ? ', ' : ''}
+                <Link href={`/applications/${r.id}`} className="font-medium text-accent hover:underline">
+                  the one received {formatDate(new Date(r.receivedAt).toISOString().slice(0, 10))}
+                </Link>
+              </span>
+            ))}
+            , which {data.replaces.length === 1 ? 'was' : 'were'} voided.
+          </p>
+        </div>
+      ) : null}
       {approved && open.length > 0 ? (
         <section>
           <SectionTitle>
@@ -183,6 +212,8 @@ function FindingCard({ finding: f }: { finding: Finding }) {
           </p>
         ) : null}
 
+        {f.code === 'seq.duplicate_number' && data.sameNumber.length > 0 ? <SameNumber /> : null}
+
         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
           {spot ? (
             <Button size="sm" onClick={() => ws.show(spot)}>
@@ -225,6 +256,13 @@ function FindingCard({ finding: f }: { finding: Finding }) {
             <Button size="sm" variant="primary" loading={pending} onClick={() => run(() => adoptScheduleAction(data.app.id), { success: 'Schedule adopted for this contract' })}>
               Adopt this schedule
             </Button>
+          ) : null}
+          {editable && f.code === 'intake.sender' && perms.records && data.subcontractor ? (
+            <SubcontractorDialogButton
+              mode="edit"
+              label="Update subcontractor contact"
+              subcontractor={{ id: data.subcontractor.id, name: data.subcontractor.name, trade: data.subcontractor.trade, contactName: data.subcontractor.contactName, contactEmail: data.subcontractor.contactEmail, phone: data.subcontractor.phone, address: data.subcontractor.address }}
+            />
           ) : null}
           {editable && f.code === 'prior.no_history' && perms.approve ? (
             <Button size="sm" variant="primary" onClick={() => setConfirmBaseline(true)}>
@@ -284,6 +322,7 @@ function Cell({ label, children }: { label: string; children: React.ReactNode })
 }
 
 function AcceptDialog({ finding: f, open, onOpenChange, label }: { finding: Finding; open: boolean; onOpenChange: (o: boolean) => void; label: string }) {
+  const { data } = useWorkspace();
   const [note, setNote] = useState('');
   const { pending, run } = useAction();
   const required = f.severity === 'blocking' || f.needsQualifiedReview;
@@ -309,7 +348,7 @@ function AcceptDialog({ finding: f, open, onOpenChange, label }: { finding: Find
             loading={pending}
             disabled={required && note.trim().length < 5}
             onClick={() =>
-              run(() => acceptFindingAction(f.id, note), {
+              run(() => acceptFindingAction(f.id, note, data.app.version), {
                 success: `${label === 'Override' ? 'Overridden' : label === 'Sign off' ? 'Signed off' : 'Accepted'}`,
                 onSuccess: () => {
                   onOpenChange(false);
@@ -399,5 +438,73 @@ function PassedChecks({ passed }: { passed: Finding[] }) {
         </p>
       )}
     </section>
+  );
+}
+
+/** The other submissions with this application number, and the way to retire an earlier one in favour of this corrected package. */
+function SameNumber() {
+  const { data, perms, editable } = useWorkspace();
+  const { pending, run } = useAction();
+  const [replacing, setReplacing] = useState<ReviewData['sameNumber'][number] | null>(null);
+  const received = new Date(data.app.receivedAt).getTime();
+  return (
+    <>
+      <ul className="divide-y divide-line overflow-hidden rounded-md border border-line text-xs">
+        {data.sameNumber.map((s) => {
+          const earlier = new Date(s.receivedAt).getTime() < received;
+          const replaceable = editable && perms.review && earlier && s.status !== 'approved' && s.status !== 'processing';
+          return (
+            <li key={s.id} className="flex items-center gap-2 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <Link href={`/applications/${s.id}`} className="font-medium text-ink hover:underline">
+                  Application #{s.applicationNumber}, received {formatDate(new Date(s.receivedAt).toISOString().slice(0, 10))}
+                </Link>
+                <div className="text-ink-3">
+                  {s.status.replace('_', ' ')}
+                  {s.claimedAmount !== null ? (
+                    <>
+                      {' · requested '}
+                      <Money cents={s.claimedAmount} />
+                    </>
+                  ) : null}
+                  {earlier ? '' : ' · arrived after this one'}
+                </div>
+              </div>
+              {replaceable ? (
+                <Button size="sm" onClick={() => setReplacing(s)}>
+                  Replace with this submission…
+                </Button>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      <Dialog
+        open={replacing !== null}
+        onOpenChange={(o) => (o ? null : setReplacing(null))}
+        title="Replace the earlier submission?"
+        description={
+          replacing
+            ? `Application #${replacing.applicationNumber} received ${formatDate(new Date(replacing.receivedAt).toISOString().slice(0, 10))} will be voided and linked to this one, so the same billing cannot be approved twice. Its documents and history are kept, and it can be reopened later if this was a mistake.`
+            : ''
+        }
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setReplacing(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              loading={pending}
+              onClick={() => replacing && run(() => supersedeAction(data.app.id, replacing.id), { success: 'Earlier submission replaced', onSuccess: () => setReplacing(null) })}
+            >
+              Void the earlier one and keep this
+            </Button>
+          </>
+        }
+      >
+        <p className="text-xs text-ink-2">Use this when the subcontractor sent a corrected package for the same period. If this upload is the duplicate instead, void this one from the ⋯ menu.</p>
+      </Dialog>
+    </>
   );
 }

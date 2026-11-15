@@ -82,12 +82,23 @@ export default async function OrganizationSettingsPage() {
                 <div className="text-[13px] font-medium text-ink">Shared secret</div>
                 <p className="mt-0.5 text-xs text-ink-3">
                   {secretSet
-                    ? 'Set on the server as INBOUND_EMAIL_SECRET. Your provider must send it with every request, as ?secret= on the address above. It is never shown here.'
+                    ? 'Set on the server as INBOUND_EMAIL_SECRET. Your provider must send it with every request: as the password of HTTP basic authentication, an x-inbound-secret header, or ?secret= on the address above. It is never shown here.'
                     : 'Not set on the server (INBOUND_EMAIL_SECRET). The endpoint rejects all requests until it is set.'}
                 </p>
               </div>
               <Badge tone={secretSet ? 'pass' : 'neutral'}>{secretSet ? 'Configured' : 'Not configured'}</Badge>
             </div>
+            <p className="border-t border-line pt-3 text-xs text-ink-3">
+              Each message is processed once, even if the provider delivers it again. Messages from an address that is not on file are handled as set in{' '}
+              <a href="/settings/policy" className="text-ink-2 underline underline-offset-2">
+                Review policy
+              </a>
+              . Every message received, and what happened to it, is listed under{' '}
+              <a href="/settings/system#intake" className="text-ink-2 underline underline-offset-2">
+                System status
+              </a>
+              .
+            </p>
           </div>
         </Panel>
 

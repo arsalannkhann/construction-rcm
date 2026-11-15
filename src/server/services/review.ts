@@ -36,6 +36,7 @@ import { newId } from '@/server/ids';
 import { mapLinesToSov } from '@/server/recon/matching';
 import type { ApprovedRecord, ClaimedField, ContractBaseline, HeaderCorrections, LineAmountField, Tri, WaiverType } from '@/server/types';
 import { CLAIMED_FIELD_LABEL, CLAIMED_FIELDS, LINE_AMOUNT_FIELDS, OPEN_STATUSES, WAIVER_TYPES } from '@/server/types';
+import { messageWordingProblem } from '@/lib/message-wording';
 import { notifyPermission, notifyUsers } from './notify';
 import { computeReconciliation, rereconcileContract, runReconciliation } from './reconcile';
 
@@ -840,37 +841,7 @@ export type MessageInput = {
   now?: Date;
 };
 
-const IMPLIES_APPROVAL = [/\b(has|have) been approved\b/i, /\b(is|was|are|were) approved\b/i, /\bapproved for payment\b/i, /\bwe(?:'ve| have)? approved\b/i];
-const IMPLIES_PAYMENT = [
-  /\bpayment (has been|was|is being|will be) (sent|issued|released|made|processed|mailed|wired)\b/i,
-  /\b(has|have) been paid\b/i,
-  /\bwe(?:'ve| have)? paid\b/i,
-  /\b(check|cheque|ach|wire|funds) (has been|have been|was|were|is being|will be) (sent|issued|mailed|released|wired)\b/i,
-];
-
-/**
- * A message to a subcontractor must not say more than is true. This product
- * records approvals; it does not issue or track payments. Returns the problem
- * with the wording, if any: `block` cannot be sent, `confirm` needs the sender
- * to vouch for it.
- */
-export function messageWordingProblem(status: string, text: string): { level: 'block' | 'confirm'; reason: string } | null {
-  const approval = IMPLIES_APPROVAL.some((re) => re.test(text));
-  const payment = IMPLIES_PAYMENT.some((re) => re.test(text));
-  if (status !== 'approved' && (approval || payment)) {
-    return {
-      level: 'block',
-      reason: `This application has not been approved, but the message reads as if it has been ${payment ? 'paid' : 'approved'}. Reword it, or approve the application first.`,
-    };
-  }
-  if (payment) {
-    return {
-      level: 'confirm',
-      reason: 'The message says a payment has been or will be made. Construction RCM records approvals; it does not issue or track payments. Confirm it in your accounting system, then tick the box to send.',
-    };
-  }
-  return null;
-}
+export { messageWordingProblem };
 
 const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
 
@@ -887,6 +858,7 @@ export async function sendSubcontractorMessage(db: DB, ctx: Ctx, appId: string, 
   const to = input.to.trim();
   const subject = input.subject.trim();
 
+  let vouched = false;
   const messageId = await withOrgLock(db, ctx.orgId, async (tx) => {
     assertCan(ctx, 'application:review');
     const app = await loadApp(tx, ctx, appId);
@@ -895,6 +867,7 @@ export async function sendSubcontractorMessage(db: DB, ctx: Ctx, appId: string, 
     if (!subject || input.body.trim().length < 10) throw new UserError('Write a subject and a message.');
     const wording = messageWordingProblem(app.status, `${subject}\n${input.body}`);
     if (wording && (wording.level === 'block' || !input.acknowledgeWording)) throw new UserError(wording.reason);
+    vouched = wording !== null;
 
     // A double click, a retry after a slow response, or two reviewers sending the same request.
     const recent = await tx.select().from(communications).where(and(eq(communications.orgId, ctx.orgId), eq(communications.payApplicationId, appId), eq(communications.toEmail, to)));
@@ -940,8 +913,8 @@ export async function sendSubcontractorMessage(db: DB, ctx: Ctx, appId: string, 
       entityType: 'pay_application',
       entityId: appId,
       payApplicationId: appId,
-      summary: `${delivery}: “${subject}”${hold ? '. Application placed on hold awaiting the subcontractor.' : ''}${input.hold && result.status === 'failed' ? '. The application was not placed on hold because the message did not go out.' : ''}`,
-      data: { to, subject, status: result.status, hold },
+      summary: `${delivery}: “${subject}”${hold ? '. Application placed on hold awaiting the subcontractor.' : ''}${input.hold && result.status === 'failed' ? '. The application was not placed on hold because the message did not go out.' : ''}${vouched ? ` ${ctx.userName} confirmed the payment statement in it against the accounting system.` : ''}`,
+      data: { to, subject, status: result.status, hold, paymentStatementConfirmed: vouched },
       at: now,
     });
     if (result.status === 'failed') {

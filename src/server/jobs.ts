@@ -36,6 +36,7 @@ const g = globalThis as unknown as {
   __rcmKickAgain?: boolean;
   __rcmPoller?: NodeJS.Timeout;
   __rcmWorkerId?: string;
+  __rcmRunnerActivity?: number;
 };
 const handlers = (g.__rcmHandlers ??= new Map());
 const workerId = (g.__rcmWorkerId ??= `${os.hostname()}:${process.pid}:${randomToken(4)}`);
@@ -46,6 +47,8 @@ export const LEASE_MS = 2 * 60 * 1000;
 const HEARTBEAT_MS = 30 * 1000;
 const POLL_MS = 5 * 1000;
 const KEEP_SUCCEEDED_MS = 7 * 24 * 60 * 60 * 1000;
+/** Failed jobs stay visible on the system status screen for a month; the audit trail keeps the record for good. */
+const KEEP_FAILED_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Delay before retry number `attempt + 1`. */
 function backoffMs(attempt: number): number {
@@ -141,6 +144,7 @@ async function exhausted(db: DB, job: Job, error: string): Promise<void> {
 
 /** Run queued jobs until none are runnable. Returns how many ran. */
 export async function drain(db: DB): Promise<number> {
+  g.__rcmRunnerActivity = Date.now();
   let ran = 0;
   await giveUpOnAbandoned(db);
   for (;;) {
@@ -172,7 +176,17 @@ export async function drain(db: DB): Promise<number> {
     }
     ran++;
   }
-  if (ran > 0) await db.delete(jobs).where(and(eq(jobs.status, 'succeeded'), lt(jobs.finishedAt, new Date(Date.now() - KEEP_SUCCEEDED_MS))));
+  if (ran > 0) {
+    await db
+      .delete(jobs)
+      .where(
+        or(
+          and(eq(jobs.status, 'succeeded'), lt(jobs.finishedAt, new Date(Date.now() - KEEP_SUCCEEDED_MS))),
+          and(eq(jobs.status, 'failed'), lt(jobs.finishedAt, new Date(Date.now() - KEEP_FAILED_MS))),
+        ),
+      );
+  }
+  g.__rcmRunnerActivity = Date.now();
   return ran;
 }
 
@@ -199,4 +213,9 @@ export async function queueHealth(db: DB, orgId?: string): Promise<QueueHealth> 
   const of = (status: string) => rows.find((r) => r.status === status);
   const oldest = of('queued')?.oldest ?? null;
   return { queued: of('queued')?.n ?? 0, running: of('running')?.n ?? 0, failed: of('failed')?.n ?? 0, oldestQueuedAt: oldest ? new Date(oldest) : null };
+}
+
+/** Whether this process is running the queue, and when it last looked at it. */
+export function runnerStatus(): { polling: boolean; lastActivityAt: Date | null } {
+  return { polling: !!g.__rcmPoller, lastActivityAt: g.__rcmRunnerActivity ? new Date(g.__rcmRunnerActivity) : null };
 }

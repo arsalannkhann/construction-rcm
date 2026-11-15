@@ -9,6 +9,8 @@ type Options<T> = {
   /** Toast shown on success. */
   success?: string | ((data: T) => string);
   onSuccess?: (data: T) => void;
+  /** Called after the error toast. `conflict` means someone else changed the record and the page is being refreshed. */
+  onError?: (conflict: boolean) => void;
   /** Re-fetch the current page's server data afterwards (default true). */
   refresh?: boolean;
 };
@@ -31,6 +33,7 @@ export function useAction() {
           toast.error(result.error);
           // Someone else changed the record: show what it looks like now.
           if (result.conflict) router.refresh();
+          options.onError?.(result.conflict === true);
           return;
         }
         if (options.success) toast.success(typeof options.success === 'function' ? options.success(result.data) : options.success);
