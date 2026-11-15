@@ -109,9 +109,10 @@ integration's **Deploy to production** option on (Project settings →
 Integrations), Supabase applies new files when they reach `main`, each in one
 transaction.
 
-The `construction-rcm` project already holds migrations 0000–0002. They were
-applied on 2026-11-15 and recorded under the same versions as the files, so
-the integration has nothing to re-apply. Check with:
+The `construction-rcm` project already holds migrations 0000–0003. They were
+applied on 2026-11-15 (0003, which adds `login_challenges.invitation_id`, after
+the others) and recorded under the same versions as the files, so the
+integration has nothing to re-apply when this branch reaches `main`. Check with:
 
 ```sql
 select version, name from supabase_migrations.schema_migrations order by version;
