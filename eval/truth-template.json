@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "description": "TEMPLATE. Copy beside a document as <file name>.truth.json and replace every value with what that document prints. Money in integer cents (10350000 = $103,500.00), dates ISO. Leave a key out if you could not determine it; use null when the document does not print it. Never correct the subcontractor's figures. Format: docs/extraction-evaluation.md.",
+  "tags": ["real", "aia-g702-g703"],
+  "package": "acme-electric-2026-10",
+  "pageCount": 3,
+  "documents": [
+    { "type": "pay_application", "pageStart": 1, "pageEnd": 1 },
+    { "type": "continuation_sheet", "pageStart": 2, "pageEnd": 2 },
+    { "type": "lien_waiver", "pageStart": 3, "pageEnd": 3 }
+  ],
+  "payApp": {
+    "applicationNumber": 7,
+    "periodTo": "2026-10-31",
+    "applicationDate": "2026-11-03",
+    "projectName": "Riverside Medical Office Building",
+    "projectNumber": "2301",
+    "contractorName": "Acme Electric, LLC",
+    "toName": "Example General Contractors, Inc.",
+    "contractNumber": "SC-2301-16",
+    "contractDate": "2026-03-02",
+    "amounts": {
+      "originalContractSum": 50000000,
+      "netChangeOrders": 0,
+      "contractSumToDate": 50000000,
+      "totalCompletedStored": 22500000,
+      "retainageWork": 2150000,
+      "retainageStored": 100000,
+      "retainageTotal": 2250000,
+      "totalEarnedLessRetainage": 20250000,
+      "lessPreviousCertificates": 9900000,
+      "currentPaymentDue": 10350000,
+      "balanceToFinish": 29750000
+    },
+    "signed": "yes",
+    "signatureMark": "ink",
+    "notarized": "no"
+  },
+  "lines": [
+    { "itemNo": "1", "description": "Mobilization", "page": 2, "scheduledValue": 5000000, "previous": 5000000, "thisPeriod": 0, "stored": 0, "total": 5000000, "balance": 0, "retainage": 500000 },
+    { "itemNo": "2", "description": "Rough-in, levels 1-3", "page": 2, "scheduledValue": 30000000, "previous": 6000000, "thisPeriod": 9000000, "stored": 0, "total": 15000000, "balance": 15000000, "retainage": 1500000 },
+    { "itemNo": "3", "description": "Fixtures", "page": 2, "scheduledValue": 15000000, "previous": 0, "thisPeriod": 1500000, "stored": 1000000, "total": 2500000, "balance": 12500000, "retainage": 250000 }
+  ],
+  "lineTotals": {
+    "scheduledValue": 50000000,
+    "previous": 11000000,
+    "thisPeriod": 10500000,
+    "stored": 1000000,
+    "total": 22500000,
+    "balance": 27500000,
+    "retainage": 2250000
+  },
+  "waivers": [
+    {
+      "page": 3,
+      "waiverType": "conditional_progress",
+      "formState": "TX",
+      "claimant": "Acme Electric, LLC",
+      "customer": "Example General Contractors, Inc.",
+      "owner": "Riverside Medical Partners",
+      "throughDate": "2026-10-31",
+      "amount": 10350000,
+      "exceptions": null,
+      "signed": "yes",
+      "signatureMark": "ink"
+    }
+  ],
+  "pageNumbering": [
+    { "page": 1, "number": 1, "of": 3 },
+    { "page": 2, "number": 2, "of": 3 },
+    { "page": 3, "number": 3, "of": 3 }
+  ],
+  "expect": {
+    "outcome": "processed",
+    "flags": []
+  }
+}
