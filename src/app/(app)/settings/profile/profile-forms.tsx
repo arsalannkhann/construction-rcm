@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, Input } from '@/components/ui/form';
 import { useAction } from '@/lib/use-action';
+import { PASSWORD_HINT, passwordProblem } from '@/server/auth/password-rules';
 import { changePasswordAction, updateProfileAction } from './actions';
 
 export function NameForm({ name }: { name: string }) {
@@ -38,17 +39,16 @@ export function NameForm({ name }: { name: string }) {
   );
 }
 
-const MIN_PASSWORD = 10;
-
-export function PasswordForm({ email }: { email: string }) {
+export function PasswordForm({ email, name }: { email: string; name: string }) {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
   const { pending, run } = useAction();
 
-  const tooShort = next.length > 0 && next.length < MIN_PASSWORD;
+  // The same rule the server applies, shown as you type.
+  const problem = next.length > 0 ? passwordProblem(next, { email, name }) : null;
   const mismatch = confirm.length > 0 && confirm !== next;
-  const ready = current.length > 0 && next.length >= MIN_PASSWORD && confirm === next;
+  const ready = current.length > 0 && next.length > 0 && !problem && confirm === next;
 
   return (
     <form
@@ -71,8 +71,8 @@ export function PasswordForm({ email }: { email: string }) {
       <Field label="Current password">
         <Input type="password" name="current-password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
       </Field>
-      <Field label="New password" error={tooShort ? `Use at least ${MIN_PASSWORD} characters.` : null} hint={`At least ${MIN_PASSWORD} characters.`}>
-        <Input type="password" name="new-password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} aria-invalid={tooShort} />
+      <Field label="New password" error={problem} hint={PASSWORD_HINT}>
+        <Input type="password" name="new-password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} aria-invalid={!!problem} />
       </Field>
       <Field label="Confirm new password" error={mismatch ? 'This does not match the new password.' : null}>
         <Input type="password" name="confirm-password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-invalid={mismatch} />

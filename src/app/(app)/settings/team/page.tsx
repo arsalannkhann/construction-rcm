@@ -6,8 +6,8 @@ import { cn, formatDateTime, formatRelative, pluralize } from '@/lib/utils';
 import { can, ROLE_DESCRIPTION, ROLE_LABEL } from '@/server/auth/permissions';
 import { requireCtx } from '@/server/auth/session';
 import { emailDeliveryConfigured } from '@/server/email';
-import { listInvitations, listMembers } from '@/server/services/team';
-import { ROLES, type Role } from '@/server/types';
+import { getOrganization, listInvitations, listMembers } from '@/server/services/team';
+import { resolveSettings, ROLES, type Role } from '@/server/types';
 import { InviteDialogButton } from './invite-dialog';
 import { MemberMenu, RevokeInviteButton, RoleSelect } from './team-controls';
 
@@ -21,6 +21,7 @@ export default async function TeamSettingsPage() {
   const db = await getDb();
   const members = await listMembers(db, ctx);
   const invitations = await listInvitations(db, ctx);
+  const { requireMfa } = resolveSettings((await getOrganization(db, ctx)).settings);
   const now = new Date();
 
   // The controls offered below mirror what the team service will accept, so nobody is handed a
@@ -53,6 +54,7 @@ export default async function TeamSettingsPage() {
                 <Th>Email</Th>
                 <Th>Role</Th>
                 <Th>Status</Th>
+                <Th>Two-step</Th>
                 <Th>Last sign-in</Th>
                 <Th className="w-10" />
               </tr>
@@ -82,10 +84,19 @@ export default async function TeamSettingsPage() {
                     <Td>
                       <Badge tone={isActive ? 'pass' : 'neutral'}>{isActive ? 'Active' : 'Deactivated'}</Badge>
                     </Td>
+                    <Td>
+                      {m.mfaEnabled ? (
+                        <Badge tone="pass">On</Badge>
+                      ) : (
+                        <span className={cn('text-xs', requireMfa && isActive ? 'text-warn' : 'text-ink-3')} title={requireMfa && isActive ? 'Required here: they cannot work in this organisation until they turn it on' : undefined}>
+                          Off
+                        </span>
+                      )}
+                    </Td>
                     <Td className="whitespace-nowrap text-ink-2">
                       {m.lastLoginAt ? <span title={formatDateTime(m.lastLoginAt)}>{formatRelative(m.lastLoginAt, now)}</span> : <span className="text-ink-4">Never</span>}
                     </Td>
-                    <Td className="pr-3 text-right">{actionable ? <MemberMenu userId={m.userId} name={m.name} active={isActive} orgName={ctx.orgName} /> : null}</Td>
+                    <Td className="pr-3 text-right">{actionable ? <MemberMenu userId={m.userId} name={m.name} active={isActive} mfaEnabled={m.mfaEnabled} orgName={ctx.orgName} /> : null}</Td>
                   </tr>
                 );
               })}
@@ -93,7 +104,7 @@ export default async function TeamSettingsPage() {
           </Table>
           {canManage ? (
             <p className="px-4 py-2.5 text-xs text-ink-3">
-              You cannot change your own role or deactivate yourself; another owner or admin has to.{isOwner ? '' : ' Only an owner can change or deactivate an owner.'}
+              You cannot change your own role, deactivate yourself or reset your own sign-in here; another owner or admin has to.{isOwner ? '' : ' Only an owner can change, deactivate or reset an owner.'}
             </p>
           ) : null}
         </Panel>
