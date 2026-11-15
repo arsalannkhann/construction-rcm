@@ -162,6 +162,10 @@ export type VerifiedHeader = Record<ClaimedField, number> & {
   priorApplicationNumber: number | null;
   /** Line items excluded from the verified totals because they match nothing in the contract. */
   excludedLines: number;
+  /** Recorded retainage releases applied in arriving at the retainage held. Absent on records from before releases existed. */
+  retainageReleased?: number;
+  /** How the retainage held was calculated, in words. */
+  retainageBasis?: string;
 };
 
 export const EMPTY_CLAIMED: ClaimedHeader = {
@@ -454,8 +458,12 @@ export type ApprovedRecord = {
     originalAmount: number;
     retainageWorkBps: number;
     retainageStoredBps: number;
+    /** Stepped-rate terms in force at approval, if any. */
+    retainageTerms?: RetainageTerms | null;
     externalId: string | null;
   };
+  /** Retainage releases that were counted in this approval. */
+  retainageReleases?: { amount: number; effectiveOn: string; note: string | null }[];
   application: { id: string; number: number; periodTo: string; receivedAt: string };
   claimed: ClaimedHeader;
   approved: VerifiedHeader;
