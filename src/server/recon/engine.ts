@@ -18,24 +18,34 @@ import { formatDate, pluralize } from '@/lib/utils';
 import type {
   ClaimedField,
   ClaimedHeader,
+  DocType,
   DocumentSegment,
+  ExtractionConflict,
   FindingCategory,
   FindingData,
   FindingRefs,
+  LineAmountField,
   OrgSettings,
+  PrintedPageNumber,
   RetainageTerms,
+  ScheduleGrandTotal,
   Severity,
   Tri,
   VerifiedHeader,
   WaiverType,
 } from '@/server/types';
-import { CLAIMED_FIELD_LABEL, CLAIMED_FIELD_LINE } from '@/server/types';
+import { CLAIMED_FIELD_LABEL, CLAIMED_FIELD_LINE, DOC_TYPE_LABEL, LINE_AMOUNT_FIELDS } from '@/server/types';
 import { evaluateWaivers } from '@/server/compliance/waivers';
+import { printedPageGaps, sumColumn } from '@/server/documents/integrity';
 
 // ── Inputs ──────────────────────────────────────────────────────────────────
 
 export type ReconLine = {
   id: string;
+  /** The file the row was read from; null for a row keyed by hand. */
+  documentId?: string | null;
+  /** The amounts as the document prints them, when a reviewer has adjusted the row for approval. */
+  printed?: Partial<Record<LineAmountField, number | null>> | null;
   sovLineId: string | null;
   itemNo: string | null;
   description: string | null;
@@ -104,8 +114,24 @@ export type ReconInput = {
     statusDetail: string | null;
     segments: DocumentSegment[];
     duplicateOf: { applicationNumber: number | null; filename: string } | null;
+    /** What the latest successful reading of the file saw besides the figures. Absent when it was not read. */
+    integrity?: DocumentIntegrity | null;
   }>;
   waivers: ReconWaiver[];
+};
+
+/** Printed facts about a file that tell whether everything in it was read. */
+export type DocumentIntegrity = {
+  /** Every "page x of y" marking, in file order. */
+  pageNumbering: PrintedPageNumber[];
+  /** The schedule's printed grand-total row. */
+  scheduleGrandTotal: ScheduleGrandTotal | null;
+  /** The same fact printed with different values, or a second application in the file. */
+  conflicts: ExtractionConflict[];
+  /** Pages with no machine-readable text that the reader could not read. */
+  unreadablePages: number[];
+  /** Number of the pay application read from this file, when it holds one. */
+  payApplicationNumber: number | null;
 };
 
 // ── Outputs ─────────────────────────────────────────────────────────────────
@@ -455,6 +481,128 @@ export function reconcile(input: ReconInput): ReconOutput {
         refs: { documentId: doc.id, page: 1, tab: 'documents' },
       });
     }
+  }
+
+  // What the reading of each file saw besides the figures: pages it could not read, pages missing
+  // from the printed numbering, and the same fact printed twice with different values. Each of
+  // these can hide a line item or an amount, so each blocks until a person has looked.
+  const marks = input.documents.flatMap((d) => (d.integrity?.pageNumbering ?? []).map((m) => ({ ...m, documentId: d.id })));
+  for (const doc of input.documents) {
+    const facts = doc.integrity;
+    if (!facts || doc.status === 'unreadable' || doc.status === 'failed') continue; // the whole file is already flagged
+
+    const unread = facts.unreadablePages;
+    if (unread.length > 0) {
+      const one = unread.length === 1;
+      checks.push({
+        code: 'doc.unreadable_pages',
+        subjectKey: doc.id,
+        category: 'extraction',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `${one ? 'Page' : 'Pages'} ${listNumbers(unread)} of “${doc.filename}” could not be read automatically`,
+        detail: `${one ? 'This page has' : 'These pages have'} no machine-readable text (a blank page or a scanned image), so nothing on ${one ? 'it' : 'them'} was read or checked. A line item, amount or signature there is missing from the figures in this review.`,
+        action: `Open the ${one ? 'page' : 'pages'} and key anything ${one ? 'it holds' : 'they hold'} by hand (line items on the Lines tab, summary figures on the Summary tab), then accept this item to confirm you have accounted for ${one ? 'it' : 'them'}. Or request a copy with a text layer.`,
+        data: { actualText: unread.join(',') },
+        refs: { documentId: doc.id, page: unread[0], tab: 'documents' },
+      });
+    }
+
+    // A number printed on another file of the package is not missing: an application and its
+    // schedule are often numbered as one document and sent as two files.
+    const gaps = printedPageGaps(facts.pageNumbering)
+      .map((g) => ({ ...g, missing: g.missing.filter((n) => !marks.some((m) => m.documentId !== doc.id && m.of === g.of && m.number === n)) }))
+      .filter((g) => g.missing.length > 0);
+    if (gaps.length > 0) {
+      const what = gaps.map((g) => `${g.missing.length === 1 ? 'page' : 'pages'} ${listNumbers(g.missing)}${g.of !== null ? ` of ${g.of}` : ''}`).join(' and ');
+      const first = gaps[0]!;
+      const sample = facts.pageNumbering.find((m) => m.page === first.pages[0]);
+      checks.push({
+        code: 'doc.page_missing',
+        subjectKey: doc.id,
+        category: 'documents',
+        severity: 'blocking',
+        outcome: 'fail',
+        title: `“${doc.filename}” is missing ${what}`,
+        detail: `The pages are numbered${sample ? ` (page ${sample.page} of the file is marked “${sample.source}”)` : ''}, but printed ${what} ${gaps.length === 1 && first.missing.length === 1 ? 'is' : 'are'} not in this file or in any other file of the package. A missing page of a schedule of values hides its line items; a missing page of an application or waiver can hide an amount, a condition or the signature.`,
+        action: 'Request the missing pages from the subcontractor. If nothing is missing (the numbering on the document is wrong), accept this item with a note saying so.',
+        data: { actualText: gaps.map((g) => `${g.missing.join(',')}/${g.of ?? ''}`).join(';') },
+        refs: { documentId: doc.id, page: first.pages[0], tab: 'documents' },
+      });
+    }
+
+    for (const conflict of facts.conflicts) {
+      // Amounts within the tolerance agree; application numbers must match exactly.
+      const same = (a: number | null, b: number | null) => a !== null && b !== null && (conflict.kind === 'total' ? near(a, b) : a === b);
+      const conflicting = conflict.others.filter((o) => !same(o.value, conflict.reported.value));
+      const other = conflicting[0];
+      if (!other) continue;
+      const reported = conflict.reported;
+      const at = (v: { page: number | null }) => (v.page !== null ? `page ${v.page}` : 'another page');
+      const base = {
+        code: 'doc.conflict',
+        subjectKey: `${doc.id}:${conflict.kind}:${conflict.field}`,
+        category: 'documents' as const,
+        outcome: 'fail' as const,
+        refs: { documentId: doc.id, page: other.page ?? reported.page ?? 1, tab: 'documents' as const },
+      };
+      if (conflict.kind === 'second_pay_application') {
+        const numbers = conflicting.map((o) => (o.value !== null ? `#${o.value}` : null)).filter(Boolean);
+        checks.push({
+          ...base,
+          severity: 'blocking',
+          title: `“${doc.filename}” holds more than one pay application`,
+          detail: `Only the application on ${at(reported)}${reported.value !== null ? ` (#${reported.value})` : ''} was read. ${pluralize(conflicting.length, 'other application')}${numbers.length > 0 ? ` (${numbers.join(', ')})` : ''} ${conflicting.length === 1 ? 'starts' : 'start'} on ${conflicting.map(at).join(', ')}; ${conflicting.length === 1 ? 'its' : 'their'} figures and schedule are not part of this review and nothing on ${conflicting.length === 1 ? 'it' : 'them'} has been checked. Paying both, or the wrong one, would pay the wrong amount.`,
+          action: 'Submit each application as its own package, or confirm the extra one is a copy of this application and accept this item with a note.',
+          data: { expected: reported.value, actual: other.value, actualText: conflicting.map((o) => `${o.value ?? '?'}@${o.page ?? '?'}`).join(',') },
+        });
+      } else if (conflict.kind === 'application_number') {
+        const values = [...new Set(conflicting.map((o) => o.value))];
+        checks.push({
+          ...base,
+          severity: 'blocking',
+          title: `“${doc.filename}” states two different application numbers`,
+          detail: `The pay application (${at(reported)}) is numbered ${reported.value ?? 'unreadable'}, but the ${docTypeName(other.docType)} (${conflicting.map(at).join(', ')}) says ${values.map((v) => v ?? 'unreadable').join(', ')}. The application number decides which earlier application counts as previous billing and whether this one is a duplicate.`,
+          action: 'Confirm the number with the subcontractor and correct it on the Summary tab if it was misread, then accept this item; or request corrected documents.',
+          data: { expected: reported.value, actual: other.value },
+        });
+      } else {
+        const field = conflict.field as ClaimedField;
+        // Line 4 against the schedule is already settled by the row sums (math.sheet_total and
+        // math.grand_total say which side is off); reporting it here too would say it twice.
+        if (field === 'totalCompletedStored' && input.lines.length > 0 && claimed.totalCompletedStored !== null) continue;
+        const label = CLAIMED_FIELD_LABEL[field] ?? humanKey(conflict.field);
+        const line = CLAIMED_FIELD_LINE[field];
+        const diff = reported.value !== null && other.value !== null ? other.value - reported.value : null;
+        checks.push({
+          ...base,
+          // The contract sum does not enter the payment; the others do.
+          severity: field === 'contractSumToDate' ? 'warning' : 'blocking',
+          title: `The application and its schedule print different figures for “${label}”`,
+          detail: `${line ? `Line ${line} of the pay application` : 'The pay application'} (${at(reported)}) says ${$(reported.value)}, but the ${docTypeName(other.docType)}’s printed total on ${at(other)} says ${$(other.value)}${diff !== null ? ` (${$(Math.abs(diff))} apart)` : ''}. The two documents disagree, so one of them is wrong or a page or line is missing.`,
+          action: 'Compare both pages with the document. If the document itself is inconsistent, request a corrected application.',
+          data: { expected: reported.value, actual: other.value, delta: diff },
+        });
+      }
+    }
+  }
+
+  // Two files in the package carrying pay applications with different numbers: only one was read.
+  const numbered = input.documents.filter((d) => d.integrity?.payApplicationNumber != null);
+  const distinct = [...new Set(numbered.map((d) => d.integrity!.payApplicationNumber!))];
+  if (distinct.length > 1) {
+    checks.push({
+      code: 'doc.conflict',
+      subjectKey: 'package:applicationNumber',
+      category: 'documents',
+      severity: 'blocking',
+      outcome: 'fail',
+      title: 'The package holds pay applications with different numbers',
+      detail: `${numbered.map((d) => `“${d.filename}” is application #${d.integrity!.payApplicationNumber}`).join('; ')}. Only one application can be reviewed per package; the figures of the other were not checked.`,
+      action: 'Remove the file that belongs to another application and submit it on its own, then re-run the review.',
+      data: { actualText: numbered.map((d) => `${d.id}:${d.integrity!.payApplicationNumber}`).join(',') },
+      refs: { documentId: numbered[0]!.id, page: 1, tab: 'documents' },
+    });
   }
 
   // Signature
@@ -829,6 +977,70 @@ export function reconcile(input: ReconInput): ReconOutput {
         action: ok ? undefined : 'Check for a line that was missed or misread; otherwise request a corrected application.',
         data: { expected: sheetTotal, actual: claimed.totalCompletedStored, delta: claimed.totalCompletedStored - sheetTotal },
         refs: { field: 'totalCompletedStored', tab: 'summary' },
+      });
+    }
+
+    // The schedule's printed grand total against its rows, column by column: a row or page that
+    // was not read, or a misread cell, shows up here. Plain integer-cent sums of the rows under
+    // review; nothing the reader computed is trusted.
+    const totalled = input.documents.filter((d) => d.integrity?.scheduleGrandTotal);
+    for (const doc of totalled) {
+      const g = doc.integrity!.scheduleGrandTotal!;
+      // With one printed total in the package every row counts toward it, including rows keyed by
+      // hand and rows of a schedule split across files. With several, each covers its own file.
+      const rows = (totalled.length === 1 ? input.lines : input.lines.filter((l) => l.documentId === doc.id))
+        // A reviewer's adjustment changes what is approved, not what the document says.
+        .map((l) => ({ ...l, ...(l.printed ?? {}) }))
+        .map((l) => ({ ...l, total: l.total ?? (l.previous ?? 0) + (l.thisPeriod ?? 0) + (l.stored ?? 0) }));
+      const columns = LINE_AMOUNT_FIELDS.filter((f) => typeof g.values[f] === 'number');
+      if (rows.length === 0 || columns.length === 0) continue;
+      const compared = columns.map((field) => {
+        const printed = g.values[field] as number;
+        const { sum: rowSum, blanks } = sumColumn(rows, field);
+        return { field, printed, rowSum, blanks, ok: near(rowSum, printed) };
+      });
+      const off = compared.filter((c) => !c.ok);
+      const where = `${g.page !== null ? `page ${g.page} of ` : ''}“${doc.filename}”`;
+      const refs: FindingRefs = { documentId: doc.id, ...(g.page !== null ? { page: g.page } : {}), tab: 'lines' };
+      if (off.length === 0) {
+        checks.push({
+          code: 'math.grand_total',
+          subjectKey: doc.id,
+          category: 'math',
+          severity: 'blocking',
+          outcome: 'pass',
+          title: 'Schedule rows add up to its printed grand total',
+          detail: `The ${pluralize(rows.length, 'row')} add up to the ${g.label ? `“${g.label}” row` : 'grand total'} printed on ${where} in every column (${compared.map((c) => GRAND_TOTAL_COLUMN[c.field]).join(', ')}).`,
+          refs,
+        });
+        continue;
+      }
+      // Only the columns that feed the payment block; the others still point at a missing row.
+      const blocking = off.some((c) => c.field !== 'scheduledValue' && c.field !== 'previous' && c.field !== 'balance');
+      const main = off.find((c) => c.field === 'total') ?? off.find((c) => c.field === 'thisPeriod') ?? off[0]!;
+      const blanks = Math.max(...off.map((c) => c.blanks));
+      checks.push({
+        code: 'math.grand_total',
+        subjectKey: doc.id,
+        category: 'math',
+        severity: blocking ? 'blocking' : 'warning',
+        outcome: 'fail',
+        title: 'Schedule rows do not add up to its printed grand total',
+        detail:
+          `The ${g.label ? `“${g.label}” row` : 'grand total'} printed on ${where} does not equal the sum of the ${pluralize(rows.length, 'row')} under review: ` +
+          off.map((c) => `${GRAND_TOTAL_COLUMN[c.field]} is printed as ${$(c.printed)} but the rows add up to ${$(c.rowSum)} (${$(Math.abs(c.printed - c.rowSum))} ${c.rowSum < c.printed ? 'short' : 'over'})`).join('; ') +
+          `. A row or page that was not read, or a misread figure, is the usual cause; otherwise the schedule itself does not add up.` +
+          (blanks > 0 ? ` ${pluralize(blanks, 'row')} ${blanks === 1 ? 'has' : 'have'} no figure in ${off.length === 1 ? 'that column' : 'one of these columns'}.` : '') +
+          (g.confidence < policy.lowConfidenceThreshold ? ' The printed total was itself read with low confidence; check it against the document too.' : ''),
+        action: 'Find the row that is missing or misread: key a missing row or correct the figure on the Lines tab. If the schedule itself does not add up, request a corrected schedule.',
+        data: {
+          expected: main.rowSum,
+          actual: main.printed,
+          delta: main.printed - main.rowSum,
+          expectedText: off.map((c) => `${c.field}:${c.rowSum}`).join(','),
+          actualText: off.map((c) => `${c.field}:${c.printed}`).join(','),
+        },
+        refs,
       });
     }
   }
@@ -1270,6 +1482,36 @@ function addDays(iso: string, days: number): string {
 function humanKey(key: string): string {
   return key.replace(/([A-Z])/g, ' $1').toLowerCase();
 }
+
+/** "3", "3 and 5", "2–4 and 7". */
+function listNumbers(ns: number[]): string {
+  const sorted = [...new Set(ns)].sort((a, b) => a - b);
+  const parts: string[] = [];
+  for (let i = 0; i < sorted.length; ) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j]! + 1) j++;
+    // Three or more in a row read better as a range.
+    if (j - i >= 2) parts.push(`${sorted[i]}–${sorted[j]}`);
+    else for (let k = i; k <= j; k++) parts.push(`${sorted[k]}`);
+    i = j + 1;
+  }
+  return parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
+/** "schedule of values", for use inside a sentence. */
+function docTypeName(t: DocType): string {
+  return DOC_TYPE_LABEL[t].replace(/\s*\(.*\)$/, '').toLowerCase();
+}
+
+const GRAND_TOTAL_COLUMN: Record<LineAmountField, string> = {
+  scheduledValue: 'scheduled value (C)',
+  previous: 'previous applications (D)',
+  thisPeriod: 'this period (E)',
+  stored: 'materials stored (F)',
+  total: 'completed and stored to date (G)',
+  balance: 'balance to finish (H)',
+  retainage: 'retainage',
+};
 
 /**
  * If the gap between billed and approved change orders is exactly one or two

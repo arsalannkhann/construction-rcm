@@ -5,13 +5,14 @@
  * to the application, a change to its contract, change orders or schedule of
  * values, and a decision on an earlier application on the same contract.
  */
-import { and, asc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { DB } from '@/db';
 import { locked } from '@/db/tx';
 import {
   changeOrders,
   contracts,
   documents,
+  extractions,
   findings,
   lienWaivers,
   organizations,
@@ -27,9 +28,9 @@ import {
 } from '@/db/schema';
 import { recordAudit, type AuditActor } from '@/server/audit';
 import { newId, sha256Hex } from '@/server/ids';
-import { reconcile, type CheckResult, type ReconInput, type ReconOutput, type ReconPrior } from '@/server/recon/engine';
-import type { ApprovedRecord, ContractBaseline, FindingCategory, Tri, WaiverType } from '@/server/types';
-import { FINDING_CATEGORIES, OPEN_STATUSES, resolveSettings } from '@/server/types';
+import { reconcile, type CheckResult, type DocumentIntegrity, type ReconInput, type ReconOutput, type ReconPrior } from '@/server/recon/engine';
+import type { ApprovedRecord, ContractBaseline, ExtractionResult, FindingCategory, LineAmountField, Tri, WaiverType } from '@/server/types';
+import { FINDING_CATEGORIES, LINE_AMOUNT_FIELDS, OPEN_STATUSES, resolveSettings } from '@/server/types';
 import { notifyPermission } from './notify';
 
 export type ReconSummary = { opened: number; openBlocking: number; openWarnings: number; passed: number };
@@ -52,6 +53,31 @@ function fingerprint(c: CheckResult): string {
   return sha256Hex(
     JSON.stringify([c.severity, c.title, c.data?.expected ?? null, c.data?.actual ?? null, c.data?.expectedText ?? null, c.data?.actualText ?? null]),
   ).slice(0, 32);
+}
+
+/** The parts of a stored reading the checks use. Absent and null fields come from older readings. */
+type ExtractionFacts = {
+  pageNumbering?: ExtractionResult['pageNumbering'] | null;
+  scheduleGrandTotal?: ExtractionResult['scheduleGrandTotal'] | null;
+  conflicts?: ExtractionResult['conflicts'] | null;
+  unreadablePages?: ExtractionResult['unreadablePages'] | null;
+  applicationNumber?: number | null;
+};
+
+/** What a reading saw besides the figures, in the shape the engine checks. */
+export function integrityOf(facts: ExtractionFacts | null): DocumentIntegrity | null {
+  if (!facts) return null;
+  return {
+    pageNumbering: facts.pageNumbering ?? [],
+    scheduleGrandTotal: facts.scheduleGrandTotal ?? null,
+    conflicts: facts.conflicts ?? [],
+    unreadablePages: facts.unreadablePages ?? [],
+    payApplicationNumber: typeof facts.applicationNumber === 'number' ? facts.applicationNumber : null,
+  };
+}
+
+function printedAmounts(line: Record<LineAmountField, number | null>): Record<LineAmountField, number | null> {
+  return Object.fromEntries(LINE_AMOUNT_FIELDS.map((f) => [f, line[f]])) as Record<LineAmountField, number | null>;
 }
 
 export function priorFromApproved(record: ApprovedRecord): ReconPrior {
@@ -121,6 +147,23 @@ export async function loadReconInput(db: DB, orgId: string, appId: string, today
   const lines = await db.select().from(payAppLines).where(eq(payAppLines.payApplicationId, appId)).orderBy(asc(payAppLines.sortOrder));
   const waivers = await db.select().from(lienWaivers).where(eq(lienWaivers.payApplicationId, appId));
   const docs = await db.select().from(documents).where(eq(documents.payApplicationId, appId)).orderBy(asc(documents.createdAt));
+  // The reading each file's figures came from: its latest successful extraction. Only the parts
+  // the checks use are fetched; the rows and notes stay in the database.
+  const res = extractions.result;
+  const readings = docs.length
+    ? await db
+        .select({
+          documentId: extractions.documentId,
+          result: sql<ExtractionFacts | null>`jsonb_build_object('pageNumbering', ${res}->'pageNumbering', 'scheduleGrandTotal', ${res}->'scheduleGrandTotal', 'conflicts', ${res}->'conflicts', 'unreadablePages', ${res}->'unreadablePages', 'applicationNumber', ${res}#>'{payApp,applicationNumber,value}')`.mapWith(
+            (v: unknown) => (typeof v === 'string' ? JSON.parse(v) : v) as ExtractionFacts | null,
+          ),
+        })
+        .from(extractions)
+        .where(and(eq(extractions.orgId, orgId), inArray(extractions.documentId, docs.map((d) => d.id)), eq(extractions.status, 'succeeded')))
+        .orderBy(asc(extractions.createdAt))
+    : [];
+  const latestReading = new Map<string, ExtractionFacts | null>();
+  for (const r of readings) latestReading.set(r.documentId, r.result);
 
   const others = await db
     .select()
@@ -181,6 +224,8 @@ export async function loadReconInput(db: DB, orgId: string, appId: string, today
     },
     lines: lines.map((l) => ({
       id: l.id,
+      documentId: l.extracted?.documentId ?? null,
+      printed: l.editKind === 'adjustment' && l.extracted ? printedAmounts(l.extracted) : null,
       sovLineId: l.sovLineId,
       itemNo: l.itemNo,
       description: l.description,
@@ -201,6 +246,7 @@ export async function loadReconInput(db: DB, orgId: string, appId: string, today
         statusDetail: d.statusDetail,
         segments: d.segments,
         duplicateOf: twin ? { applicationNumber: twin.number, filename: twin.filename } : null,
+        integrity: integrityOf(latestReading.get(d.id) ?? null),
       };
     }),
     waivers: waivers.map((w) => ({

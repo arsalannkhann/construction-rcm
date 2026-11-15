@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { reconcile, type CheckResult } from '@/server/recon/engine';
+import { reconcile, type CheckResult, type DocumentIntegrity } from '@/server/recon/engine';
 import { cleanInput, dollars as D } from './helpers/recon-fixture';
 
 const fails = (checks: CheckResult[]) => checks.filter((c) => c.outcome === 'fail');
@@ -418,5 +418,178 @@ describe('reconcile: package completeness', () => {
     const input = cleanInput();
     input.documents.push({ id: 'd2', filename: 'scan.pdf', status: 'unreadable', statusDetail: null, duplicateOf: null, segments: [] });
     expect(find(reconcile(input).checks, 'doc.unreadable')?.subjectKey).toBe('d2');
+  });
+});
+
+describe('reconcile: what the reading saw besides the figures', () => {
+  // The clean fixture's schedule, column by column.
+  const printedTotals = () => ({
+    scheduledValue: D(500000),
+    previous: D(110000),
+    thisPeriod: D(105000),
+    stored: D(10000),
+    total: D(225000),
+    balance: D(275000),
+    retainage: D(22500),
+  });
+  const withFacts = (facts: Partial<DocumentIntegrity> = {}) => {
+    const input = cleanInput();
+    input.lines.forEach((l) => (l.documentId = 'd1'));
+    input.documents[0]!.integrity = {
+      pageNumbering: [],
+      scheduleGrandTotal: { page: 2, label: 'GRAND TOTAL', confidence: 0.97, values: printedTotals() },
+      conflicts: [],
+      unreadablePages: [],
+      payApplicationNumber: 2,
+      ...facts,
+    };
+    return input;
+  };
+  const grandTotal = (input: ReturnType<typeof cleanInput>) => reconcile(input).checks.find((c) => c.code === 'math.grand_total');
+  const NEW_CODES = ['math.grand_total', 'doc.page_missing', 'doc.unreadable_pages', 'doc.conflict'];
+
+  it('passes when every column of the printed grand total equals the sum of the rows, and adds nothing else', () => {
+    const input = withFacts();
+    expect(grandTotal(input)).toMatchObject({ outcome: 'pass', subjectKey: 'd1', refs: { documentId: 'd1', page: 2, tab: 'lines' } });
+    expect(failCodes(reconcile(input).checks).filter((c) => NEW_CODES.includes(c))).toEqual([]);
+    // A reading from before these facts were recorded changes nothing.
+    expect(reconcile(cleanInput()).checks.filter((c) => NEW_CODES.includes(c.code))).toEqual([]);
+  });
+
+  it('blocks when the rows fall short of the printed grand total, as when a row or page was not read', () => {
+    const input = withFacts();
+    const g = input.documents[0]!.integrity!.scheduleGrandTotal!;
+    Object.assign(g.values, { scheduledValue: D(540000), thisPeriod: D(117000), total: D(237000), balance: D(303000) });
+    const f = grandTotal(input)!;
+    expect(f).toMatchObject({ outcome: 'fail', severity: 'blocking', category: 'math', data: { expected: D(225000), actual: D(237000), delta: D(12000) } });
+    expect(f.detail).toContain('this period (E) is printed as $117,000.00 but the rows add up to $105,000.00 ($12,000.00 short)');
+    expect(f.detail).toContain('completed and stored to date (G) is printed as $237,000.00');
+    expect(f.detail).not.toContain('retainage is printed');
+  });
+
+  it('warns, without blocking, when only columns that do not feed the payment differ', () => {
+    const input = withFacts();
+    input.documents[0]!.integrity!.scheduleGrandTotal!.values.scheduledValue = D(510000);
+    expect(grandTotal(input)).toMatchObject({ outcome: 'fail', severity: 'warning' });
+  });
+
+  it('sums the rows itself in integer cents and allows only the configured tolerance', () => {
+    const input = withFacts();
+    input.documents[0]!.integrity!.scheduleGrandTotal!.values.thisPeriod = D(105000) + 100;
+    expect(grandTotal(input)?.outcome).toBe('pass');
+    input.documents[0]!.integrity!.scheduleGrandTotal!.values.thisPeriod = D(105000) + 101;
+    expect(grandTotal(input)?.outcome).toBe('fail');
+  });
+
+  it('counts a row keyed by hand toward the printed total, so keying the missed row clears the finding', () => {
+    const input = withFacts();
+    Object.assign(input.documents[0]!.integrity!.scheduleGrandTotal!.values, { scheduledValue: D(540000), thisPeriod: D(117000), total: D(237000), balance: D(303000), retainage: D(23700) });
+    expect(grandTotal(input)?.outcome).toBe('fail');
+    input.lines.push({ id: 'l4', documentId: null, sovLineId: null, itemNo: '4', description: 'Low voltage', scheduledValue: D(40000), previous: 0, thisPeriod: D(12000), stored: 0, total: D(12000), balance: D(28000), retainage: D(1200) });
+    expect(grandTotal(input)?.outcome).toBe('pass');
+  });
+
+  it('compares a row a reviewer adjusted by what the document prints, not by the adjusted amount', () => {
+    const input = withFacts();
+    const l2 = input.lines[1]!;
+    l2.printed = { scheduledValue: l2.scheduledValue, previous: l2.previous, thisPeriod: l2.thisPeriod, stored: l2.stored, total: l2.total, balance: l2.balance, retainage: l2.retainage };
+    Object.assign(l2, { thisPeriod: D(80000), total: D(140000), balance: D(160000) });
+    expect(grandTotal(input)?.outcome).toBe('pass');
+  });
+
+  it('with two printed totals in the package, ties each to the rows of its own file', () => {
+    const input = withFacts();
+    input.lines[2]!.documentId = 'd2';
+    input.documents.push({
+      id: 'd2',
+      filename: 'sheet-2.pdf',
+      status: 'processed',
+      statusDetail: null,
+      duplicateOf: null,
+      segments: [{ type: 'continuation_sheet', pageStart: 1, pageEnd: 1, confidence: 0.9 }],
+      integrity: { pageNumbering: [], scheduleGrandTotal: { page: 1, label: 'TOTAL', confidence: 0.97, values: { thisPeriod: D(15000), stored: D(10000), total: D(25000) } }, conflicts: [], unreadablePages: [], payApplicationNumber: null },
+    });
+    Object.assign(input.documents[0]!.integrity!.scheduleGrandTotal!.values, { scheduledValue: D(350000), previous: D(110000), thisPeriod: D(90000), stored: 0, total: D(200000), balance: D(150000), retainage: D(20000) });
+    const results = reconcile(input).checks.filter((c) => c.code === 'math.grand_total');
+    expect(results.map((c) => [c.subjectKey, c.outcome])).toEqual([
+      ['d1', 'pass'],
+      ['d2', 'pass'],
+    ]);
+  });
+
+  it('says when the printed total itself was read with low confidence', () => {
+    const input = withFacts();
+    const g = input.documents[0]!.integrity!.scheduleGrandTotal!;
+    g.confidence = 0.45;
+    g.values.total = D(230000);
+    expect(grandTotal(input)?.detail).toContain('read with low confidence');
+  });
+
+  it('blocks on pages that could not be read, naming them, until a person keys them and accepts', () => {
+    const f = find(reconcile(withFacts({ unreadablePages: [2, 3, 4, 7] })).checks, 'doc.unreadable_pages')!;
+    expect(f).toMatchObject({ severity: 'blocking', category: 'extraction', subjectKey: 'd1', title: 'Pages 2–4 and 7 of “payapp-2.pdf” could not be read automatically', refs: { documentId: 'd1', page: 2 } });
+    expect(find(reconcile(withFacts({ unreadablePages: [3] })).checks, 'doc.unreadable_pages')?.title).toBe('Page 3 of “payapp-2.pdf” could not be read automatically');
+    // A file that could not be read at all is already flagged as a whole.
+    const whole = withFacts({ unreadablePages: [1, 2] });
+    whole.documents[0]!.status = 'unreadable';
+    expect(find(reconcile(whole).checks, 'doc.unreadable_pages')).toBeUndefined();
+  });
+
+  const mark = (page: number, number: number, of: number | null) => ({ page, number, of, source: of ? `Page ${number} of ${of}` : `Page ${number}` });
+
+  it('blocks on a page missing from the printed numbering', () => {
+    const f = find(reconcile(withFacts({ pageNumbering: [mark(1, 1, 4), mark(2, 2, 4), mark(3, 4, 4)] })).checks, 'doc.page_missing')!;
+    expect(f).toMatchObject({ severity: 'blocking', category: 'documents', subjectKey: 'd1', title: '“payapp-2.pdf” is missing page 3 of 4' });
+    expect(f.detail).toContain('marked “Page 1 of 4”');
+    // The last pages missing count too when the total is printed.
+    expect(find(reconcile(withFacts({ pageNumbering: [mark(1, 1, 3)] })).checks, 'doc.page_missing')?.title).toBe('“payapp-2.pdf” is missing pages 2 and 3 of 3');
+    // Complete numbering, or a new document starting again at 1, is not a gap.
+    expect(find(reconcile(withFacts({ pageNumbering: [mark(1, 1, 2), mark(2, 2, 2), mark(3, 1, 1)] })).checks, 'doc.page_missing')).toBeUndefined();
+  });
+
+  it('does not call a page missing when another file of the package carries it', () => {
+    const input = withFacts({ pageNumbering: [mark(1, 1, 2)] });
+    input.documents.push({ id: 'd2', filename: 'g703.pdf', status: 'processed', statusDetail: null, duplicateOf: null, segments: [], integrity: { pageNumbering: [mark(1, 2, 2)], scheduleGrandTotal: null, conflicts: [], unreadablePages: [], payApplicationNumber: null } });
+    expect(find(reconcile(input).checks, 'doc.page_missing')).toBeUndefined();
+  });
+
+  const at = (value: number | null, page: number, docType: 'pay_application' | 'continuation_sheet' = 'pay_application') => ({ value, page, docType });
+
+  it('blocks when the file states two application numbers', () => {
+    const input = withFacts({ conflicts: [{ kind: 'application_number', field: 'applicationNumber', reported: at(2, 1), others: [at(3, 2, 'continuation_sheet')] }] });
+    const f = find(reconcile(input).checks, 'doc.conflict')!;
+    expect(f).toMatchObject({ severity: 'blocking', subjectKey: 'd1:application_number:applicationNumber', data: { expected: 2, actual: 3 }, refs: { documentId: 'd1', page: 2 } });
+    expect(f.detail).toContain('is numbered 2, but the schedule of values (page 2) says 3');
+  });
+
+  it('blocks when the file holds a second pay application that was not read', () => {
+    const input = withFacts({ conflicts: [{ kind: 'second_pay_application', field: 'applicationNumber', reported: at(2, 1), others: [at(null, 4)] }] });
+    const f = find(reconcile(input).checks, 'doc.conflict')!;
+    expect(f).toMatchObject({ severity: 'blocking', title: '“payapp-2.pdf” holds more than one pay application', refs: { page: 4 } });
+    expect(f.detail).toContain('1 other application starts on page 4');
+  });
+
+  it('reports printed totals that disagree between the application and the schedule, by what they affect', () => {
+    const contract = withFacts({ conflicts: [{ kind: 'total', field: 'contractSumToDate', reported: at(D(500000), 1), others: [at(D(490000), 2, 'continuation_sheet')] }] });
+    expect(find(reconcile(contract).checks, 'doc.conflict')).toMatchObject({ severity: 'warning', data: { expected: D(500000), actual: D(490000), delta: -D(10000) } });
+    // Within the tolerance is not a disagreement.
+    const close = withFacts({ conflicts: [{ kind: 'total', field: 'contractSumToDate', reported: at(D(500000), 1), others: [at(D(500000) + 50, 2, 'continuation_sheet')] }] });
+    expect(find(reconcile(close).checks, 'doc.conflict')).toBeUndefined();
+    // Line 4 against the schedule is settled by the row sums, so it is not said twice.
+    const line4 = withFacts({ conflicts: [{ kind: 'total', field: 'totalCompletedStored', reported: at(D(225000), 1), others: [at(D(216000), 2, 'continuation_sheet')] }] });
+    expect(find(reconcile(line4).checks, 'doc.conflict')).toBeUndefined();
+    line4.lines = [];
+    expect(find(reconcile(line4).checks, 'doc.conflict')).toMatchObject({ severity: 'blocking' });
+  });
+
+  it('blocks when two files in the package carry pay applications with different numbers', () => {
+    const input = withFacts();
+    input.documents.push({ id: 'd2', filename: 'payapp-3.pdf', status: 'processed', statusDetail: null, duplicateOf: null, segments: [], integrity: { pageNumbering: [], scheduleGrandTotal: null, conflicts: [], unreadablePages: [], payApplicationNumber: 3 } });
+    const f = reconcile(input).checks.find((c) => c.code === 'doc.conflict' && c.subjectKey === 'package:applicationNumber')!;
+    expect(f).toMatchObject({ outcome: 'fail', severity: 'blocking' });
+    expect(f.detail).toContain('“payapp-2.pdf” is application #2; “payapp-3.pdf” is application #3');
+    // The same number twice (a copy of the application) is not a conflict.
+    input.documents[1]!.integrity!.payApplicationNumber = 2;
+    expect(reconcile(input).checks.find((c) => c.subjectKey === 'package:applicationNumber')).toBeUndefined();
   });
 });

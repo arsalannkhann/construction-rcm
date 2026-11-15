@@ -5,9 +5,10 @@
  */
 import { eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { auditEvents, contracts, documents, payAppLines, payApplications, sovLines } from '@/db/schema';
+import { auditEvents, contracts, documents, findings, payAppLines, payApplications, sovLines } from '@/db/schema';
 import { verifyAuditChain } from '@/server/audit';
 import { PermissionError, UserError } from '@/server/auth/permissions';
+import { buildSyntheticCorpus } from '@/server/samples/corpus';
 import { renderPackage, renderTextlessPdf } from '@/server/samples/pdf';
 import { defects, recompute } from '@/server/samples/scenario';
 import { createApplication, processApplication } from '@/server/services/intake';
@@ -407,6 +408,56 @@ describe('documents that cannot be read automatically', () => {
     expect(codes(await openFindings(w, app.id))).toEqual(['doc.signature']);
     await confirmSignature(w.db, w.accountant, app.id, true);
     expect(await openFindings(w, app.id)).toEqual([]);
+  });
+});
+
+describe('what the reading saw besides the figures', () => {
+  let w: World;
+  beforeAll(async () => {
+    w = await createWorld();
+  });
+  const submitCase = async (caseId: string) => {
+    const [c] = await buildSyntheticCorpus(caseId);
+    const { id } = await createApplication(w.db, w.accountant, { files: [{ filename: c!.file.filename, bytes: c!.file.bytes }], contractId: w.contractId, defer: true });
+    await processApplication(w.db, w.orgId, id);
+    return id;
+  };
+  const result = async (appId: string, code: string) => (await w.db.select().from(findings).where(eq(findings.payApplicationId, appId))).filter((f) => f.code === code);
+
+  it('ties the schedule rows to its printed grand total, and keeps them tied through an adjustment', async () => {
+    const app = await submit(w, packageFor(w, 0, null));
+    expect(await result(app.id, 'math.grand_total')).toMatchObject([{ status: 'passed' }]);
+
+    // Approving less than was billed does not change what the document prints.
+    const roughIn = (await w.db.select().from(payAppLines).where(eq(payAppLines.payApplicationId, app.id))).find((l) => l.itemNo === '2')!;
+    await updateLine(w.db, w.accountant, roughIn.id, { thisPeriod: D(40000) }, 'adjustment', 'Level 3 not started');
+    expect(await result(app.id, 'math.grand_total')).toMatchObject([{ status: 'passed' }]);
+    await voidApplication(w.db, w.controller, app.id, 'Test package');
+  });
+
+  it('blocks on a page missing from the printed numbering, and on rows short of the printed grand total', async () => {
+    const id = await submitCase('integrity/missing-schedule-page');
+    const open = await openFindings(w, id);
+    expect(open.find((f) => f.code === 'doc.page_missing')).toMatchObject({ severity: 'blocking', title: expect.stringContaining('is missing page 3 of 4') });
+    expect(open.find((f) => f.code === 'math.grand_total')).toMatchObject({ severity: 'blocking' });
+    await voidApplication(w.db, w.controller, id, 'Test package');
+  });
+
+  it('blocks on a page it could not read until a person accounts for it', async () => {
+    const id = await submitCase('scan/one-scanned-page-in-text-pdf');
+    const open = await openFindings(w, id);
+    const f = open.find((x) => x.code === 'doc.unreadable_pages')!;
+    expect(f).toMatchObject({ severity: 'blocking', category: 'extraction', title: expect.stringContaining('Page 2 of') });
+    await acceptFinding(w.db, w.controller, f.id, 'Keyed page 2 by hand');
+    expect((await openFindings(w, id)).find((x) => x.code === 'doc.unreadable_pages')).toBeUndefined();
+    await voidApplication(w.db, w.controller, id, 'Test package');
+  });
+
+  it('blocks when the application and its schedule state different application numbers', async () => {
+    const id = await submitCase('integrity/application-number-differs');
+    const open = await openFindings(w, id);
+    expect(open.find((f) => f.code === 'doc.conflict')).toMatchObject({ severity: 'blocking', title: expect.stringContaining('two different application numbers') });
+    await voidApplication(w.db, w.controller, id, 'Test package');
   });
 });
 

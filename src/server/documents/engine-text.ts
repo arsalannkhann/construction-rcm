@@ -1018,8 +1018,9 @@ export function extractFromText(pdf: PdfText): ExtractionResult {
   const payAppSeg = payAppSegs[0];
   if (payAppSeg) result.payApp = parsePayApplication(pageOf(payAppSeg.pageStart), notes);
   if (payAppSegs.length > 1 && result.payApp) {
-    const others = payAppSegs.slice(1).map((s) => valueAt(applicationNumberOn(pageOf(s.pageStart)), 'pay_application'));
-    conflicts.push({ kind: 'second_pay_application', field: 'applicationNumber', reported: valueAt(result.payApp.applicationNumber, 'pay_application'), others });
+    // The page is where each application starts, whether or not its number could be read.
+    const others = payAppSegs.slice(1).map((s) => ({ ...valueAt(applicationNumberOn(pageOf(s.pageStart)), 'pay_application'), page: s.pageStart }));
+    conflicts.push({ kind: 'second_pay_application', field: 'applicationNumber', reported: { ...valueAt(result.payApp.applicationNumber, 'pay_application'), page: payAppSeg!.pageStart }, others });
     notes.push(`This file holds ${payAppSegs.length} pay applications (pages ${payAppSegs.map((s) => s.pageStart).join(', ')}). Only the first was read; the schedule pages that follow the others were left out.`);
   }
 
@@ -1057,10 +1058,11 @@ export function extractFromText(pdf: PdfText): ExtractionResult {
       }
       if (result.scheduleGrandTotal) {
         const g = result.scheduleGrandTotal;
+        // Totals the AIA forms define as equal. Retainage is left out: whether the schedule's
+        // retainage column includes stored material, a release or a stepped rate varies by form.
         const pairs: Array<[ClaimedField, LineAmountField]> = [
           ['totalCompletedStored', 'total'],
           ['contractSumToDate', 'scheduledValue'],
-          ['retainageTotal', 'retainage'],
         ];
         for (const [field, column] of pairs) {
           const mine = result.payApp.amounts[field];
