@@ -224,7 +224,7 @@ available:**
 | Inbound email | The webhook logic is tested; no provider has been pointed at it. |
 | PostgreSQL via `DATABASE_URL` | Not run. The same migrations and queries run on PGlite, which is Postgres, but the `pg` driver path is untested. |
 | Docker image | `Dockerfile` and `docker-compose.yml` are provided and have not been built. |
-| Real subcontractor documents | Only generated documents have been read. The text-layer reader's tolerance for other layouts is unmeasured. |
+| Real subcontractor documents | Only generated documents have been read. The text-layer reader's tolerance for other layouts is unmeasured. How to measure it, the synthetic results, and a pilot protocol: [docs/extraction-evaluation.md](docs/extraction-evaluation.md). |
 
 ## Limitations and risks
 
