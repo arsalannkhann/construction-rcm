@@ -1,5 +1,7 @@
-# Production-shaped stack: the app with PostgreSQL and a volume for documents.
+# Production-shaped stack: the app and PostgreSQL. Documents are stored in the
+# database, so backing up the pgdata volume (pg_dump) captures everything.
 # Set RCM_SECRET_KEY (and APP_URL) before using this for anything real.
+# See docs/operations.md.
 services:
   app:
     build: .
@@ -15,11 +17,12 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
       INBOUND_EMAIL_SECRET: ${INBOUND_EMAIL_SECRET:-}
-    volumes: ['documents:/data']
+    restart: unless-stopped
     depends_on:
       db: { condition: service_healthy }
   db:
     image: postgres:16
+    restart: unless-stopped
     environment: { POSTGRES_USER: rcm, POSTGRES_PASSWORD: rcm, POSTGRES_DB: rcm }
     volumes: ['pgdata:/var/lib/postgresql/data']
     healthcheck:
@@ -27,5 +30,4 @@ services:
       interval: 5s
       retries: 10
 volumes:
-  documents:
   pgdata:

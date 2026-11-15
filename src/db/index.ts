@@ -64,9 +64,21 @@ async function open(): Promise<Handle> {
     const pg = await import('pg');
     const { drizzle } = await import('drizzle-orm/node-postgres');
     const { migrate } = await import('drizzle-orm/node-postgres/migrator');
-    const pool = new pg.default.Pool({ connectionString: url, max: 10 });
+    const max = Number(process.env.DATABASE_POOL_MAX) || 10;
+    const pool = new pg.default.Pool({ connectionString: url, max });
+    // A connection that drops while idle (a database restart, a failover) is replaced on next use.
+    // Without a listener, node-postgres would take the whole process down with it.
+    pool.on('error', (err) => console.error('[db] an idle database connection failed and will be replaced:', err.message));
+    // Several app instances starting together must not apply the same migration twice.
+    const client = await pool.connect();
+    try {
+      await client.query('select pg_advisory_lock(hashtext($1))', ['rcm:migrations']);
+      await migrate(drizzle(client), { migrationsFolder: migrationsFolder() });
+    } finally {
+      await client.query('select pg_advisory_unlock(hashtext($1))', ['rcm:migrations']).catch(() => {});
+      client.release();
+    }
     const db = drizzle(pool);
-    await migrate(db, { migrationsFolder: migrationsFolder() });
     return { db: db as unknown as DB, close: () => pool.end(), driver: 'postgres' };
   }
 

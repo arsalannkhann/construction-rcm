@@ -38,6 +38,17 @@ pnpm seed:demo
 pnpm test
 ```
 
+To run the same suite against a real PostgreSQL server (downloaded and started
+for the run, then removed):
+
+```bash
+pnpm test:pg
+```
+
+Running it for a customer is different: see
+[docs/operations.md](docs/operations.md) for deployment, backups, recovery,
+monitoring and onboarding the first customer.
+
 ## What to look at first
 
 In the demo workspace (fictitious companies; a separate organisation from your
@@ -113,7 +124,25 @@ must be fixed or overridden with a written reason before approval. An accepted
 finding reopens automatically if the figures behind it change. Fixing a misread
 and adjusting what will be paid are recorded as different things. Approval
 writes an immutable record; exports are rendered from that record, never from
-live data.
+live data. A decision is made on what the person saw: approving, rejecting,
+submitting and overriding carry the version (and, for approval, the amount)
+that was on screen, and are refused if the application has changed since.
+A corrected resubmission replaces the earlier one instead of sitting beside it.
+
+**Retainage** (`computeRetainage` in the engine). A flat rate, or a rate that
+steps down once the work reaches a percentage of the contract sum (on further
+work only, or on all work). Releases are recorded on the contract by an
+approver before they are billed, so the application that bills one is checked
+against it instead of being flagged for withholding too little.
+
+**Reliability** (`src/db/tx.ts`, `src/server/jobs.ts`). Every change to an
+organisation's records is one transaction under that organisation's advisory
+lock: it happens completely or not at all, and two people's changes are applied
+one after the other. Document reading runs on a database-backed queue with
+leases, retries and a visible failure state, so a restart mid-read resumes the
+work and a package that cannot be read is reported rather than lost. A re-read
+keeps the reviewer's corrections that still apply and says which ones it
+dropped.
 
 **Audit trail** (`src/server/audit.ts`). Append-only and hash-chained per
 organisation, so an edited or deleted event is detectable.
@@ -125,9 +154,10 @@ More detail for contributors is in [docs/conventions.md](docs/conventions.md).
 Next.js 16 (App Router) and React 19, TypeScript, Tailwind 4, Drizzle ORM.
 PostgreSQL in production; for development and tests the same schema and SQL run
 on PGlite (Postgres compiled to WASM, in-process), which is why there is no
-database to install. Documents are stored on disk, content-addressed by
-SHA-256. Document processing runs on a database-backed queue inside the server
-process.
+database to install. Documents are content-addressed by SHA-256 and checked
+against their hash on every read; with PostgreSQL they are stored in the
+database (one backup covers everything), with the embedded database on disk.
+Document processing runs on a database-backed queue inside the server process.
 
 Two versions are pinned for Node 20: `pdfjs-dist` 4.x and `vitest` 3.x. Their
 newer majors need Node 22.
@@ -145,9 +175,13 @@ Copy `.env.example` to `.env.local`. Everything is optional in development.
 | `PROCORE_CLIENT_ID`, `PROCORE_CLIENT_SECRET`, `PROCORE_ENV` | Procore can be connected | Shown as "Not configured"; file export only |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Invitations and messages to subcontractors are emailed | They are saved as drafts and labelled "not sent" |
 | `INBOUND_EMAIL_SECRET` | Opens the email-intake webhook | The webhook rejects every request |
+| `DATABASE_POOL_MAX` | Connections per process (default 10) | |
+| `RCM_STORAGE` | `database` or `disk` for documents | `database` with `DATABASE_URL`, otherwise `disk` |
 
 Settings → Organisation shows which of these are active on a running
-deployment. Extraction requests opt in to the API's server-side refusal
+deployment, and Settings → System status shows database, storage and queue
+health, failed background work and the email-intake log (also at
+`/api/health` for monitoring, without sign-in or organisation data). Extraction requests opt in to the API's server-side refusal
 fallback; set `RCM_EXTRACTION_FALLBACKS=off` to disable that.
 
 ## What is and is not verified
