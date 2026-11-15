@@ -33,9 +33,11 @@ run a pilot on it.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `DATABASE_URL` | Yes | `postgres://user:pass@host:5432/db`. Add `?sslmode=require` for a managed database that needs TLS. |
+| `DATABASE_URL` | Yes | `postgres://user:pass@host:5432/db`. For a managed database, see `DATABASE_CA_CERT`. |
 | `RCM_SECRET_KEY` | Yes | 32+ random bytes (e.g. `openssl rand -base64 48`). Encrypts stored integration tokens. The app refuses to store credentials in production without it. |
 | `APP_URL` | Yes | The public `https://` URL. Used in invitation and password links and OAuth redirects. Session cookies are marked `Secure` only when this starts with `https://`. |
+| `DATABASE_CA_CERT` | For Supabase | The database provider's CA certificate (PEM text, or a path to the file). Connections are then encrypted and the server's certificate and host name are checked. Needed because node-postgres treats `sslmode=require` as full verification against Node's built-in authorities, which do not include Supabase's, so `?sslmode=require` alone fails to connect. Do not switch verification off instead. |
+| `RCM_MIGRATIONS` | For Supabase | `external` when Supabase's GitHub integration applies `supabase/migrations`. The app then only checks the schema at start and refuses to run on an older one. Unset, the app applies `drizzle/` itself. |
 | `DATABASE_POOL_MAX` | No | Connections per app process (default 10). |
 | `RCM_STORAGE` | No | `database` (default with `DATABASE_URL`) or `disk`. Leave it unset. |
 | `ANTHROPIC_API_KEY`, `RCM_EXTRACTION_MODEL` | No | AI document reading. Without it, only PDFs with a text layer are read; scans are keyed by hand. |
@@ -92,6 +94,96 @@ with HTTPS. Use `/api/health` as its health check.
    migrations take a lock, so several instances are designed to be safe, but a
    multi-instance deployment has not been tested.
 
+## Use Supabase as the database
+
+Supabase is plain PostgreSQL to this app: it connects as the `postgres` role,
+owns its tables, and does not use Supabase Auth, Storage or the Data API.
+
+### Schema
+
+`supabase/migrations/` holds the same migrations as `drizzle/`, under the
+version names Supabase expects. `pnpm db:supabase` regenerates it after
+`pnpm db:generate`, and a test fails if the two ever differ. With the GitHub
+integration's **Deploy to production** option on (Project settings →
+Integrations), Supabase applies new files when they reach `main`, each in one
+transaction.
+
+The `construction-rcm` project already holds migrations 0000–0002. They were
+applied on 2026-11-15 and recorded under the same versions as the files, so
+the integration has nothing to re-apply. Check with:
+
+```sql
+select version, name from supabase_migrations.schema_migrations order by version;
+```
+
+Never let the app apply its own migrations to a database Supabase manages: set
+`RCM_MIGRATIONS=external`. If you forget, the app refuses to start and says so.
+
+### Connection
+
+1. **Connection string.** Dashboard → **Connect** → **Session pooler** (port
+   5432, user `postgres.<project-ref>`). The direct host `db.<ref>.supabase.co`
+   only has an IPv6 address unless the paid IPv4 add-on is on. Do not use the
+   transaction pooler (port 6543): the app relies on session behaviour.
+2. **TLS.** Database settings → **SSL configuration** → **Download
+   certificate**. Set `DATABASE_CA_CERT` to the file's path, or to its contents
+   (on a container platform, paste it into a secret). Then turn on **Enforce SSL
+   on incoming connections** there too.
+3. **Pool size.** Keep `DATABASE_POOL_MAX` below the pooler's pool size
+   (Database settings → Connection pooling). `5` is plenty for a pilot.
+4. **Environment:**
+
+   ```
+   DATABASE_URL=postgres://postgres.<ref>:<password>@<pooler-host>:5432/postgres
+   DATABASE_CA_CERT=/run/secrets/supabase-ca.crt
+   RCM_MIGRATIONS=external
+   DATABASE_POOL_MAX=5
+   RCM_SECRET_KEY=...
+   APP_URL=https://...
+   ```
+
+5. Start the app and open Settings → System status. **Database** should read
+   *Supabase*, "encrypted and the server's certificate is checked", and
+   **Supabase Data API** should read *Locked*.
+
+### The Data API
+
+Supabase publishes every table in `public` through its Data API, and the anon
+key that opens it is public by design. Migration 0002 shuts that door twice:
+row level security on every table with no policies, and no privileges for the
+`anon`, `authenticated` and `service_role` roles. The project's own
+automatic-RLS event trigger (`ensure_rls`) also turns RLS on for new tables.
+On 2026-11-15 every table answered `401 permission denied` through the Data
+API with both public keys, for reading and for inserting. The health check
+reports the deployment as degraded if any table becomes reachable again.
+
+Because the app never uses the Data API, you can also switch it off
+altogether: Project settings → **Data API**. Supabase's security advisor will
+list "RLS enabled, no policy" for every table. That is intended.
+
+### Plan limits that matter for a pilot
+
+- **Database size.** Documents are stored in the database (`stored_objects`),
+  so it grows by roughly the size of every uploaded PDF. The Free plan's 500 MB
+  holds roughly a hundred or two billing packages. Watch Reports → Database.
+- **Pausing.** Free-plan projects are paused after a week of low activity.
+- **Backups.** Free-plan backups cannot be downloaded. Take your own nightly
+  `pg_dump` through the session pooler (see [Backups](#backups); `pg_dump` must
+  be version 17 or later to match the server), and consider point-in-time
+  recovery on a paid plan.
+
+A pilot with a customer's real billing should run on a paid plan. That is a
+purchasing decision for whoever owns the Supabase organisation.
+
+### Upgrading on Supabase
+
+Migrations reach the database when the change is merged to `main`; the new
+app version must start only after that. If it starts first, it refuses to run
+(`/api/health` returns 503 naming the missing migration) until the integration
+has applied it, and then starts normally on the next restart. Migrations so
+far only add tables and columns, so the previous app version keeps working
+while they are applied.
+
 ## Without Docker
 
 ```bash
@@ -110,7 +202,8 @@ Run it under a process supervisor (systemd, pm2) that restarts it if it exits.
 
 ## First start
 
-Migrations in `drizzle/` run automatically when the process starts. Then:
+Migrations in `drizzle/` run automatically when the process starts, unless
+`RCM_MIGRATIONS=external` (Supabase, above). Then:
 
 1. `GET /api/health` returns `{"status":"ok", ...}`. A `degraded` status lists
    its problems; `down` (HTTP 503) means the database is not answering.
@@ -263,3 +356,5 @@ To roll back the code after a migration, restore the backup taken in step 1.
   reading packages ever slows the web app down.
 - Tenant isolation is enforced in application code (every query is scoped to
   the signed-in organisation, with tests), not by database row-level security.
+  The row-level security that migration 0002 turns on only keeps roles other
+  than the app's out entirely; the app's own role is not subject to it.

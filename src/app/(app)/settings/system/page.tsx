@@ -18,6 +18,12 @@ const STORAGE_TEXT = {
   memory: 'Documents are held in memory and are lost when the process stops. This mode is for automated tests only.',
 } as const;
 
+const TLS_TEXT = {
+  verified: 'The connection is encrypted and the server’s certificate is checked.',
+  unverified: 'The connection is encrypted, but the server’s certificate is not checked. Set DATABASE_CA_CERT to check it.',
+  off: 'The connection is not encrypted, which is acceptable only on a private network such as Docker Compose’s.',
+} as const;
+
 export default async function SystemStatusPage() {
   const ctx = await requireCtx();
   const db = await getDb();
@@ -31,13 +37,26 @@ export default async function SystemStatusPage() {
     health.database.ok
       ? {
           name: 'Database',
-          tone: health.database.driver === 'postgres' ? 'pass' : 'neutral',
-          status: health.database.driver === 'postgres' ? 'PostgreSQL' : 'Embedded',
+          tone: health.database.driver !== 'postgres' ? 'neutral' : health.database.tls === 'off' && health.dataApi?.rolesPresent ? 'warn' : 'pass',
+          status: health.database.driver === 'postgres' ? (health.dataApi?.rolesPresent ? 'Supabase' : 'PostgreSQL') : 'Embedded',
           detail:
-            (health.database.driver === 'postgres' ? 'Connected to PostgreSQL through DATABASE_URL.' : 'The embedded database runs inside this process: one server only, suitable for evaluation. Set DATABASE_URL for a pilot.') +
-            ` Answered in ${health.database.latencyMs} ms.`,
+            (health.database.driver === 'postgres'
+              ? `Connected to ${health.dataApi?.rolesPresent ? 'a Supabase PostgreSQL database' : 'PostgreSQL'} through DATABASE_URL. ${TLS_TEXT[health.database.tls ?? 'off']}`
+              : 'The embedded database runs inside this process: one server only, suitable for evaluation. Set DATABASE_URL for a pilot.') + ` Answered in ${health.database.latencyMs} ms.`,
         }
-      : { name: 'Database', tone: 'block', status: 'Not answering', detail: 'The database did not respond. Nothing can be saved until it does.' },
+      : { name: 'Database', tone: 'block', status: 'Not answering', detail: health.problems[0] ?? 'The database did not respond. Nothing can be saved until it does.' },
+    ...(health.dataApi?.rolesPresent
+      ? [
+          health.dataApi.exposedTables.length === 0 && health.dataApi.tablesWithoutRls.length === 0
+            ? { name: 'Supabase Data API', tone: 'pass' as const, status: 'Locked', detail: 'This is a Supabase database. No table can be read or changed through its Data API: every table has row level security and the API roles hold no privileges. This app does not use the Data API.' }
+            : {
+                name: 'Supabase Data API',
+                tone: 'block' as const,
+                status: 'Exposed',
+                detail: `Reachable through the Data API: ${health.dataApi.exposedTables.join(', ') || 'none'}. Without row level security: ${health.dataApi.tablesWithoutRls.join(', ') || 'none'}. Re-run migration 0002 or revoke the grants; see docs/operations.md.`,
+              },
+        ]
+      : []),
     { name: 'Document storage', tone: health.storage === 'memory' ? 'warn' : 'pass', status: health.storage === 'database' ? 'In the database' : health.storage === 'disk' ? 'On disk' : 'In memory', detail: STORAGE_TEXT[health.storage] },
     health.runner.polling
       ? {

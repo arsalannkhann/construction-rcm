@@ -18,6 +18,7 @@ export async function GET() {
       status: health.status,
       problems: health.problems,
       database: health.database,
+      dataApi: health.dataApi && { supabaseRoles: health.dataApi.rolesPresent, exposedTables: health.dataApi.exposedTables.length, tablesWithoutRls: health.dataApi.tablesWithoutRls.length },
       storage: health.storage,
       queue: health.queue && {
         queued: health.queue.queued,

@@ -4,6 +4,8 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
+import { explainConnectError } from '@/db/connection';
+import { SchemaBehindError } from '@/db/migrations';
 import { auditEvents, communications, documents, jobs } from '@/db/schema';
 import { ConflictError, PermissionError, UserError } from '@/server/auth/permissions';
 import { drain } from '@/server/jobs';
@@ -31,6 +33,26 @@ describe('the health check', () => {
       throw new Error('connect ECONNREFUSED');
     });
     expect(health).toMatchObject({ status: 'down', database: { ok: false }, queue: null });
+    expect(health.problems).toEqual(['The database is not answering.']);
+  });
+
+  it('explains a setup problem instead of calling it an outage, without naming the host', async () => {
+    const tls = explainConnectError(Object.assign(new Error('self-signed certificate in certificate chain'), { code: 'SELF_SIGNED_CERT_IN_CHAIN' }));
+    const health = await deploymentHealth(async () => {
+      throw tls;
+    });
+    expect(health.status).toBe('down');
+    expect(health.problems[0]).toMatch(/DATABASE_CA_CERT/);
+    const behind = await deploymentHealth(async () => {
+      throw new SchemaBehindError('The database schema is behind this version of the app: 20990101000000_0099_x not applied.');
+    });
+    expect(behind.problems[0]).toMatch(/0099_x not applied/);
+  });
+
+  it('reports the connection’s encryption: none for the embedded database', async () => {
+    const w = await createWorld();
+    const health = await deploymentHealth(async () => w.db);
+    expect(health.database.tls).toBe(process.env.DATABASE_URL ? 'off' : null);
   });
 });
 
