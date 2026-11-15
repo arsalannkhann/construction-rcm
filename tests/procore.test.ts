@@ -26,7 +26,8 @@ import {
   pushToProcore,
   selectCompany,
 } from '@/server/integrations/procore';
-import { refreshTokens, type TokenSet } from '@/server/integrations/procore/oauth';
+import { refreshTokens, renewAccessToken, type TokenSet } from '@/server/integrations/procore/oauth';
+import { withOrgLock } from '@/db/tx';
 import { buildPackage, type BillingContract, type Parties, type PeriodInput } from '@/server/samples/scenario';
 import { updateProject } from '@/server/services/records';
 import { approveApplication } from '@/server/services/review';
@@ -98,7 +99,13 @@ class ProcoreEmulator {
 
   codes = new Set<string>();
   accessTokens = new Set<string>();
-  refreshTokens = new Map<string, 'live' | 'used'>();
+  refreshTokens = new Map<string, 'live' | 'used' | 'revoked'>();
+  /** Access token → the refresh token issued with it. */
+  pairs = new Map<string, string>();
+  /** Slows the token endpoint so concurrent renewals really overlap. */
+  tokenDelayMs = 0;
+  /** Spend the presented refresh token, then drop the connection without answering. */
+  loseNextTokenResponse = false;
   grants: string[] = [];
   revoked: string[] = [];
   requests: Array<{ method: string; path: string; query: Record<string, string>; companyId: string | undefined }> = [];
@@ -136,13 +143,15 @@ class ProcoreEmulator {
     const pair = { access_token: `emu-access-${n}-${'a'.repeat(24)}`, refresh_token: `emu-refresh-${n}-${'r'.repeat(24)}` };
     this.accessTokens.add(pair.access_token);
     this.refreshTokens.set(pair.refresh_token, 'live');
+    this.pairs.set(pair.access_token, pair.refresh_token);
     return { ...pair, token_type: 'Bearer', expires_in: 5400, created_at: Math.floor(Date.now() / 1000) };
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
-    const raw = Buffer.concat(chunks).toString('utf8');
+    const body = Buffer.concat(chunks);
+    const raw = body.toString('utf8');
     const url = new URL(req.url ?? '/', 'http://emulator');
     const path = url.pathname;
     const nowSeconds = Math.floor(Date.now() / 1000);
@@ -173,31 +182,52 @@ class ProcoreEmulator {
 
     // ── OAuth ──
     if (req.method === 'POST' && (path === '/oauth/token' || path === '/oauth/revoke')) {
-      const form = new URLSearchParams(raw);
-      if (req.headers['content-type'] !== 'application/x-www-form-urlencoded') return json(400, { error: 'invalid_request', error_description: 'Form fields expected' });
+      // The guides send form-data (curl -F); the reference lists JSON. Refusing anything else is
+      // this emulator's choice, so the tests prove we send a documented encoding.
+      const type = req.headers['content-type'] ?? '';
+      let fields: Map<string, string>;
+      if (type.startsWith('multipart/form-data')) {
+        const form = await new Response(body, { headers: { 'content-type': type } }).formData();
+        fields = new Map([...form.entries()].map(([k, v]) => [k, String(v)]));
+      } else if (type.startsWith('application/json')) {
+        fields = new Map(Object.entries(JSON.parse(raw) as Record<string, string>));
+      } else {
+        return json(400, { error: 'invalid_request', error_description: 'Send form-data or JSON' });
+      }
+      const form = { get: (k: string) => fields.get(k) ?? null };
       if (form.get('client_id') !== CLIENT_ID || form.get('client_secret') !== CLIENT_SECRET) return json(401, { error: 'invalid_client', error_description: 'Client authentication failed' });
       if (path === '/oauth/revoke') {
+        // Revoking an access token also revokes its refresh token; an unknown token still gets 200.
         const token = form.get('token') ?? '';
         this.revoked.push(token);
-        this.accessTokens.delete(token);
-        if (this.refreshTokens.has(token)) this.refreshTokens.set(token, 'used');
+        if (this.accessTokens.delete(token)) {
+          const paired = this.pairs.get(token);
+          if (paired) this.refreshTokens.set(paired, 'revoked');
+        }
         return json(200, {});
       }
       const grant = form.get('grant_type') ?? '';
       this.grants.push(grant);
       const invalid = () => json(400, { error: 'invalid_grant', error_description: 'The provided authorization grant is invalid, expired, revoked, or does not match the redirection URI' });
       if (form.get('redirect_uri') !== REDIRECT_URI) return invalid();
+      if (this.tokenDelayMs) await new Promise((resolve) => setTimeout(resolve, this.tokenDelayMs));
       if (grant === 'authorization_code') {
         // Codes are single-use.
         if (!this.codes.delete(form.get('code') ?? '')) return invalid();
         return json(200, this.issue());
       }
       if (grant === 'refresh_token') {
-        // Refresh tokens rotate: one that was already spent is refused.
+        // Refresh tokens are single-use: any call spends the one presented, even if the answer is lost.
         const presented = form.get('refresh_token') ?? '';
         if (this.refreshTokens.get(presented) !== 'live') return invalid();
         this.refreshTokens.set(presented, 'used');
-        return json(200, this.issue());
+        const issued = this.issue();
+        if (this.loseNextTokenResponse) {
+          this.loseNextTokenResponse = false;
+          req.socket.destroy();
+          return;
+        }
+        return json(200, issued);
       }
       return json(400, { error: 'unsupported_grant_type' });
     }
@@ -510,6 +540,65 @@ describe('connecting', () => {
     expect((await storedTokens(w)).refreshToken).not.toBe(before.refreshToken);
   });
 
+  it('renews exactly once when several server processes find the token expired at the same moment', async () => {
+    const racer = await createWorld();
+    await connect(racer, 'code-race');
+    const before = await storedTokens(racer);
+    const row = (await integrationOf(racer))!;
+    await racer.db.update(integrations).set({ credentials: encryptJson({ ...before, expiresAt: Date.now() - 1000 }) }).where(eq(integrations.id, row.id));
+    const grants = emu.grants.length;
+    emu.tokenDelayMs = 150;
+    try {
+      // Each call stands in for a separate process: none shares the in-process de-duplication.
+      const tokens = await Promise.all(Array.from({ length: 5 }, () => renewAccessToken(racer.db, racer.orgId, { stale: before.accessToken })));
+      expect(emu.grants.slice(grants)).toEqual(['refresh_token']);
+      expect(new Set(tokens).size).toBe(1);
+      const after = await storedTokens(racer);
+      expect(tokens[0]).toBe(after.accessToken);
+      expect(emu.refreshTokens.get(before.refreshToken)).toBe('used');
+      expect(emu.refreshTokens.get(after.refreshToken)).toBe('live');
+      expect(await procoreStatus(racer.db, racer.owner)).toMatchObject({ connected: true, lastError: null });
+
+      // A process that read the old pair before the renewal, and only now gets to renew, uses the new pair.
+      expect(await renewAccessToken(racer.db, racer.orgId, { stale: before.accessToken })).toBe(after.accessToken);
+      expect(emu.grants.length).toBe(grants + 1);
+
+      // And through the normal path, concurrent requests in one process share one renewal too.
+      await racer.db.update(integrations).set({ credentials: encryptJson({ ...after, expiresAt: Date.now() - 1000 }) }).where(eq(integrations.id, row.id));
+      const results = await Promise.all([listProcoreProjects(racer.db, racer.owner), listCompanies(racer.db, racer.owner), listProcoreProjects(racer.db, racer.owner)]);
+      expect(results.map((r) => r.length)).toEqual([2, 1, 2]);
+      expect(emu.grants.length).toBe(grants + 2);
+    } finally {
+      emu.tokenDelayMs = 0;
+    }
+  });
+
+  it('keeps the connection when a renewal goes unanswered, and asks to reconnect only once Procore refuses', async () => {
+    const lost = await createWorld();
+    await connect(lost, 'code-lost');
+    const before = await storedTokens(lost);
+    const row = (await integrationOf(lost))!;
+    await lost.db.update(integrations).set({ credentials: encryptJson({ ...before, expiresAt: Date.now() - 1000 }) }).where(eq(integrations.id, row.id));
+
+    // Procore spends the refresh token, but its answer never arrives.
+    emu.loseNextTokenResponse = true;
+    await expect(listProcoreProjects(lost.db, lost.owner)).rejects.toThrow(/did not answer while this connection was being renewed/);
+    expect(emu.refreshTokens.get(before.refreshToken)).toBe('used');
+    let status = await procoreStatus(lost.db, lost.owner);
+    expect(status.connected).toBe(true);
+    expect(status.lastError).toMatch(/did not answer/);
+
+    // The next attempt presents the only refresh token we have; Procore refuses it, and now we know.
+    await expect(listProcoreProjects(lost.db, lost.owner)).rejects.toThrow(/Reconnect Procore/);
+    status = await procoreStatus(lost.db, lost.owner);
+    expect(status.connected).toBe(false);
+    expect(status.lastError).toMatch(/Reconnect Procore/);
+  });
+
+  it('refuses to renew a token from inside a locked transaction', async () => {
+    await expect(withOrgLock(w.db, w.orgId, () => renewAccessToken(w.db, w.orgId, { stale: 'x' }))).rejects.toThrow(/inside a locked database transaction/);
+  });
+
   it('reports an error and asks to reconnect when the refresh token is no longer good', async () => {
     const other = await createWorld();
     await connect(other, 'code-other');
@@ -557,11 +646,14 @@ describe('connecting', () => {
 
       const tokens = await storedTokens(multi);
       await expect(disconnect(multi.db, multi.accountant)).rejects.toBeInstanceOf(PermissionError);
+      const revocations = emu.revoked.length;
       await disconnect(multi.db, multi.owner);
       expect(await integrationOf(multi)).toBeUndefined();
       expect(await procoreStatus(multi.db, multi.owner)).toMatchObject({ configured: true, connected: false, companyId: null, lastError: null });
-      expect(emu.revoked).toEqual(expect.arrayContaining([tokens.accessToken, tokens.refreshToken]));
+      // One call, with the access token; Procore revokes the refresh token with it.
+      expect(emu.revoked.slice(revocations)).toEqual([tokens.accessToken]);
       expect(emu.accessTokens.has(tokens.accessToken)).toBe(false);
+      expect(emu.refreshTokens.get(tokens.refreshToken)).toBe('revoked');
       const [event] = await multi.db.select().from(auditEvents).where(and(eq(auditEvents.orgId, multi.orgId), eq(auditEvents.action, 'integration.disconnected')));
       expect(event!.summary).toContain('Procore confirmed the authorization was revoked');
       await expect(listProcoreProjects(multi.db, multi.owner)).rejects.toThrow(/not connected/);
