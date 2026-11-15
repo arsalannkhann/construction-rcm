@@ -42,7 +42,7 @@ async function main(): Promise<number> {
   const { link, expiresAt, name } = await createOperatorResetLink(db, email);
   console.log(`\nOne-time password reset link for ${name}:\n\n  ${link}\n`);
   console.log(`It works once, until ${expiresAt.toISOString()} (${RESET_LINK_MINUTES} minutes from now). Any earlier unused link for this account no longer works.`);
-  console.log('Using it signs the account out on every device. It does not sign anyone in, and it does not turn off two-step verification.\n');
+  console.log(`Using it signs the account out on every device. It does not sign anyone in${resetTwoStep ? '' : ', and it does not turn off two-step verification'}.\n`);
   return 0;
 }
 
