@@ -124,7 +124,17 @@ export function DecisionBar() {
 
       {status === 'approved' ? (
         <>
-          {app.transferStatus === 'synced' ? <Badge tone="pass">Sent to Procore</Badge> : app.transferStatus === 'exported' ? <Badge tone="pass">Exported</Badge> : app.transferStatus === 'failed' ? <Badge tone="block">Transfer failed</Badge> : <Badge tone="warn">Not yet transferred</Badge>}
+          {app.transferStatus === 'synced' ? (
+            <Badge tone="pass">Sent to Procore</Badge>
+          ) : app.transferStatus === 'exported' ? (
+            <Badge tone="pass">Exported</Badge>
+          ) : extras.procore.warning ? (
+            <Badge tone="warn">Procore did not answer</Badge>
+          ) : app.transferStatus === 'failed' ? (
+            <Badge tone="block">Transfer failed</Badge>
+          ) : (
+            <Badge tone="warn">Not yet transferred</Badge>
+          )}
           {perms.exportRun ? (
             <Menu
               trigger={
@@ -153,7 +163,9 @@ export function DecisionBar() {
                 onSelect={() =>
                   run(() => pushToProcoreAction(app.id), {
                     onSuccess: (r) => {
-                      if (r.status === 'completed') toast.success(`Created draft invoice ${r.externalRef ?? ''} in Procore`);
+                      if (r.status === 'completed' && r.adopted) toast.success(`Procore already had invoice ${r.externalRef ?? ''} from the earlier attempt. It is now recorded here; no second invoice was created.`);
+                      else if (r.status === 'completed') toast.success(`Created draft invoice ${r.externalRef ?? ''} in Procore`);
+                      else if (r.status === 'unknown') toast.warning('Procore did not answer', { description: r.error ?? undefined });
                       else toast.error(r.error ?? 'Procore did not accept the invoice.');
                     },
                   })
@@ -162,6 +174,7 @@ export function DecisionBar() {
                 <span>
                   Procore, as a draft subcontractor invoice
                   {!extras.procore.available && extras.procore.reason ? <span className="block max-w-[260px] whitespace-normal text-[11px] leading-4 text-ink-3">{extras.procore.reason}</span> : null}
+                  {extras.procore.available && extras.procore.warning ? <span className="block max-w-[260px] whitespace-normal text-[11px] leading-4 text-warn">{extras.procore.warning}</span> : null}
                 </span>
               </MenuItem>
             </Menu>

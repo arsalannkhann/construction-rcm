@@ -99,7 +99,15 @@ export default async function TransfersPage() {
                   <Td className="text-ink-2">{KIND[t.kind] ?? t.kind}</Td>
                   <Td>
                     {t.status === 'completed' ? (
-                      <Badge tone="pass">{t.kind === 'procore' ? `Created ${t.externalRef ?? ''}` : 'Exported'}</Badge>
+                      <Badge tone="pass">{t.kind === 'procore' ? `Invoice ${t.externalRef ?? ''}` : 'Exported'}</Badge>
+                    ) : t.status === 'sending' ? (
+                      <Badge tone="neutral">Sending</Badge>
+                    ) : t.status === 'unknown' ? (
+                      <Tooltip content="Procore may have created the invoice. Sending again checks Procore first and will not create a second one.">
+                        <span>
+                          <Badge tone="warn">No answer</Badge>
+                        </span>
+                      </Tooltip>
                     ) : (
                       <Tooltip content={t.error ?? 'The transfer failed.'}>
                         <span>
