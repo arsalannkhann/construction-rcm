@@ -55,25 +55,25 @@ export type SamplePackage = {
   waiver: SampleWaiver | null;
 };
 
-const INK = rgb(0.1, 0.1, 0.1);
-const GREY = rgb(0.42, 0.42, 0.42);
-const RULE = rgb(0.7, 0.7, 0.7);
-const SHADE = rgb(0.94, 0.94, 0.93);
+export const INK = rgb(0.1, 0.1, 0.1);
+export const GREY = rgb(0.42, 0.42, 0.42);
+export const RULE = rgb(0.7, 0.7, 0.7);
+export const SHADE = rgb(0.94, 0.94, 0.93);
 
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const longDate = (iso: string) => {
+export const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+export const longDate = (iso: string) => {
   const [y, m, d] = iso.split('-').map(Number);
   return `${MONTHS[m! - 1]} ${d}, ${y}`;
 };
-const usDate = (iso: string) => {
+export const usDate = (iso: string) => {
   const [y, m, d] = iso.split('-');
   return `${m}/${d}/${y}`;
 };
-const money = (n: number | null) => (n === null ? '' : formatMoney(n, { symbol: false }));
+export const money = (n: number | null) => (n === null ? '' : formatMoney(n, { symbol: false }));
 
-type Fonts = { regular: PDFFont; bold: PDFFont; italic: PDFFont; script: PDFFont };
+export type Fonts = { regular: PDFFont; bold: PDFFont; italic: PDFFont; script: PDFFont };
 
-async function fonts(doc: PDFDocument): Promise<Fonts> {
+export async function fonts(doc: PDFDocument): Promise<Fonts> {
   return {
     regular: await doc.embedFont(StandardFonts.Helvetica),
     bold: await doc.embedFont(StandardFonts.HelveticaBold),
@@ -82,23 +82,23 @@ async function fonts(doc: PDFDocument): Promise<Fonts> {
   };
 }
 
-function text(page: PDFPage, s: string, x: number, y: number, font: PDFFont, size = 9, color = INK) {
+export function text(page: PDFPage, s: string, x: number, y: number, font: PDFFont, size = 9, color = INK) {
   if (s) page.drawText(s, { x, y, size, font, color });
 }
-function textRight(page: PDFPage, s: string, right: number, y: number, font: PDFFont, size = 9, color = INK) {
+export function textRight(page: PDFPage, s: string, right: number, y: number, font: PDFFont, size = 9, color = INK) {
   if (s) page.drawText(s, { x: right - font.widthOfTextAtSize(s, size), y, size, font, color });
 }
-function textCenter(page: PDFPage, s: string, cx: number, y: number, font: PDFFont, size = 9, color = INK) {
+export function textCenter(page: PDFPage, s: string, cx: number, y: number, font: PDFFont, size = 9, color = INK) {
   if (s) page.drawText(s, { x: cx - font.widthOfTextAtSize(s, size) / 2, y, size, font, color });
 }
-function hline(page: PDFPage, x1: number, x2: number, y: number, thickness = 0.5, color = RULE) {
+export function hline(page: PDFPage, x1: number, x2: number, y: number, thickness = 0.5, color = RULE) {
   page.drawLine({ start: { x: x1, y }, end: { x: x2, y }, thickness, color });
 }
-function vline(page: PDFPage, x: number, y1: number, y2: number, thickness = 0.5, color = RULE) {
+export function vline(page: PDFPage, x: number, y1: number, y2: number, thickness = 0.5, color = RULE) {
   page.drawLine({ start: { x, y: y1 }, end: { x, y: y2 }, thickness, color });
 }
 
-function wrap(s: string, font: PDFFont, size: number, width: number): string[] {
+export function wrap(s: string, font: PDFFont, size: number, width: number): string[] {
   const out: string[] = [];
   for (const para of s.split('\n')) {
     let line = '';
@@ -117,7 +117,7 @@ function wrap(s: string, font: PDFFont, size: number, width: number): string[] {
 }
 
 /** Draws wrapped text and returns the y of the next line. */
-function paragraph(page: PDFPage, s: string, x: number, y: number, width: number, font: PDFFont, size = 9, leading = 1.35, color = INK): number {
+export function paragraph(page: PDFPage, s: string, x: number, y: number, width: number, font: PDFFont, size = 9, leading = 1.35, color = INK): number {
   for (const line of wrap(s, font, size, width)) {
     text(page, line, x, y, font, size, color);
     y -= size * leading;
@@ -125,13 +125,13 @@ function paragraph(page: PDFPage, s: string, x: number, y: number, width: number
   return y;
 }
 
-function footer(page: PDFPage, f: Fonts, label: string) {
+export function footer(page: PDFPage, f: Fonts, label: string) {
   const { width } = page.getSize();
   text(page, label, 36, 22, f.regular, 6.5, GREY);
   textRight(page, 'Sample document with fictitious parties and amounts', width - 36, 22, f.italic, 6.5, GREY);
 }
 
-function signatureStamp(page: PDFPage, f: Fonts, x: number, y: number, name: string, title: string, date: string) {
+export function signatureStamp(page: PDFPage, f: Fonts, x: number, y: number, name: string, title: string, date: string) {
   // A typical e-signature rendering: script name over a provenance line.
   text(page, name, x + 4, y + 9, f.script, 15, rgb(0.08, 0.16, 0.45));
   text(page, `Electronically signed by ${name}, ${title} on ${usDate(date)}`, x, y - 2, f.regular, 6.5, GREY);
@@ -139,7 +139,7 @@ function signatureStamp(page: PDFPage, f: Fonts, x: number, y: number, name: str
 
 // ── Application and certificate for payment ─────────────────────────────────
 
-function drawPayApplication(doc: PDFDocument, f: Fonts, p: SamplePackage, totalPages: number) {
+export function drawPayApplication(doc: PDFDocument, f: Fonts, p: SamplePackage, totalPages: number) {
   const page = doc.addPage([612, 792]);
   const L = 40;
   const R = 572;
@@ -311,7 +311,7 @@ const SHEET_COLS: Array<{ key: string; right: number; head: string[] }> = [
   { key: 'I', right: 760, head: ['RETAINAGE'] },
 ];
 
-function drawContinuationSheets(doc: PDFDocument, f: Fonts, p: SamplePackage, firstPageNo: number, totalPages: number) {
+export function drawContinuationSheets(doc: PDFDocument, f: Fonts, p: SamplePackage, firstPageNo: number, totalPages: number) {
   const perPage = 24;
   const chunks: SampleLine[][] = [];
   for (let i = 0; i < p.lines.length; i += perPage) chunks.push(p.lines.slice(i, i + perPage));
@@ -404,7 +404,7 @@ function drawContinuationSheets(doc: PDFDocument, f: Fonts, p: SamplePackage, fi
 
 // ── Lien waivers ────────────────────────────────────────────────────────────
 
-function drawWaiver(doc: PDFDocument, f: Fonts, p: SamplePackage, w: SampleWaiver) {
+export function drawWaiver(doc: PDFDocument, f: Fonts, p: SamplePackage, w: SampleWaiver) {
   const page = doc.addPage([612, 792]);
   const L = 72;
   const W = 468;
@@ -599,13 +599,13 @@ export async function renderTextlessPdf(): Promise<Uint8Array> {
   return doc.save({ useObjectStreams: false });
 }
 
-function stateName(code: string): string {
+export function stateName(code: string): string {
   return ({ TX: 'Texas', CA: 'California', FL: 'Florida' } as Record<string, string>)[code] ?? code;
 }
-function countyFor(code: string): string {
+export function countyFor(code: string): string {
   return ({ TX: 'Travis', CA: 'Sacramento', FL: 'Hillsborough' } as Record<string, string>)[code] ?? '';
 }
-function ordinalDay(iso: string): string {
+export function ordinalDay(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
   const suffix = d! % 10 === 1 && d !== 11 ? 'st' : d! % 10 === 2 && d !== 12 ? 'nd' : d! % 10 === 3 && d !== 13 ? 'rd' : 'th';
   return `${d}${suffix} day of ${MONTHS[m! - 1]}, ${y}`;

@@ -266,6 +266,55 @@ export type ExtractedWaiver = {
 
 export type WaiverSnapshot = ExtractedWaiver & { documentId: string };
 
+/** The grand-total row printed at the foot of a schedule of values, as printed (never computed). */
+export type ScheduleGrandTotal = {
+  /** Page of the file the row is printed on. Null when the engine could not tie it to a page. */
+  page: number | null;
+  /** The row label as printed, e.g. "GRAND TOTAL". */
+  label: string | null;
+  bbox?: BBox | null;
+  confidence: number;
+  /** One entry per column the row has a figure in. A column that is blank or unreadable is null. */
+  values: Partial<Record<LineAmountField, number | null>>;
+};
+
+/** A "page x of y" marking printed on a page. */
+export type PrintedPageNumber = {
+  /** Page of the file (1-based) the marking is printed on. */
+  page: number;
+  /** x in "page x of y". */
+  number: number;
+  /** y in "page x of y"; null when only "page x" is printed. */
+  of: number | null;
+  source: string;
+  bbox?: BBox | null;
+};
+
+export type ConflictingValue = {
+  /** Cents for amounts, the number itself for application numbers. Null when it could not be read. */
+  value: number | null;
+  page: number | null;
+  docType: DocType;
+  source?: string | null;
+  bbox?: BBox | null;
+};
+
+/** The same fact printed more than once in a file with different values, or a second application in the file. */
+export type ExtractionConflict = {
+  /**
+   * `application_number`: the pay application and another page (usually the schedule header) state different application numbers.
+   * `total`: a total on the pay application differs from the same total printed on the schedule.
+   * `second_pay_application`: the file holds another pay application besides the one reported in `payApp`.
+   */
+  kind: 'application_number' | 'total' | 'second_pay_application';
+  /** `applicationNumber`, or the claimed field the totals belong to (e.g. `totalCompletedStored`). */
+  field: string;
+  /** The value reported in the main result, and where it is printed. */
+  reported: ConflictingValue;
+  /** The other value(s) printed in the file. */
+  others: ConflictingValue[];
+};
+
 export type ExtractionResult = {
   engine: string;
   model?: string;
@@ -277,6 +326,17 @@ export type ExtractionResult = {
   waivers?: ExtractedWaiver[];
   /** Anything the engine could not read or was unsure about, in plain language. */
   notes: string[];
+  /**
+   * The printed grand-total row of the schedule with its location. Carries the same figures as
+   * `lineTotals`; a check can compare it with the sum of `lines` to detect a missing row or page.
+   */
+  scheduleGrandTotal?: ScheduleGrandTotal;
+  /** Every "page x of y" marking seen, in file order, so a gap in the printed sequence can be detected. */
+  pageNumbering?: PrintedPageNumber[];
+  /** Second or conflicting application numbers and totals found in the file. Absent when there are none. */
+  conflicts?: ExtractionConflict[];
+  /** Pages of the file with no machine-readable text (blank, or a scanned image) that this engine could not read. */
+  unreadablePages?: number[];
 };
 
 export type Evidence = {
