@@ -116,6 +116,8 @@ class ProcoreEmulator {
   invoices: Invoice[] = [];
   /** Create the next invoice, then lose the answer: drop the connection, answer 502, or answer 201 without an id. */
   afterNextRequisition: 'drop' | 'bad-gateway' | 'no-id' | null = null;
+  /** Keep the next create request waiting at Procore: call `arrived` when it comes in, answer once `release` settles. */
+  holdNextRequisition: { arrived: () => void; release: Promise<void> } | null = null;
   /**
    * Paths that answer 429 a number of times before behaving. As documented, a
    * 429 carries X-Rate-Limit-Reset (Unix seconds, `resetIn` seconds after the
@@ -300,6 +302,12 @@ class ProcoreEmulator {
       );
     }
     if (req.method === 'POST' && path === '/rest/v1.1/requisitions') {
+      const hold = this.holdNextRequisition;
+      this.holdNextRequisition = null;
+      if (hold) {
+        hold.arrived();
+        await hold.release;
+      }
       if (req.headers['content-type'] !== 'application/json') return json(415, { message: 'JSON expected' });
       const body = JSON.parse(raw) as Record<string, any>;
       if (this.rejectNextRequisition) {
@@ -868,6 +876,7 @@ describe('import and push', () => {
     period(4, '2026-12-31', { '3': { work: D(25000) } }),
     period(5, '2027-01-31', { '3': { work: D(25000) } }),
     period(6, '2027-02-28', { '3': { work: D(25000) } }),
+    period(7, '2027-03-31', { '3': { work: D(25000) } }),
   ];
   const pkg = (index: number) => {
     let prior = null;
@@ -1362,5 +1371,39 @@ describe('import and push', () => {
       error: 'The server sending this stopped before it recorded Procore’s answer. Procore may have created the invoice. Sending again checks Procore first and will not create a second one.',
     });
     expect(rows.find((r) => r.id === retry.transferId)).toMatchObject({ status: 'completed', externalRef: String(created.id) });
+  });
+  it('creates one invoice when two people send the same application at the same moment', async () => {
+    emu.billingPeriods.push({ id: 6007, start_date: '2027-03-01', end_date: '2027-03-31', due_date: '2027-04-10', status: 'open' });
+    const appId = await approved(6); // application #7
+    const posts = invoicePosts();
+    const invoices = emu.invoices.length;
+
+    // Procore is slow to answer the first create request. Both presses go through the database
+    // claim (no in-process guard), as they would from two servers.
+    let arrived!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((resolve) => (arrived = resolve));
+    emu.holdNextRequisition = { arrived: () => arrived(), release: new Promise<void>((resolve) => (release = resolve)) };
+    const runs = [pushToProcore(w.db, w.controller, appId), pushToProcore(w.db, w.owner, appId)];
+    const outcomes = runs.map((run) => run.then(() => 'finished', (err: Error) => err.message));
+    await reached;
+    // While the first request is at Procore, the other press is refused, whichever of the two it was.
+    const busy = 'This application is being sent to Procore right now. Wait a moment and look again.';
+    const firstToSettle = await Promise.race(outcomes);
+    expect(firstToSettle).toBe(busy);
+    expect(invoicePosts()).toBe(posts + 1);
+    release();
+
+    const settled = await Promise.allSettled(runs);
+    expect(settled.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const done = settled.find((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof pushToProcore>>> => r.status === 'fulfilled')!.value;
+    expect(done).toMatchObject({ status: 'completed', adopted: false, externalRef: String(emu.invoices.at(-1)!.id) });
+    expect(invoicePosts()).toBe(posts + 1);
+    expect(emu.invoices).toHaveLength(invoices + 1);
+    expect(await transfersOf(appId)).toMatchObject([{ status: 'completed', externalRef: done.externalRef }]);
+
+    // Pressing again afterwards sends nothing.
+    await expect(pushToProcore(w.db, w.owner, appId)).rejects.toThrow(`This application was already sent to Procore (invoice ${done.externalRef}).`);
+    expect(invoicePosts()).toBe(posts + 1);
   });
 });
