@@ -17,7 +17,8 @@
     "eval:extraction": "tsx scripts/eval-extraction.ts",
     "postinstall": "node scripts/copy-pdf-worker.mjs",
     "test:pg": "vitest run --config vitest.pg.config.mts",
-    "db:supabase": "tsx scripts/sync-supabase-migrations.ts"
+    "db:supabase": "tsx scripts/sync-supabase-migrations.ts",
+    "backup:check": "tsx scripts/check-restore.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

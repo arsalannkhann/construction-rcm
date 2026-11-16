@@ -736,3 +736,22 @@ export const inquiries = pgTable(
   },
   (t) => [index('inquiries_sender_created').on(t.senderHash, t.createdAt), index('inquiries_created').on(t.createdAt)],
 );
+
+/**
+ * Each run of the scheduled endpoint (/api/jobs/run), so that it can be shown
+ * the scheduler is really calling it: on Vercel's Hobby plan its own logs last
+ * one hour. The newest runs are kept; health reports when the last one was.
+ */
+export const scheduledRuns = pgTable(
+  'scheduled_runs',
+  {
+    id: text('id').primaryKey(),
+    startedAt: ts('started_at').notNull(),
+    finishedAt: ts('finished_at').notNull(),
+    /** Jobs this run processed. */
+    ran: integer('ran').notNull(),
+    queued: integer('queued').notNull(),
+    failed: integer('failed').notNull(),
+  },
+  (t) => [index('scheduled_runs_started').on(t.startedAt)],
+);

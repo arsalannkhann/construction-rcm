@@ -1,0 +1,167 @@
+# Database backups, and a restore that proves each one works.
+#
+# drill       Every run, no secrets: fills a PostgreSQL 17 database through the
+#             app (migrations and the demo workspace), dumps it, restores the dump
+#             into an empty database and checks the copy (scripts/check-restore.ts).
+# production  Nightly and on demand, once configured: dumps the production
+#             database, restores and checks it the same way, then keeps the dump
+#             encrypted to the owner's age key as a workflow artifact for 30 days.
+#             This repository is public, so nothing unencrypted is ever uploaded and
+#             nothing from the database is printed.
+#
+# Configure production (docs/operations.md, "Backups"):
+#   secret   BACKUP_DATABASE_URL     session-pooler connection string (port 5432)
+#   secret   BACKUP_DATABASE_CA_CERT the Supabase CA certificate (PEM), to verify the server
+#   variable BACKUP_AGE_RECIPIENT    the owner's age public key (age1…)
+name: Database backup
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/backup.yml'
+      - 'scripts/check-restore.ts'
+      - 'drizzle/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PG_IMAGE: postgres:17
+
+jobs:
+  drill:
+    name: Restore drill (sample data)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: drill
+          POSTGRES_DB: source
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PGPASSWORD: drill
+      SOURCE_URL: postgres://postgres:drill@localhost:5432/source
+      RESTORED_URL: postgres://postgres:drill@localhost:5432/restored
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Fill a database through the app
+        run: pnpm -s seed:demo > /dev/null
+        env:
+          DATABASE_URL: ${{ env.SOURCE_URL }}
+          RCM_SECRET_KEY: drill-only
+          DEMO_PASSWORD: drill-only-password
+      - name: Count rows in the source
+        run: pnpm -s backup:check --write counts.json
+        env:
+          DATABASE_URL: ${{ env.SOURCE_URL }}
+      - name: Dump
+        run: >-
+          docker run --rm --network host -e PGPASSWORD -v "$PWD:/work" "$PG_IMAGE"
+          pg_dump --format=custom --no-owner --no-privileges
+          --schema=public --schema=drizzle --schema=supabase_migrations
+          --file=/work/backup.dump "$SOURCE_URL"
+      - name: Restore into an empty database
+        run: |
+          docker run --rm --network host -e PGPASSWORD "$PG_IMAGE" createdb -h localhost -U postgres restored
+          docker run --rm --network host -e PGPASSWORD -v "$PWD:/work" "$PG_IMAGE" \
+            pg_restore --no-owner --no-privileges --clean --if-exists --exit-on-error --dbname="$RESTORED_URL" /work/backup.dump
+      - name: Check the restored copy against the source
+        run: pnpm -s backup:check --expect counts.json
+        env:
+          DATABASE_URL: ${{ env.RESTORED_URL }}
+
+  production:
+    name: Back up production
+    if: github.event_name != 'pull_request'
+    needs: drill
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: restore
+          POSTGRES_DB: restored
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      SOURCE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+      SOURCE_CA: ${{ secrets.BACKUP_DATABASE_CA_CERT }}
+      AGE_RECIPIENT: ${{ vars.BACKUP_AGE_RECIPIENT }}
+      RESTORED_URL: postgres://postgres:restore@localhost:5432/restored
+    steps:
+      - name: Check configuration
+        id: config
+        run: |
+          if [ -z "$SOURCE_URL" ] || [ -z "$AGE_RECIPIENT" ]; then
+            echo "::warning title=Production backup not configured::Set the BACKUP_DATABASE_URL secret and the BACKUP_AGE_RECIPIENT variable (docs/operations.md, Backups). Nothing was backed up."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/checkout@v4
+      - if: steps.config.outputs.ready == 'true'
+        uses: pnpm/action-setup@v4
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - if: steps.config.outputs.ready == 'true'
+        run: pnpm install --frozen-lockfile && sudo apt-get install -y -qq age > /dev/null
+      - name: Dump production
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          umask 077
+          mkdir -p work
+          if [ -n "$SOURCE_CA" ]; then
+            printf '%s\n' "$SOURCE_CA" > work/ca.pem
+            TLS="-e PGSSLMODE=verify-full -e PGSSLROOTCERT=/work/ca.pem"
+          else
+            echo "::warning::BACKUP_DATABASE_CA_CERT is not set: the connection is encrypted but the server's certificate is not verified."
+            TLS="-e PGSSLMODE=require"
+          fi
+          docker run --rm $TLS -e SOURCE_URL -v "$PWD/work:/work" "$PG_IMAGE" sh -c \
+            'pg_dump --format=custom --no-owner --no-privileges --schema=public --schema=supabase_migrations --file=/work/backup.dump "$SOURCE_URL"'
+          rm -f work/ca.pem
+          echo "Dump size: $(du -h work/backup.dump | cut -f1)"
+      - name: Restore into an empty database and check it
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          docker run --rm --network host -e PGPASSWORD=restore -v "$PWD/work:/work" "$PG_IMAGE" \
+            pg_restore --no-owner --no-privileges --clean --if-exists --exit-on-error --dbname="$RESTORED_URL" /work/backup.dump
+          DATABASE_URL="$RESTORED_URL" pnpm -s backup:check
+      - name: Encrypt to the owner's key
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          name="zephric-$(date -u +%Y-%m-%dT%H%MZ).dump.age"
+          age --recipient "$AGE_RECIPIENT" --output "work/$name" work/backup.dump
+          shred -u work/backup.dump
+          echo "ARTIFACT=$name" >> "$GITHUB_ENV"
+      - name: Keep the encrypted dump
+        if: steps.config.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: work/${{ env.ARTIFACT }}
+          retention-days: 30
+          if-no-files-found: error

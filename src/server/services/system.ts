@@ -14,7 +14,7 @@ import { assertCan, ConflictError, UserError, type Ctx } from '@/server/auth/per
 import { recordAudit } from '@/server/audit';
 import type { PdfText } from '@/server/documents/pdf-text';
 import { checkPdfReader, type ReaderCheck } from '@/server/documents/reader-check';
-import { queueHealth, requeueJob, runnerStatus, type QueueHealth } from '@/server/jobs';
+import { lastScheduledRun, queueHealth, requeueJob, runnerStatus, SCHEDULED_RUN_OVERDUE_MS, type QueueHealth } from '@/server/jobs';
 import { storageMode, type StorageMode } from '@/server/storage';
 
 /** Queued work older than this means nothing is draining the queue. */
@@ -59,6 +59,8 @@ export type Health = {
   storage: StorageMode;
   queue: (QueueHealth & { stalled: boolean }) | null;
   runner: { mode: 'poll' | 'request'; polling: boolean; lastActivityAt: Date | null };
+  /** The last call of the scheduled endpoint, and whether it is overdue (only where the queue runs on request, as on Vercel). */
+  scheduler: { lastRunAt: Date | null; overdue: boolean } | null;
   /** A test PDF was opened and its text found, with the reader uploads go through. */
   pdfReader: ReaderCheck;
 };
@@ -77,7 +79,7 @@ export async function deploymentHealth(getDb: () => Promise<DB>, deps: { readPdf
     console.error('[health] the database is not usable:', err);
     // A setup problem (schema behind, wrong migration mode, untrusted certificate) explains itself; anything else is an outage.
     const problem = err instanceof DatabaseSetupError ? err.message : 'The database is not answering.';
-    return { status: 'down', problems: [problem], database: { ok: false, driver: null, latencyMs: null, tls: null }, dataApi: null, storage, queue: null, runner, pdfReader: await reading };
+    return { status: 'down', problems: [problem], database: { ok: false, driver: null, latencyMs: null, tls: null }, dataApi: null, storage, queue: null, runner, scheduler: null, pdfReader: await reading };
   }
   const latencyMs = Date.now() - started;
   const queue = await queueHealth(db);
@@ -85,6 +87,10 @@ export async function deploymentHealth(getDb: () => Promise<DB>, deps: { readPdf
   const problems: string[] = [];
   if (stalled) problems.push(`Document processing is not keeping up: the oldest queued job has waited more than ${STALL_MS / 60_000} minutes.`);
   if (runner.mode === 'poll' && !runner.polling) problems.push('This process is not running the document-processing queue.');
+  const lastRunAt = await lastScheduledRun(db);
+  // Before the first run there is nothing to compare; after it, a missed day means the scheduler stopped calling.
+  const overdue = runner.mode === 'request' && !!lastRunAt && Date.now() - lastRunAt.getTime() > SCHEDULED_RUN_OVERDUE_MS;
+  if (overdue) problems.push(`The scheduled run (/api/jobs/run) last happened at ${lastRunAt!.toISOString()}, more than a day ago. Check the cron job and CRON_SECRET.`);
   const connection = await dbConnection();
   if (connection.supabase && connection.tls === 'off') {
     problems.push('The connection to Supabase is not encrypted. Set DATABASE_CA_CERT to the project’s CA certificate; see docs/operations.md.');
@@ -106,6 +112,7 @@ export async function deploymentHealth(getDb: () => Promise<DB>, deps: { readPdf
     storage,
     queue: { ...queue, stalled },
     runner,
+    scheduler: { lastRunAt, overdue },
     pdfReader,
   };
 }

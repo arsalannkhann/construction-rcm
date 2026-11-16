@@ -12,7 +12,7 @@
  */
 import { getDb } from '@/db';
 import { bearerMatches } from '@/server/http';
-import { drain, queueHealth, REQUEST_BUDGET_MS } from '@/server/jobs';
+import { drain, queueHealth, recordScheduledRun, REQUEST_BUDGET_MS } from '@/server/jobs';
 import '@/server/services/intake'; // registers the job handler
 
 export const dynamic = 'force-dynamic';
@@ -24,7 +24,10 @@ export async function GET(request: Request) {
   if (ok === null) return Response.json({ error: 'Not configured: set CRON_SECRET to allow scheduled runs.' }, { status: 503, headers });
   if (!ok) return Response.json({ error: 'Not authorised.' }, { status: 401, headers });
   const db = await getDb();
-  const ran = await drain(db, { deadline: Date.now() + REQUEST_BUDGET_MS });
+  const startedAt = new Date();
+  const ran = await drain(db, { deadline: startedAt.getTime() + REQUEST_BUDGET_MS });
   const { queued, running, failed } = await queueHealth(db);
+  // Proof the scheduler called, which /api/health reports (Vercel Hobby keeps logs for an hour).
+  await recordScheduledRun(db, { startedAt, finishedAt: new Date(), ran, queued, failed });
   return Response.json({ ran, queued, running, failed }, { headers });
 }

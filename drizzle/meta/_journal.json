@@ -43,6 +43,13 @@
       "when": 1794784662010,
       "tag": "0005_inquiries",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794785541717,
+      "tag": "0006_scheduled_runs",
+      "breakpoints": true
     }
   ]
 }

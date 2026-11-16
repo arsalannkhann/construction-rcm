@@ -29,10 +29,10 @@
  * call to /api/jobs/run.
  */
 import os from 'node:os';
-import { and, asc, eq, gte, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNull, lt, lte, notInArray, or, sql } from 'drizzle-orm';
 import { after } from 'next/server';
 import { getDb, type DB } from '@/db';
-import { jobs } from '@/db/schema';
+import { jobs, scheduledRuns } from '@/db/schema';
 import { afterCommit, outsideTransaction } from '@/db/tx';
 import { isInMemory, jobRunnerMode, type JobRunnerMode } from './config';
 import { newId, randomToken } from './ids';
@@ -270,4 +270,21 @@ export async function queueHealth(db: DB, orgId?: string): Promise<QueueHealth> 
 /** How the queue is run here, whether this process is polling it, and when it last looked at it. */
 export function runnerStatus(): { mode: JobRunnerMode; polling: boolean; lastActivityAt: Date | null } {
   return { mode: jobRunnerMode(), polling: !!g.__rcmPoller, lastActivityAt: g.__rcmRunnerActivity ? new Date(g.__rcmRunnerActivity) : null };
+}
+
+/** Scheduled runs kept; older ones are removed as new ones are recorded. */
+export const SCHEDULED_RUNS_KEPT = 60;
+/** Vercel runs the scheduled endpoint daily, at a time within the hour it is set for; past this, it has stopped. */
+export const SCHEDULED_RUN_OVERDUE_MS = 26 * 60 * 60 * 1000;
+
+/** Record one run of the scheduled endpoint. */
+export async function recordScheduledRun(db: DB, run: { startedAt: Date; finishedAt: Date; ran: number; queued: number; failed: number }): Promise<void> {
+  await db.insert(scheduledRuns).values({ id: newId('run'), ...run });
+  const keep = await db.select({ id: scheduledRuns.id }).from(scheduledRuns).orderBy(desc(scheduledRuns.startedAt)).limit(SCHEDULED_RUNS_KEPT);
+  if (keep.length === SCHEDULED_RUNS_KEPT) await db.delete(scheduledRuns).where(notInArray(scheduledRuns.id, keep.map((r) => r.id)));
+}
+
+export async function lastScheduledRun(db: DB): Promise<Date | null> {
+  const [last] = await db.select({ at: scheduledRuns.startedAt }).from(scheduledRuns).orderBy(desc(scheduledRuns.startedAt)).limit(1);
+  return last?.at ?? null;
 }

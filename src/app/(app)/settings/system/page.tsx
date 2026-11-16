@@ -64,10 +64,12 @@ export default async function SystemStatusPage() {
     health.runner.mode === 'request'
       ? {
           name: 'Document processing',
-          tone: health.queue?.stalled ? 'warn' : 'pass',
+          tone: health.queue?.stalled || health.scheduler?.overdue ? 'warn' : 'pass',
           status: health.queue?.stalled ? 'Falling behind' : 'On request',
-          detail: `Serverless hosting: packages are read right after they are uploaded, and anything left over is picked up when someone uses the app or the scheduled check runs${health.runner.lastActivityAt ? `. This instance last looked at the queue ${formatRelative(health.runner.lastActivityAt)}` : ''}. ${ours.queued} queued and ${ours.running} in progress for ${ctx.orgName}.${
-            health.queue?.stalled ? ' Work has been waiting more than ten minutes: check that the scheduled call to /api/jobs/run is set up (docs/operations.md, Vercel).' : ''
+          detail: `Serverless hosting: packages are read right after they are uploaded, and anything left over is picked up when someone uses the app or the scheduled check runs${health.runner.lastActivityAt ? `. This instance last looked at the queue ${formatRelative(health.runner.lastActivityAt)}` : ''}. ${ours.queued} queued and ${ours.running} in progress for ${ctx.orgName}. ${
+            health.scheduler?.lastRunAt ? `The scheduled check last ran ${formatRelative(health.scheduler.lastRunAt)}.` : 'The scheduled check has not run yet.'
+          }${health.queue?.stalled ? ' Work has been waiting more than ten minutes: check that the scheduled call to /api/jobs/run is set up (docs/operations.md, Vercel).' : ''}${
+            health.scheduler?.overdue ? ' The scheduled check should run daily and has missed at least a day: check the cron job and CRON_SECRET (docs/operations.md, Monitoring).' : ''
           }`,
         }
       : health.runner.polling
