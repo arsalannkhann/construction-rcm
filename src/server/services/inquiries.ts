@@ -1,5 +1,5 @@
 /**
- * The "design partner" form on the public website (public/landing).
+ * The "design partner" form on the public website (src/components/marketing/partner-form.tsx).
  *
  * Anyone can send it, without signing in, so it is kept narrow: six short text
  * fields and an explicit agreement, a size limit, a check that the form was

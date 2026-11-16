@@ -1,0 +1,125 @@
+{
+  "expo": {
+    "name": "Zephric",
+    "slug": "zephric",
+    "scheme": "zephric",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#f5f6f8",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "ios": {
+      "bundleIdentifier": "com.zephric.app",
+      "supportsTablet": false,
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "Zephric uses the camera to photograph pay applications, lien waivers and other billing documents you choose to submit.",
+        "NSPhotoLibraryUsageDescription": "Zephric reads the photos you pick so you can submit billing documents.",
+        "NSFaceIDUsageDescription": "Zephric uses Face ID to unlock the app when you have turned on biometric unlock."
+      },
+      "privacyManifests": {
+        "NSPrivacyAccessedAPITypes": [
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryFileTimestamp",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "C617.1"
+            ]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "CA92.1"
+            ]
+          }
+        ]
+      }
+    },
+    "android": {
+      "package": "com.zephric.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-foreground.png",
+        "monochromeImage": "./assets/adaptive-monochrome.png",
+        "backgroundColor": "#070d1a"
+      },
+      "allowBackup": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ],
+      "versionCode": 1
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Zephric uses Face ID to unlock the app when you have turned on biometric unlock."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Zephric uses the camera to photograph pay applications, lien waivers and other billing documents you choose to submit.",
+          "photosPermission": "Zephric reads the photos you pick so you can submit billing documents.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "enablePngCrunchInReleaseBuilds": true,
+            "useLegacyPackaging": false
+          },
+          "ios": {
+            "deploymentTarget": "16.4"
+          }
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 96,
+          "resizeMode": "contain",
+          "backgroundColor": "#f5f6f8",
+          "dark": {
+            "image": "./assets/splash-icon.png",
+            "backgroundColor": "#070d1a"
+          }
+        }
+      ],
+      "./plugins/with-lean-android",
+      "./plugins/with-release-signing",
+      "./plugins/with-recents-privacy",
+      "./plugins/with-variant-guard"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "apiUrl": "https://zephric.vercel.app"
+    }
+  }
+}

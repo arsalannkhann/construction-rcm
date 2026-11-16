@@ -27,16 +27,16 @@ export function SignupForm() {
     >
       <FormError message={error} />
       <Field label="Company name" hint="Your general contracting company. You can invite colleagues next.">
-        <Input name="organization" autoComplete="organization" required autoFocus value={form.orgName} onChange={set('orgName')} className="h-9" />
+        <Input name="organization" autoComplete="organization" required autoFocus value={form.orgName} onChange={set('orgName')} className="h-10 text-[14px]" />
       </Field>
       <Field label="Your name">
-        <Input name="name" autoComplete="name" required value={form.name} onChange={set('name')} className="h-9" />
+        <Input name="name" autoComplete="name" required value={form.name} onChange={set('name')} className="h-10 text-[14px]" />
       </Field>
       <Field label="Work email">
-        <Input type="email" name="email" autoComplete="email" required value={form.email} onChange={set('email')} className="h-9" />
+        <Input type="email" name="email" autoComplete="email" required value={form.email} onChange={set('email')} className="h-10 text-[14px]" />
       </Field>
       <Field label="Password" hint={PASSWORD_HINT}>
-        <Input type="password" name="new-password" autoComplete="new-password" required minLength={10} value={form.password} onChange={set('password')} className="h-9" />
+        <Input type="password" name="new-password" autoComplete="new-password" required minLength={10} value={form.password} onChange={set('password')} className="h-10 text-[14px]" />
       </Field>
       <Button type="submit" variant="primary" size="lg" loading={pending} className="w-full">
         Create organisation

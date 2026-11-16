@@ -16,9 +16,10 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { formatMoney, formatMoneyCompact } from '@/lib/money';
 import { cn, formatMonth } from '@/lib/utils';
 
-// Validated as a categorical pair on a white surface (CVD and normal-vision separation, contrast >= 3:1).
-export const SERIES = { requested: '#eb6834', approved: '#1f4fd1' } as const;
-const STATUS_FILL = { block: '#c2371f', warn: '#d8952b', accent: '#1f4fd1', neutral: '#77766f', quiet: '#c9c8c1', pass: '#1b7a4a' } as const;
+// Validated as a categorical pair on a white surface (scripts/validate_palette.js from the dataviz notes: chroma,
+// CVD separation 23 (deutan), normal-vision 26, contrast >= 3:1). Approved wears the brand's teal, which means "verified, done".
+export const SERIES = { requested: '#1f4fd1', approved: '#0f9e93' } as const;
+const STATUS_FILL = { block: '#c2371f', warn: '#d8952b', accent: '#1f4fd1', neutral: '#737c8f', quiet: '#cdd2da', pass: '#1b7a4a' } as const;
 
 // ── Tooltip ─────────────────────────────────────────────────────────────────
 

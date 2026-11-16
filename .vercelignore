@@ -1,0 +1,11 @@
+# The mobile app (mobile/, docs/mobile.md) is built separately and is not part
+# of the website deployment. Patterns are anchored with a leading "/": a bare
+# "mobile" also matches src/app/api/mobile and drops the mobile API.
+/mobile/*
+# Except the formatting helpers: tests/mobile-format.test.ts imports them, and
+# `next build` type-checks the tests.
+!/mobile/src/
+/mobile/src/*
+!/mobile/src/lib/
+/mobile/src/lib/*
+!/mobile/src/lib/format.ts

@@ -113,9 +113,9 @@ export async function acceptInviteAction(token: string, input: { name?: string; 
   });
 }
 
+/** Ends the session on the server. The browser then leaves the app with a full page load (src/lib/sign-out.ts). */
 export async function logoutAction(): Promise<void> {
   await endSession();
-  redirect('/login');
 }
 
 export async function switchOrgAction(orgId: string): Promise<ActionResult> {

@@ -6,11 +6,11 @@ import { SignupForm } from './signup-form';
 export const metadata = { title: 'Set up your company' };
 
 export default async function SignupPage() {
-  if (await getSession()) redirect('/');
+  if (await getSession()) redirect('/overview');
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight">Set up your company</h1>
-      <p className="mt-1.5 text-[13px] text-ink-2">Create your organisation, then add a project and upload your first billing package. No integrations needed to start.</p>
+      <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.025em]">Set up your company</h1>
+      <p className="mt-2 text-[14px] leading-relaxed text-ink-2">Create your organisation, then add a project and upload your first billing package. No integrations needed to start.</p>
       <div className="mt-7">
         <SignupForm />
       </div>

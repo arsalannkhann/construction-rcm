@@ -10,6 +10,7 @@
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { loginPath, REQUEST_PATH_HEADER } from '@/lib/return-path';
+import { SIGNED_IN_HINT_COOKIE } from '@/lib/session-markers';
 import { cache } from 'react';
 import { getDb } from '@/db';
 import { appUrl, isProduction } from '@/server/config';
@@ -18,7 +19,6 @@ import { DEVICE_COOKIE, DEVICE_COOKIE_DAYS, parseDeviceCookie, rememberDevice } 
 import type { Ctx } from './permissions';
 import { requestMetaFrom } from './request-meta';
 
-/** next.config.ts sends visitors without this cookie to the public website at `/`; keep the two names the same. */
 const COOKIE = 'rcm_session';
 /** Set between a correct password and a correct second-step code. */
 const CHALLENGE_COOKIE = 'rcm_login';
@@ -59,9 +59,16 @@ export const getSession = cache(async (): Promise<SessionInfo | null> => {
  * runs through here (every page and action in the app) works for them in that
  * organisation until they have.
  */
-/** The sign-in page, set to come back to the page that was asked for. */
+/**
+ * The sign-in page, set to come back to the page that was asked for. A
+ * session cookie that no longer opens a session means the session ran out or
+ * was ended elsewhere (signed out on another device, password changed), and
+ * the sign-in page says so.
+ */
 async function signInFirst(): Promise<never> {
-  redirect(loginPath((await headers()).get(REQUEST_PATH_HEADER)));
+  const path = loginPath((await headers()).get(REQUEST_PATH_HEADER));
+  if (!(await sessionToken())) redirect(path);
+  redirect(`${path}${path.includes('?') ? '&' : '?'}expired=1`);
 }
 
 export async function requireCtx(): Promise<Ctx> {
@@ -79,7 +86,10 @@ export async function requireUser(): Promise<SessionInfo['user']> {
 }
 
 export async function setSessionCookie(token: string, expiresAt: Date): Promise<void> {
-  (await cookies()).set(COOKIE, token, authCookieOptions(expiresAt));
+  const jar = await cookies();
+  jar.set(COOKIE, token, authCookieOptions(expiresAt));
+  // Beside it, a readable marker for the public website's "Continue to dashboard" (src/lib/session-markers.ts).
+  jar.set(SIGNED_IN_HINT_COOKIE, '1', { ...authCookieOptions(expiresAt), httpOnly: false });
 }
 
 /** Start a session for someone who has just proved who they are, and set its cookie. */
@@ -92,6 +102,7 @@ export async function endSession(): Promise<void> {
   const jar = await cookies();
   await destroySession(await getDb(), jar.get(COOKIE)?.value);
   jar.delete(COOKIE);
+  jar.delete(SIGNED_IN_HINT_COOKIE);
 }
 
 export async function setLoginChallengeCookie(token: string, expiresAt: Date): Promise<void> {

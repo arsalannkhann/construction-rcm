@@ -28,15 +28,15 @@ export function InviteForm({ token, email, hasAccount }: { token: string; email:
     >
       <FormError message={error} />
       <Field label="Email">
-        <Input value={email} disabled className="h-9" />
+        <Input value={email} disabled className="h-10 text-[14px]" />
       </Field>
       {hasAccount ? null : (
         <Field label="Your name">
-          <Input name="name" autoComplete="name" required autoFocus value={name} onChange={(e) => setName(e.target.value)} className="h-9" />
+          <Input name="name" autoComplete="name" required autoFocus value={name} onChange={(e) => setName(e.target.value)} className="h-10 text-[14px]" />
         </Field>
       )}
       <Field label={hasAccount ? 'Your password' : 'Choose a password'} hint={hasAccount ? 'You already have an account with this email. Enter its password to join.' : PASSWORD_HINT}>
-        <Input type="password" name="password" autoComplete={hasAccount ? 'current-password' : 'new-password'} required value={password} onChange={(e) => setPassword(e.target.value)} className="h-9" />
+        <Input type="password" name="password" autoComplete={hasAccount ? 'current-password' : 'new-password'} required value={password} onChange={(e) => setPassword(e.target.value)} className="h-10 text-[14px]" />
       </Field>
       <Button type="submit" variant="primary" size="lg" loading={pending} className="w-full">
         Join team

@@ -51,7 +51,7 @@ export function ForgotForm() {
     >
       <FormError message={error} />
       <Field label="Work email">
-        <Input type="email" name="email" autoComplete="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} className="h-9" />
+        <Input type="email" name="email" autoComplete="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} className="h-10 text-[14px]" />
       </Field>
       <Button type="submit" variant="primary" size="lg" loading={pending} className="w-full">
         Email me a reset link

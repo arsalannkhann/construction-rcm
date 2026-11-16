@@ -18,7 +18,7 @@ export default async function VerifyPage({ searchParams }: { searchParams: Promi
   if (!challenge) {
     return (
       <>
-        <h1 className="text-2xl font-semibold tracking-tight">Sign in again</h1>
+        <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.025em]">Sign in again</h1>
         <p className="mt-2 text-[13px] text-ink-2">This sign-in has expired or had too many wrong codes. Enter your email and password again to get a new one.</p>
         <p className="mt-6 text-[13px]">
           <Link href="/login" className="font-medium text-accent hover:underline">
@@ -31,8 +31,8 @@ export default async function VerifyPage({ searchParams }: { searchParams: Promi
 
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight">Two-step verification</h1>
-      <p className="mt-1.5 text-[13px] text-ink-2">
+      <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.025em]">Two-step verification</h1>
+      <p className="mt-2 text-[14px] leading-relaxed text-ink-2">
         Enter the 6-digit code your authenticator app shows for {challenge.mfaEnabledAt && challenge.mfaEnabledAt < MFA_ISSUER_RENAMED_AT ? `${PREVIOUS_MFA_ISSUER}, the name your app was given when you set it up` : MFA_ISSUER}.
       </p>
       <div className="mt-7">
