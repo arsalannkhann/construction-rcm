@@ -591,7 +591,8 @@ export function syntheticCases(): SyntheticCase[] {
   );
 
   // ── Scans: no text layer ──
-  const scanTruth = (t: Truth): Truth => ({ ...t, expect: { ...t.expect, outcome: { 'text-layer': 'unreadable' }, flags: ['unreadable_page'] } });
+  // The text reader cannot read a scan; the AI reads it, and its values are scored like any other.
+  const scanTruth = (t: Truth): Truth => ({ ...t, expect: { ...t.expect, outcome: { 'text-layer': 'unreadable' }, flags: { 'text-layer': ['unreadable_page'] } } });
   add({
     id: 'scan/image-only-pdf',
     title: 'The standard package as an image-only scan (no text layer)',
@@ -627,7 +628,7 @@ export function syntheticCases(): SyntheticCase[] {
     title: 'A text PDF whose schedule page is a scanned image',
     build: async () => {
       const base = await legacyCase('scan/one-scanned-page-in-text-pdf', 'A text PDF whose schedule page is a scanned image', electric());
-      return { ...base, file: pdfFile('scan__one-scanned-page-in-text-pdf', await scanned(base.file.bytes, { dpi: 150, seed: 31, pages: [2] })), truth: { ...base.truth, expect: { flags: ['unreadable_page'] } } };
+      return { ...base, file: pdfFile('scan__one-scanned-page-in-text-pdf', await scanned(base.file.bytes, { dpi: 150, seed: 31, pages: [2] })), truth: { ...base.truth, expect: { flags: { 'text-layer': ['unreadable_page'] } } } };
     },
   });
 
@@ -649,7 +650,8 @@ export function syntheticCases(): SyntheticCase[] {
         description: 'G702 whose current payment due is struck through and corrected by hand',
         tags: ['ink'],
         expect: {
-          notes: ['drawn over'],
+          // The text reader's wording, or the AI's ("written over by hand", "struck through").
+          notes: ['drawn over|written over|struck (through|out)|crossed out|overwrit'],
           knownLimitation: 'The text layer still carries the printed figure. A reader of the text layer cannot read the handwritten correction; the most it can do is notice that something is drawn over the figure and decline to vouch for it.',
         },
       });

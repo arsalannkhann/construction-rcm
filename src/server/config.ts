@@ -42,10 +42,13 @@ export function jobRunnerMode(env: Record<string, string | undefined> = process.
 
 export type AiConfig = { configured: true; apiKey: string; model: string } | { configured: false };
 
-export function aiConfig(): AiConfig {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+/** The model that reads documents unless RCM_EXTRACTION_MODEL names another. */
+export const DEFAULT_EXTRACTION_MODEL = 'claude-opus-5-5';
+
+export function aiConfig(env: Record<string, string | undefined> = process.env): AiConfig {
+  const apiKey = env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) return { configured: false };
-  return { configured: true, apiKey, model: process.env.RCM_EXTRACTION_MODEL || 'claude-opus-5-5' };
+  return { configured: true, apiKey, model: env.RCM_EXTRACTION_MODEL?.trim() || DEFAULT_EXTRACTION_MODEL };
 }
 
 export type ProcoreEnv = 'production' | 'sandbox';

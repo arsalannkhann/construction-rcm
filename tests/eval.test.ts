@@ -69,6 +69,16 @@ describe('scoring', () => {
     expect(s.rows).toEqual({ expected: 1, read: 2, matched: 1 });
     expect(s.items.find((i) => i.path === 'lines.extra.1')!.bucket).toBe('wrong');
   });
+
+  it('applies a per-engine flag only to that engine: a scan is unreadable to the text reader, not to the AI', () => {
+    const truth: Truth = { version: 1, expect: { flags: { 'text-layer': ['unreadable_page'] } } };
+    const flags = (engineKey: string) => scoreCase({ caseId: 'c', file: 'f', truth, outcome: outcomeWith({}), engineKey }).flags.map((f) => [f.flag, f.met]);
+    expect(flags('text-layer')).toEqual([['unreadable_page', false]]);
+    expect(flags('claude')).toEqual([]);
+    // One list applies to every engine, as before.
+    const everyone: Truth = { version: 1, expect: { flags: ['total_conflict'] } };
+    expect(scoreCase({ caseId: 'c', file: 'f', truth: everyone, outcome: outcomeWith({}), engineKey: 'claude' }).flags).toHaveLength(1);
+  });
 });
 
 describe('ground truth files', () => {

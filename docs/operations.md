@@ -43,7 +43,7 @@ run a pilot on it.
 | `CRON_SECRET` | On Vercel | Secret the scheduler sends to `/api/jobs/run` as `Authorization: Bearer …` (Vercel's cron does this by itself). Without it that endpoint refuses to run. `openssl rand -hex 32`. |
 | `RCM_JOB_RUNNER` | No | `poll` (a long-lived process runs the queue) or `request` (serverless: work runs after the request that queued it). Default: `request` on Vercel, `poll` elsewhere. Leave it unset. |
 | `RCM_STORAGE` | No | `database` (default with `DATABASE_URL`) or `disk`. Leave it unset. |
-| `ANTHROPIC_API_KEY`, `RCM_EXTRACTION_MODEL` | No | AI document reading. Without it, only PDFs with a text layer are read; scans are keyed by hand. |
+| `ANTHROPIC_API_KEY`, `RCM_EXTRACTION_MODEL` | No | AI document reading (model default `claude-opus-5-5`). Without it, only PDFs with a text layer are read; scans are keyed by hand. Set it with `pnpm ai:key`: see [AI document reading](#ai-document-reading). |
 | `RCM_EXTRACTION_TIMEOUT_SECONDS` | No | Longest one AI read may take (default 240). A read that runs over is stopped; the document is read by the text-layer reader instead, or marked not read, and reviewers are told which. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | No | Outbound email. Without them, messages are saved as drafts and clearly marked "not sent". |
 | `INBOUND_EMAIL_SECRET` | No | Opens the email-intake webhook. Without it every intake request is refused. |
@@ -52,6 +52,40 @@ run a pilot on it.
 Settings → Organisation shows which optional services are active. Nothing
 optional fails silently: an unconfigured service is shown as not configured,
 and work that would have used it is saved and labelled instead.
+
+## AI document reading
+
+AI reading is optional and needs an Anthropic API key (Console → API keys; an
+ordinary key starting `sk-ant-api`, not an admin key). One command sets it for
+this checkout and for the Vercel project:
+
+```bash
+pnpm ai:key
+```
+
+It asks for the key without echoing it (or reads it from standard input, so
+`pbpaste | pnpm ai:key` works), checks its shape, and makes two small calls to
+prove the key works with the configured model (`RCM_EXTRACTION_MODEL`, default
+`claude-opus-5-5`) before saving anything. It then writes `ANTHROPIC_API_KEY`
+to `.env` (file mode 600) and to Vercel's Production and Preview environments
+as a sensitive variable, through the Vercel CLI (`vercel login` first). The
+key is never printed: only its first characters and last four are shown.
+
+| Option | Effect |
+|---|---|
+| `--redeploy` | Redeploy production afterwards so it uses the key, then check `/api/health`. |
+| `--local-only` | Only `.env`; leave Vercel alone. |
+| `--no-preview` | Vercel Production only. |
+| `--project`, `--scope`, `--production-url`, `--env-file` | Another Vercel project, team, URL or env file (also `VERCEL_PROJECT`, `VERCEL_SCOPE`). |
+
+A Vercel variable reaches a deployment only when it is built, so without
+`--redeploy` the key takes effect on the next deploy. `/api/health` reports
+`ai: { configured, model }` (never the key). On a Docker or other host, set
+`ANTHROPIC_API_KEY` in its environment instead.
+
+To change or revoke the key, revoke it in the Anthropic Console and run
+`pnpm ai:key` again with the new one. Cost and accuracy measured on the
+synthetic corpus are in [docs/extraction-evaluation.md](extraction-evaluation.md).
 
 ## Deploy with Docker Compose
 

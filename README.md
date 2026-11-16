@@ -319,12 +319,16 @@ attempt stays in `processing` with the error shown and the submitter notified.
 `src/server/documents`. Two engines produce the same structure, with a page and
 position for every value:
 
-- **Claude** (when `ANTHROPIC_API_KEY` is set). The model transcribes amounts
-  as text exactly as printed and is told not to compute or correct. Our code
-  turns text into cents, then looks every amount up in the PDF's own text
-  layer. A value that is not on the page, or that disagrees with the
-  deterministic reader, has its confidence cut and is called out. Reads scans
-  and photos.
+- **Claude** (when `ANTHROPIC_API_KEY` is set; `pnpm ai:key` sets it). The
+  model transcribes amounts as text exactly as printed and is told not to
+  compute or correct. Our code turns text into cents, then looks every amount
+  up in the PDF's own text layer. A value that is not on the page, or that
+  disagrees with the deterministic reader, has its confidence cut and is called
+  out; a value the model itself was unsure of goes to review. Reads scans and
+  photos. A file is read in two structured requests side by side (summary and
+  waivers; schedule rows), because the schema for the whole answer is larger
+  than the API compiles in one request. Measured on the synthetic corpus in
+  [docs/extraction-evaluation.md](docs/extraction-evaluation.md).
 - **Text-layer reader** (always available, no network). Finds labels and the
   amounts beside them, and reads the schedule of values column by column,
   identifying columns by their headings and cross-checking the column letters
@@ -595,7 +599,7 @@ its documented API.
 
 ## What is and is not verified
 
-Status on 2026-11-16, `main`. The current phase is summarised in
+Status on 2026-11-17, `main`. The current phase is summarised in
 [docs/phase-3-report.md](docs/phase-3-report.md), the previous one in
 [docs/phase-2-report.md](docs/phase-2-report.md).
 
@@ -652,7 +656,8 @@ succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
   order, retried parts, missing parts refused, parts invisible to other members
   and organisations, expiry) (`tests/serverless.test.ts`).
 - The AI engine's parsing, grounding and failure handling, with a **stubbed**
-  client. The Procore client, OAuth renewal and push, including a create
+  client; `pnpm ai:key`'s key checks, `.env` editing and argument handling
+  (`tests/ai-key.test.ts`). The Procore client, OAuth renewal and push, including a create
   request whose answer is lost and a retry that finds the invoice instead of
   creating a second one, against a **local emulator** of the documented API.
 
@@ -688,7 +693,7 @@ were not available:**
 | Two-step, rejection and the schedule on the live site | Two-step verification and rejecting an application have not been run on the live deployment. The daily scheduled run has not been seen to fire; from this release `/api/health` records when it last ran (`scheduler.lastRunAt`). |
 | Production backups | The nightly workflow and its restore drill are in place; the drill's dump-and-restore commands and the restore check were run on this machine against a seeded database. GitHub Actions is locked on the owner's account for a billing issue, so neither workflow has run there. The production job also needs the owner's key and connection (operations, "Backups"); no production backup has been taken or restored. Free-plan Supabase backups cannot be downloaded. |
 | Uptime alerts | A GitHub Actions check every 15 minutes, failing when the site is not healthy, alerting by GitHub's email only; it cannot run until the account's Actions billing lock is cleared. No dedicated uptime service is configured. |
-| Claude reading real documents | Never called live (no API key). Accuracy on real pay applications is unmeasured. |
+| Claude reading real documents | Accuracy on real pay applications is unmeasured. The reader has been run live only on the synthetic corpus (2026-11-17, two runs of 65 files: no confidently wrong value, about $0.145 a file, median 17 s; [docs/extraction-evaluation.md](docs/extraction-evaluation.md#the-ai-reader-claude)) and on two synthetic files through the app on a local server. On the live site the key is set (Production and Preview, 2026-11-17); no upload there has been read with it yet, which needs a signed-in upload. |
 | Real subcontractor documents | None available. The evaluation harness is ready (`pnpm eval:extraction`, `eval/real/README.md`); scores on the synthetic corpus are a regression signal only. How to measure it, the synthetic results and a pilot protocol: [docs/extraction-evaluation.md](docs/extraction-evaluation.md). |
 | Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`) and tested against an emulator of it; the sandbox procedure is [docs/procore-validation.md](docs/procore-validation.md). The duplicate-invoice check assumes Procore lists a new invoice straight away (validation step 12). |
 | Outbound email (Resend) | Never sent. The request follows Resend's documentation (User-Agent, idempotency key, error names) and is tested against a stub only. |

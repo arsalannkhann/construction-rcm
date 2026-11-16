@@ -11,6 +11,7 @@ import { describeClaudeError, extractWithClaude, fromModelOutput, type ModelOutp
 import { extractDocument, extractionTimeoutMs } from '@/server/documents/extract';
 import { readPdfText, type PdfText } from '@/server/documents/pdf-text';
 import { renderPackage, renderTextlessPdf } from '@/server/samples/pdf';
+import { DEFAULT_ORG_SETTINGS } from '@/server/types';
 import { dollars as D, samplePackage } from './helpers/sample';
 
 const v = (text: string | null, page: number | null = 1, confidence: 'high' | 'medium' | 'low' = 'high') => ({ text, page, confidence });
@@ -211,6 +212,23 @@ describe('AI engine: turning a model answer into figures', () => {
     expect(r.notes.join(' ')).toMatch(/not a clean amount/);
   });
 
+  it('reads a dash printed in an amount cell as zero, as the text reader does', () => {
+    const r = fromModelOutput(
+      answer((o) => {
+        o.line_items[0]!.this_period = '-';
+        o.line_items[0]!.stored = '—';
+        o.line_items[1]!.stored = null;
+        o.pay_application!.amounts.net_change_orders = v('-');
+      }),
+      'claude-opus-5-5',
+      null,
+    );
+    expect(r.lines![0]).toMatchObject({ thisPeriod: 0, stored: 0 });
+    expect(r.lines![1]!.stored).toBeNull();
+    expect(r.payApp!.amounts.netChangeOrders).toMatchObject({ value: 0, confidence: 0.95 });
+    expect(r.notes.join(' ')).not.toMatch(/not a clean amount/);
+  });
+
   it('lets the wording decide the statutory form, whatever the model says', () => {
     const r = fromModelOutput(
       answer((o) => {
@@ -261,6 +279,77 @@ describe('AI engine: turning a model answer into figures', () => {
     ]);
     expect(r.conflicts).toBeUndefined();
     expect(r.unreadablePages).toBeUndefined();
+  });
+});
+
+describe('AI engine: doubt, scans and files with two applications', () => {
+  it('sends a value the model was only fairly sure of to a person', () => {
+    const r = fromModelOutput(
+      answer((o) => {
+        o.pay_application!.amounts.current_payment_due = v('$103,500.00', 1, 'medium');
+      }),
+      'claude-opus-5-5',
+      null,
+    );
+    expect(r.payApp!.amounts.currentPaymentDue.value).toBe(D(103500));
+    expect(r.payApp!.amounts.currentPaymentDue.confidence).toBeLessThan(DEFAULT_ORG_SETTINGS.lowConfidenceThreshold);
+  });
+
+  it('says when nothing could be cross-checked because the file is a scan or an image', () => {
+    const scan: PdfText = { ...pdf, hasTextLayer: false, pages: pdf.pages.map((p) => ({ ...p, lines: [], text: '', chars: 0 })) };
+    expect(fromModelOutput(answer(), 'claude-opus-5-5', scan).notes.join(' ')).toMatch(/scan with no machine-readable text/);
+    expect(fromModelOutput(answer(), 'claude-opus-5-5', null).notes.join(' ')).toMatch(/an image \(a scan or a photo\)/);
+    // A text PDF needs no such note.
+    expect(fromModelOutput(answer(), 'claude-opus-5-5', pdf).notes.join(' ')).not.toMatch(/scan|image/);
+  });
+
+  it('does not doubt a value only because it sits on a scanned page of a text PDF', () => {
+    const mixed: PdfText = { ...pdf, pages: pdf.pages.map((p) => (p.page === 3 ? { ...p, lines: [], text: '', chars: 0, images: [{ x: 0, y: 0, w: p.width, h: p.height }] } : p)) };
+    const r = fromModelOutput(answer(), 'claude-opus-5-5', mixed);
+    expect(r.waivers![0]!.amount).toMatchObject({ value: D(103500), confidence: 0.95 });
+    expect(r.notes.join(' ')).toMatch(/Page 3 is a scanned image/);
+    expect(r.notes.join(' ')).not.toMatch(/does not appear anywhere/);
+    // On a page that does have text, a figure that is not there is still doubted.
+    const wrong = fromModelOutput(
+      answer((o) => {
+        o.pay_application!.amounts.current_payment_due = v('$130,500.00');
+      }),
+      'claude-opus-5-5',
+      mixed,
+    );
+    expect(wrong.payApp!.amounts.currentPaymentDue.confidence).toBeLessThan(0.5);
+  });
+
+  it('reads only the first of two pay applications, and raises the second even without a text layer', () => {
+    const r = fromModelOutput(
+      answer((o) => {
+        o.segments = [
+          { type: 'pay_application', page_start: 1, page_end: 1, confidence: 'high' },
+          { type: 'continuation_sheet', page_start: 2, page_end: 2, confidence: 'high' },
+          { type: 'pay_application', page_start: 3, page_end: 3, confidence: 'high' },
+          { type: 'continuation_sheet', page_start: 4, page_end: 4, confidence: 'high' },
+        ];
+        o.line_items = [...o.line_items, ...o.line_items.map((l) => ({ ...l, page: 4 }))];
+        o.lien_waivers = [];
+      }),
+      'claude-opus-5-5',
+      null,
+    );
+    expect(r.lines).toHaveLength(3);
+    expect(r.lines!.every((l) => l.page === 2)).toBe(true);
+    expect(r.conflicts).toEqual([
+      expect.objectContaining({ kind: 'second_pay_application', reported: expect.objectContaining({ value: 2, page: 1 }), others: [expect.objectContaining({ page: 3 })] }),
+    ]);
+    expect(r.notes.join(' ')).toMatch(/holds 2 pay applications/);
+  });
+
+  it('asks for transcription only, with exceptions that exclude the form’s own wording', async () => {
+    const { client, calls } = fakeClient({ json: { ...answer(), line_items: undefined, line_totals: undefined } });
+    await extractWithClaude(file(), pdf, { apiKey: 'test', model: 'claude-opus-5-5', client }).catch(() => {});
+    const system = String(calls[0]?.system);
+    expect(system).toMatch(/standard printed wording is not an exception/);
+    expect(system).toMatch(/report the first one/);
+    expect(system).toMatch(/never refer to them/);
   });
 });
 
