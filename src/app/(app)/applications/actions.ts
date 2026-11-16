@@ -4,7 +4,7 @@ import { getDb } from '@/db';
 import { run, type ActionResult } from '@/lib/action';
 import { requireCtx } from '@/server/auth/session';
 import { createBatchExport, createExport, type ExportKind } from '@/server/services/exports';
-import { removeDocument, retryProcessing } from '@/server/services/intake';
+import { removeDocument, rereadPackage, retryProcessing } from '@/server/services/intake';
 import * as review from '@/server/services/review';
 import type { Tri, WaiverType } from '@/server/types';
 
@@ -73,6 +73,7 @@ export const sendMessageAction = async (appId: string, input: { to: string; subj
 export const addCommentAction = async (appId: string, body: string) => act((db, ctx) => done(review.addComment(db, ctx, appId, body)));
 
 export const retryProcessingAction = async (appId: string) => act((db, ctx) => done(retryProcessing(db, ctx, appId)));
+export const rereadPackageAction = async (appId: string) => act((db, ctx) => done(rereadPackage(db, ctx, appId)));
 export const removeDocumentAction = async (documentId: string) => act((db, ctx) => done(removeDocument(db, ctx, documentId)));
 
 export const exportAction = async (appId: string, kind: ExportKind) => act((db, ctx) => createExport(db, ctx, appId, kind));

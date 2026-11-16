@@ -464,6 +464,20 @@ export function reconcile(input: ReconInput): ReconOutput {
         refs: { documentId: doc.id, page: 1, tab: 'documents' },
       });
     }
+    if (doc.status === 'processed' && doc.statusDetail) {
+      // The AI read failed and the text-layer reader stood in (src/server/documents/extract.ts).
+      checks.push({
+        code: 'doc.read_without_ai',
+        subjectKey: doc.id,
+        category: 'extraction',
+        severity: 'warning',
+        outcome: 'fail',
+        title: `“${doc.filename}” was read by the backup reader`,
+        detail: `${doc.statusDetail} The backup reader takes figures from the PDF's own text, so it does not see handwriting, stamps or anything else drawn on the page.`,
+        action: 'Check the figures against the document, or read the package again from the document viewer.',
+        refs: { documentId: doc.id, page: 1, tab: 'documents' },
+      });
+    }
     if (doc.duplicateOf) {
       const where =
         doc.duplicateOf.applicationNumber !== null

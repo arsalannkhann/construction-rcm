@@ -2,7 +2,8 @@
  * Chooses how to read a file and reports honestly what happened.
  *
  *   AI configured           → Claude reads it; the text layer (if any) grounds the answer.
- *   AI call fails           → fall back to the text layer if there is one, and say so.
+ *   AI call fails, or runs  → fall back to the text layer if there is one, and say so.
+ *   out of time
  *   No AI, has text layer   → deterministic text-layer reader.
  *   No AI, no text layer    → "unreadable": a person keys the values.
  */
@@ -28,7 +29,24 @@ export type ExtractOptions = {
   ai?: AiConfig;
   /** Injected in tests. */
   claudeClient?: ClaudeDeps['client'];
+  /** Epoch ms by which the read must be over (the job's time limit). The AI read is stopped then. */
+  readBy?: number;
+  /** Longest one AI read may take, in ms. Default: RCM_EXTRACTION_TIMEOUT_SECONDS, else 240 seconds. */
+  timeoutMs?: number;
 };
+
+const DEFAULT_TIMEOUT_MS = 240_000;
+
+/** The longest one AI read may take, from RCM_EXTRACTION_TIMEOUT_SECONDS. */
+export function extractionTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  const seconds = Number(env.RCM_EXTRACTION_TIMEOUT_SECONDS);
+  return Number.isFinite(seconds) && seconds >= 10 ? Math.round(seconds * 1000) : DEFAULT_TIMEOUT_MS;
+}
+
+function asSeconds(ms: number): string {
+  const n = Math.max(1, Math.round(ms / 1000));
+  return `${n} second${n === 1 ? '' : 's'}`;
+}
 
 export async function extractDocument(
   file: { filename: string; mimeType: string; bytes: Uint8Array },
@@ -52,12 +70,24 @@ export async function extractDocument(
 
   let aiFailure: string | null = null;
   if (ai.configured && claudeSupports(file.mimeType)) {
-    try {
-      const result = await extractWithClaude(file, pdf, { apiKey: ai.apiKey, model: ai.model, client: options.claudeClient });
-      return done({ status: 'processed', detail: null, result, engine: result.engine, model: result.model ?? ai.model, ...meta });
-    } catch (err) {
-      aiFailure = describeClaudeError(err);
-      console.error(`[extract] AI extraction failed for ${file.filename}: ${aiFailure}`);
+    // However long the model takes, the read ends by the time limit: a cut-off server would lose it all.
+    const cap = options.timeoutMs ?? extractionTimeoutMs();
+    const left = options.readBy !== undefined ? options.readBy - Date.now() : Infinity;
+    const allowed = Math.min(cap, left);
+    if (allowed <= 0) {
+      aiFailure = 'there was no time left for AI reading in this run';
+    } else {
+      const timer = new AbortController();
+      const stop = setTimeout(() => timer.abort(), allowed);
+      try {
+        const result = await extractWithClaude(file, pdf, { apiKey: ai.apiKey, model: ai.model, client: options.claudeClient, signal: timer.signal });
+        return done({ status: 'processed', detail: null, result, engine: result.engine, model: result.model ?? ai.model, ...meta });
+      } catch (err) {
+        aiFailure = timer.signal.aborted ? `the AI reading did not finish within the ${asSeconds(allowed)} available and was stopped` : describeClaudeError(err);
+        console.error(`[extract] AI extraction failed for ${file.filename}: ${aiFailure}`);
+      } finally {
+        clearTimeout(stop);
+      }
     }
   }
 

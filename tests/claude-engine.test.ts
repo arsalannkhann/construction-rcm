@@ -7,8 +7,8 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { extractWithClaude, fromModelOutput, type ModelOutput } from '@/server/documents/engine-claude';
-import { extractDocument } from '@/server/documents/extract';
+import { describeClaudeError, extractWithClaude, fromModelOutput, type ModelOutput } from '@/server/documents/engine-claude';
+import { extractDocument, extractionTimeoutMs } from '@/server/documents/extract';
 import { readPdfText, type PdfText } from '@/server/documents/pdf-text';
 import { renderPackage, renderTextlessPdf } from '@/server/samples/pdf';
 import { dollars as D, samplePackage } from './helpers/sample';
@@ -108,6 +108,30 @@ function fakeClient(reply: { json?: unknown; stop_reason?: string; throws?: unkn
     },
   };
   return { client: client as unknown as Pick<Anthropic, 'beta'>, calls };
+}
+
+/** A stand-in for a model call that never finishes: it ends only when the caller stops it, as the SDK does. */
+function hangingClient() {
+  let calls = 0;
+  const client = {
+    beta: {
+      messages: {
+        stream: (_params: unknown, options?: { signal?: AbortSignal }) => {
+          calls++;
+          return {
+            finalMessage: () =>
+              new Promise((_resolve, reject) => {
+                const signal = options?.signal;
+                if (!signal) return; // never settles: the test would time out
+                if (signal.aborted) reject(new Anthropic.APIUserAbortError());
+                signal.addEventListener('abort', () => reject(new Anthropic.APIUserAbortError()));
+              }),
+          };
+        },
+      },
+    },
+  };
+  return { client: client as unknown as Pick<Anthropic, 'beta'>, calls: () => calls };
 }
 
 let bytes: Uint8Array;
@@ -295,6 +319,44 @@ describe('choosing how to read a document', () => {
     const out = await extractDocument(scan, { ai, claudeClient: fakeClient({ json: answer() }).client });
     expect(out.status).toBe('processed');
     expect(out.result!.payApp!.amounts.currentPaymentDue).toMatchObject({ value: D(103500), page: 1 });
+  });
+
+  it('stops an AI read that runs past its time limit and falls back to the text reader, saying why', async () => {
+    const out = await extractDocument(file(), { ai, claudeClient: hangingClient().client, timeoutMs: 50 });
+    expect(out).toMatchObject({ status: 'processed', engine: 'text-layer' });
+    expect(out.detail).toMatch(/AI extraction failed: the AI reading did not finish within the 1 second available and was stopped/);
+    expect(out.result!.payApp!.amounts.currentPaymentDue.value).toBe(D(103500));
+  });
+
+  it('marks a scan as failed, with the reason, when its AI read runs out of time', async () => {
+    const scan = { filename: 'scan.pdf', mimeType: 'application/pdf', bytes: await renderTextlessPdf() };
+    const out = await extractDocument(scan, { ai, claudeClient: hangingClient().client, timeoutMs: 50 });
+    expect(out).toMatchObject({ status: 'failed', result: null });
+    expect(out.detail).toMatch(/no machine-readable text, and AI extraction failed: the AI reading did not finish/);
+  });
+
+  it('does not start an AI read when the run has no time left for one', async () => {
+    const hanging = hangingClient();
+    const out = await extractDocument(file(), { ai, claudeClient: hanging.client, readBy: Date.now() - 1 });
+    expect(hanging.calls()).toBe(0);
+    expect(out).toMatchObject({ status: 'processed', engine: 'text-layer' });
+    expect(out.detail).toMatch(/no time left for AI reading/);
+  });
+
+  it('takes the per-read time limit from RCM_EXTRACTION_TIMEOUT_SECONDS, ignoring nonsense', () => {
+    expect(extractionTimeoutMs({})).toBe(240_000);
+    expect(extractionTimeoutMs({ RCM_EXTRACTION_TIMEOUT_SECONDS: '90' })).toBe(90_000);
+    expect(extractionTimeoutMs({ RCM_EXTRACTION_TIMEOUT_SECONDS: '2' })).toBe(240_000);
+    expect(extractionTimeoutMs({ RCM_EXTRACTION_TIMEOUT_SECONDS: 'soon' })).toBe(240_000);
+  });
+
+  it('names the provider failures a reviewer may see', () => {
+    const headers = new Headers();
+    expect(describeClaudeError(new Anthropic.APIUserAbortError())).toMatch(/stopped before it finished/);
+    expect(describeClaudeError(new Anthropic.APIConnectionTimeoutError())).toMatch(/did not respond in time/);
+    expect(describeClaudeError(new Anthropic.InternalServerError(529, { type: 'error', error: { type: 'overloaded_error' } }, 'Overloaded', headers))).toMatch(/temporary problem \(HTTP 529\)/);
+    expect(describeClaudeError(new Anthropic.ContentTooLargeError(413, undefined, 'too large', headers))).toMatch(/larger than the AI service accepts/);
+    expect(describeClaudeError(new Anthropic.RateLimitError(429, undefined, 'slow down', headers))).toMatch(/rate-limiting/);
   });
 
   it('without AI, reads text PDFs and is plain about scans', async () => {

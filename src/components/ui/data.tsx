@@ -8,7 +8,7 @@ import { APP_STATUS_LABEL } from '@/server/types';
 
 export function Page({ children, className, width = 'default' }: { children: React.ReactNode; className?: string; width?: 'default' | 'narrow' | 'wide' }) {
   const max = { default: 'max-w-[1180px]', narrow: 'max-w-[760px]', wide: 'max-w-[1400px]' }[width];
-  return <div className={cn('mx-auto w-full px-8 pb-16 pt-7', max, className)}>{children}</div>;
+  return <div className={cn('mx-auto w-full px-4 pb-16 pt-7 sm:px-8', max, className)}>{children}</div>;
 }
 
 export function PageHeader({ title, description, actions, back }: { title: React.ReactNode; description?: React.ReactNode; actions?: React.ReactNode; back?: React.ReactNode }) {
@@ -59,8 +59,13 @@ export function EmptyState({ icon, title, description, action, className }: { ic
 
 // ── Tables ──────────────────────────────────────────────────────────────────
 
+/** A table that scrolls sideways when it is wider than its panel, rather than being cut off. */
 export function Table({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <table className={cn('w-full border-collapse text-left text-[13px]', className)}>{children}</table>;
+  return (
+    <div className="overflow-x-auto">
+      <table className={cn('w-full border-collapse text-left text-[13px]', className)}>{children}</table>
+    </div>
+  );
 }
 export function Th({ children, className, align }: { children?: React.ReactNode; className?: string; align?: 'right' | 'left' | 'center' }) {
   return <th className={cn('whitespace-nowrap border-b border-line px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-ink-3', align === 'right' && 'text-right', align === 'center' && 'text-center', className)}>{children}</th>;

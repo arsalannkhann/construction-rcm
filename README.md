@@ -514,6 +514,7 @@ Copy `.env.example` to `.env.local`. Everything is optional in development.
 | `RCM_CLIENT_IP_HEADER`, `RCM_TRUSTED_PROXY_HOPS` | Where the client address comes from, for the sign-in limits (see `docs/authentication.md`) | The address one proxy appended to `X-Forwarded-For` |
 | `RCM_STORAGE` | `database` or `disk` for documents | `database` with `DATABASE_URL`, otherwise `disk` |
 | `RCM_EXTRACTION_FALLBACKS` | `off` disables the API's server-side refusal fallback for extraction requests | Fallback on |
+| `RCM_EXTRACTION_TIMEOUT_SECONDS` | Longest one AI read of a document may take | 240 seconds, and never past the job's time limit on serverless hosting |
 
 ## Deployment
 

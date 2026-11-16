@@ -216,7 +216,7 @@ function FindingCard({ finding: f }: { finding: Finding }) {
         <p className="text-[13px] leading-5 text-ink-2">{f.detail}</p>
 
         {hasNumbers ? (
-          <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-md border border-line bg-line text-xs">
+          <dl className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-line bg-line text-xs min-[420px]:grid-cols-3">
             <Cell label="Expected">
               <Money cents={f.data!.expected} />
             </Cell>

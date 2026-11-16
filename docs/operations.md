@@ -44,6 +44,7 @@ run a pilot on it.
 | `RCM_JOB_RUNNER` | No | `poll` (a long-lived process runs the queue) or `request` (serverless: work runs after the request that queued it). Default: `request` on Vercel, `poll` elsewhere. Leave it unset. |
 | `RCM_STORAGE` | No | `database` (default with `DATABASE_URL`) or `disk`. Leave it unset. |
 | `ANTHROPIC_API_KEY`, `RCM_EXTRACTION_MODEL` | No | AI document reading. Without it, only PDFs with a text layer are read; scans are keyed by hand. |
+| `RCM_EXTRACTION_TIMEOUT_SECONDS` | No | Longest one AI read may take (default 240). A read that runs over is stopped; the document is read by the text-layer reader instead, or marked not read, and reviewers are told which. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | No | Outbound email. Without them, messages are saved as drafts and clearly marked "not sent". |
 | `INBOUND_EMAIL_SECRET` | No | Opens the email-intake webhook. Without it every intake request is refused. |
 | `PROCORE_CLIENT_ID`, `PROCORE_CLIENT_SECRET`, `PROCORE_ENV` | No | Procore connection. See `docs/procore-api-notes.md`. |

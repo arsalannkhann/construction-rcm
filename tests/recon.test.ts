@@ -414,6 +414,16 @@ describe('reconcile: package completeness', () => {
     expect(f.detail).not.toContain('Total retainage');
   });
 
+  it('warns, without blocking, when the AI read failed and the backup reader stood in', () => {
+    const input = cleanInput();
+    input.documents.push({ id: 'd2', filename: 'waiver.pdf', status: 'processed', statusDetail: 'AI extraction failed: the AI service could not be reached. Read with the text-layer parser instead.', duplicateOf: null, segments: [] });
+    const f = find(reconcile(input).checks, 'doc.read_without_ai')!;
+    expect(f).toMatchObject({ subjectKey: 'd2', severity: 'warning', outcome: 'fail', refs: { documentId: 'd2', tab: 'documents' } });
+    expect(f.detail).toContain('could not be reached');
+    // A document read normally carries no detail, and gets no warning.
+    expect(find(reconcile(cleanInput()).checks, 'doc.read_without_ai')).toBeUndefined();
+  });
+
   it('blocks on a document that could not be read', () => {
     const input = cleanInput();
     input.documents.push({ id: 'd2', filename: 'scan.pdf', status: 'unreadable', statusDetail: null, duplicateOf: null, segments: [] });

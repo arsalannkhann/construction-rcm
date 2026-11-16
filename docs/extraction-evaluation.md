@@ -242,6 +242,36 @@ by design (they are customer data). Until a pilot has produced them, the only
 honest statement is that the reader has been tested on layouts we generated
 ourselves.
 
+### What reviewers changed (System status)
+
+Settings → System status shows, for applications approved or rejected in the
+last 90 days, how many values the reader produced and how many a reviewer
+corrected or keyed by hand: summary figures (a misread figure is counted apart
+from one keyed where the reader left a blank), schedule lines, lien waivers,
+and documents that were not read or were read by the backup reader. It is
+grouped by reader (`src/server/services/reading-quality.ts`).
+
+It is **not an accuracy rate**. A misread value that no reviewer noticed counts
+as read correctly, and an *adjustment* (the reviewer's decision about what to
+approve) is deliberately not counted as a reading error. Use it to see where
+reviewers spend effort and to pick packages for double keying; quote accuracy
+only from step 3 of the pilot protocol below.
+
+### When the AI read fails
+
+- Each AI read has a time limit (`RCM_EXTRACTION_TIMEOUT_SECONDS`, default
+  240). On serverless hosting it also ends early enough for the job to save its
+  results before the platform stops the server (`src/server/jobs.ts`,
+  `REQUEST_RUN_LIMIT_MS`), instead of being cut off and retried from scratch.
+- A read that fails or runs over falls back to the text-layer reader when the
+  PDF has text. The application still reaches review, with a non-blocking
+  finding (`doc.read_without_ai`) and a notice on the document saying which
+  reader was used and why. A scan with no text is marked not read, which blocks
+  approval (`doc.unreadable`) until a person keys its values.
+- From the document viewer a reviewer can **Read again**: the whole package is
+  read again and their corrections are kept, as on any re-read. The request is
+  recorded in the activity log.
+
 ## 11. Pilot protocol
 
 A proposal; the numbers are defaults to agree with the pilot customer.

@@ -16,7 +16,7 @@ const ITEMS = [
 export function SettingsNav() {
   const pathname = usePathname();
   return (
-    <nav className="flex flex-col gap-0.5" aria-label="Settings">
+    <nav className="-mx-1 flex gap-0.5 overflow-x-auto px-1 pb-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0 lg:pb-0" aria-label="Settings">
       {ITEMS.map((item) => {
         const on = pathname === item.href || pathname.startsWith(`${item.href}/`);
         return (
@@ -25,7 +25,7 @@ export function SettingsNav() {
             href={item.href}
             aria-current={on ? 'page' : undefined}
             className={cn(
-              'focus-ring flex h-8 items-center rounded-md px-2 text-[13px] transition-colors',
+              'focus-ring flex h-8 shrink-0 items-center whitespace-nowrap rounded-md px-2 text-[13px] transition-colors',
               on ? 'bg-ink/[0.07] font-medium text-ink' : 'text-ink-2 hover:bg-ink/[0.045] hover:text-ink',
             )}
           >

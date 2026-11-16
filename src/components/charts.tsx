@@ -168,27 +168,29 @@ export function BillingByPeriod({ data }: { data: MonthlyPoint[] }) {
           </div>
         </div>
       </div>
-      <table className="sr-only">
-        <caption>Requested and approved billing by period</caption>
-        <thead>
-          <tr>
-            <th>Period</th>
-            <th>Requested</th>
-            <th>Approved</th>
-            <th>Applications</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((d) => (
-            <tr key={d.month}>
-              <td>{formatMonth(d.month)}</td>
-              <td>{formatMoney(d.requested)}</td>
-              <td>{formatMoney(d.approved)}</td>
-              <td>{d.applications}</td>
+      <div className="sr-only">
+        <table>
+          <caption>Requested and approved billing by period</caption>
+          <thead>
+            <tr>
+              <th>Period</th>
+              <th>Requested</th>
+              <th>Approved</th>
+              <th>Applications</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data.map((d) => (
+              <tr key={d.month}>
+                <td>{formatMonth(d.month)}</td>
+                <td>{formatMoney(d.requested)}</td>
+                <td>{formatMoney(d.approved)}</td>
+                <td>{d.applications}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {node}
     </figure>
   );
@@ -278,25 +280,27 @@ export function FindingsByCategory({ data }: { data: CategoryCount[] }) {
           </li>
         ))}
       </ul>
-      <table className="sr-only">
-        <caption>Open findings by kind</caption>
-        <thead>
-          <tr>
-            <th>Kind</th>
-            <th>Blocking</th>
-            <th>Warning</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((d) => (
-            <tr key={d.label}>
-              <td>{d.label}</td>
-              <td>{d.blocking}</td>
-              <td>{d.warnings}</td>
+      <div className="sr-only">
+        <table>
+          <caption>Open findings by kind</caption>
+          <thead>
+            <tr>
+              <th>Kind</th>
+              <th>Blocking</th>
+              <th>Warning</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data.map((d) => (
+              <tr key={d.label}>
+                <td>{d.label}</td>
+                <td>{d.blocking}</td>
+                <td>{d.warnings}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {node}
     </figure>
   );
@@ -384,25 +388,27 @@ export function TurnaroundTrend({ data }: { data: TrendPoint[] }) {
           </span>
         ))}
       </div>
-      <table className="sr-only">
-        <caption>Average days from receipt to decision, by month decided</caption>
-        <thead>
-          <tr>
-            <th>Month</th>
-            <th>Days</th>
-            <th>Decided</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((d) => (
-            <tr key={d.month}>
-              <td>{formatMonth(d.month)}</td>
-              <td>{d.value === null ? 'None' : d.value.toFixed(1)}</td>
-              <td>{d.sample}</td>
+      <div className="sr-only">
+        <table>
+          <caption>Average days from receipt to decision, by month decided</caption>
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Days</th>
+              <th>Decided</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data.map((d) => (
+              <tr key={d.month}>
+                <td>{formatMonth(d.month)}</td>
+                <td>{d.value === null ? 'None' : d.value.toFixed(1)}</td>
+                <td>{d.sample}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {node}
     </figure>
   );

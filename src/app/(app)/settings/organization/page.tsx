@@ -106,9 +106,9 @@ export default async function OrganizationSettingsPage() {
           <PanelHeader title="Deployment status" description="What this installation is set up to do. These are set on the server by whoever runs it, not from this page." />
           <ul>
             {checks.map((c) => (
-              <li key={c.name} className="flex items-start gap-4 border-b border-line px-4 py-3 last:border-b-0">
-                <div className="w-44 shrink-0 text-[13px] font-medium text-ink">{c.name}</div>
-                <p className="min-w-0 flex-1 text-[13px] text-ink-2">{c.detail}</p>
+              <li key={c.name} className="flex flex-wrap items-start gap-x-4 gap-y-1 border-b border-line px-4 py-3 last:border-b-0 sm:flex-nowrap">
+                <div className="min-w-0 flex-1 text-[13px] font-medium text-ink sm:w-44 sm:flex-none">{c.name}</div>
+                <p className="order-last w-full text-[13px] text-ink-2 sm:order-none sm:w-auto sm:min-w-0 sm:flex-1">{c.detail}</p>
                 <Badge tone={c.configured ? 'pass' : 'neutral'}>{c.status}</Badge>
               </li>
             ))}

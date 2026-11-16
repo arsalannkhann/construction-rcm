@@ -1,13 +1,13 @@
 'use client';
 
-import { Download, FileWarning, Minus, Plus, Trash2 } from 'lucide-react';
+import { Download, FileWarning, Minus, Plus, RotateCw, Trash2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/data';
 import { Dialog, Tooltip } from '@/components/ui/overlay';
 import { useAction } from '@/lib/use-action';
 import { cn } from '@/lib/utils';
-import { removeDocumentAction } from '../actions';
+import { removeDocumentAction, rereadPackageAction } from '../actions';
 import type { BBox, DocumentSegment } from '@/server/types';
 import { DOC_TYPE_LABEL } from '@/server/types';
 
@@ -58,12 +58,15 @@ export function DocumentViewer({
   target,
   onNavigate,
   canRemove = false,
+  rereadFor = null,
 }: {
   documents: ViewerDocument[];
   target: ViewerTarget | null;
   onNavigate: (t: Omit<ViewerTarget, 'nonce'>) => void;
   /** The reviewer may take a file out of the package (an open application, more than one file). */
   canRemove?: boolean;
+  /** The open application whose package the reviewer may ask to be read again, when the AI did not read a document. */
+  rereadFor?: string | null;
 }) {
   const [activeId, setActiveId] = useState(target?.documentId ?? documents[0]?.id ?? null);
   const [zoom, setZoom] = useState(1);
@@ -165,8 +168,18 @@ export function DocumentViewer({
       ) : null}
 
       {active.status === 'unreadable' || active.status === 'failed' ? (
-        <div className="shrink-0 border-b border-block-line bg-block-soft px-3 py-2 text-xs text-block">
-          <span className="font-medium">Not read automatically.</span> {active.statusDetail ?? 'Key the values from this document by hand.'}
+        <div className="flex shrink-0 items-start gap-3 border-b border-block-line bg-block-soft px-3 py-2 text-xs text-block">
+          <p className="min-w-0 flex-1">
+            <span className="font-medium">Not read automatically.</span> {active.statusDetail ?? 'Key the values from this document by hand.'}
+          </p>
+          {rereadFor && active.status === 'failed' ? <ReadAgain appId={rereadFor} /> : null}
+        </div>
+      ) : active.status === 'processed' && active.statusDetail ? (
+        <div className="flex shrink-0 items-start gap-3 border-b border-warn-line bg-warn-soft px-3 py-2 text-xs text-ink">
+          <p className="min-w-0 flex-1">
+            <span className="font-medium">Read by the backup reader.</span> {active.statusDetail} Check its figures against the page.
+          </p>
+          {rereadFor ? <ReadAgain appId={rereadFor} /> : null}
         </div>
       ) : null}
 
@@ -341,5 +354,18 @@ function PdfPage({ pdf, number, width, fallbackRatio, scroller, target, total }:
       </span>
       <style>{`@keyframes viewer-mark { 0% { box-shadow: 0 0 0 10px rgb(31 79 209 / 0.28); } 100% { box-shadow: 0 0 0 0 rgb(31 79 209 / 0); } }`}</style>
     </div>
+  );
+}
+
+/** Asks for the whole package to be read again; corrections already made are kept. */
+function ReadAgain({ appId }: { appId: string }) {
+  const { pending, run } = useAction();
+  return (
+    <Tooltip content="Read the package again. Corrections already made are kept.">
+      <Button size="sm" loading={pending} onClick={() => run(() => rereadPackageAction(appId), { success: 'The package is being read again.' })}>
+        <RotateCw className="size-3.5" />
+        Read again
+      </Button>
+    </Tooltip>
   );
 }

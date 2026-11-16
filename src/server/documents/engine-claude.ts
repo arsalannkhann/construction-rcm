@@ -419,6 +419,8 @@ export type ClaudeDeps = {
   model: string;
   /** Injected in tests. */
   client?: Pick<Anthropic, 'beta'>;
+  /** Stops the read (and any retries) when aborted. */
+  signal?: AbortSignal;
 };
 
 export async function extractWithClaude(
@@ -454,7 +456,7 @@ export async function extractWithClaude(
           content: [document, { type: 'text', text: `File name: ${file.filename}\n\nRead this file and report what is printed on it.` }],
         },
       ],
-    })
+    }, { signal: deps.signal })
     .finalMessage();
 
   if (message.stop_reason === 'refusal') throw new ExtractionRefused(message.stop_details?.category ?? null);
@@ -470,10 +472,15 @@ export async function extractWithClaude(
 /** A short, user-presentable reason for an extraction failure. Never includes secrets. */
 export function describeClaudeError(err: unknown): string {
   if (err instanceof ExtractionRefused) return 'the AI model declined to read this document';
+  // Before APIError, which both of these extend.
+  if (err instanceof Anthropic.APIUserAbortError) return 'the AI reading was stopped before it finished';
+  if (err instanceof Anthropic.APIConnectionTimeoutError) return 'the AI service did not respond in time';
   if (err instanceof Anthropic.AuthenticationError) return 'the AI service rejected the configured API key';
   if (err instanceof Anthropic.PermissionDeniedError) return 'the configured API key is not permitted to use this model';
   if (err instanceof Anthropic.NotFoundError) return 'the configured extraction model was not found';
   if (err instanceof Anthropic.RateLimitError) return 'the AI service is rate-limiting requests';
+  if (err instanceof Anthropic.InternalServerError) return `the AI service had a temporary problem (HTTP ${err.status ?? 'unknown'})`;
+  if (err instanceof Anthropic.ContentTooLargeError) return 'the file is larger than the AI service accepts in one request';
   if (err instanceof Anthropic.BadRequestError) return 'the AI service rejected the request (the file may be too large or malformed)';
   if (err instanceof Anthropic.APIConnectionError) return 'the AI service could not be reached';
   if (err instanceof Anthropic.APIError) return `the AI service returned an error (HTTP ${err.status ?? 'unknown'})`;

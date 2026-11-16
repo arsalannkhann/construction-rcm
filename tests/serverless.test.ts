@@ -11,7 +11,7 @@ import { documents, jobs, uploadParts } from '@/db/schema';
 import { PermissionError, UserError } from '@/server/auth/permissions';
 import { jobRunnerMode } from '@/server/config';
 import { bearerMatches } from '@/server/http';
-import { drain, enqueueJob, registerJobHandler, runnerStatus } from '@/server/jobs';
+import { drain, enqueueJob, registerJobHandler, REQUEST_BUDGET_MS, REQUEST_RUN_LIMIT_MS, requestLimits, runnerStatus } from '@/server/jobs';
 import { createApplication } from '@/server/services/intake';
 import { discardStaged, filesFromForm, MAX_PARTS, PART_TTL_MS, parseStaged, readStaged, stagePart, UPLOAD_PART_BYTES } from '@/server/services/uploads';
 import { addMember, createWorld, type World } from './helpers/world';
@@ -24,6 +24,26 @@ describe('how the queue is run', () => {
     expect(jobRunnerMode({ RCM_JOB_RUNNER: 'request' })).toBe('request');
     expect(jobRunnerMode({ RCM_JOB_RUNNER: 'sometimes' })).toBe('poll');
     expect(runnerStatus().mode).toBe('poll');
+  });
+
+  it('tells each job when it must be done, so slow work stops before the platform stops the server', async () => {
+    const db = await getDb();
+    const w = await createWorld();
+    const seen: Array<number | undefined> = [];
+    registerJobHandler('test_finish_by', async (_db, _org, _payload, run) => {
+      seen.push(run.finishBy);
+    });
+    const limits = requestLimits(1_000_000);
+    expect(limits).toEqual({ deadline: 1_000_000 + REQUEST_BUDGET_MS, finishBy: 1_000_000 + REQUEST_RUN_LIMIT_MS });
+    // A job taken at the last moment of the budget still has time before the 300-second function limit.
+    expect(REQUEST_RUN_LIMIT_MS - REQUEST_BUDGET_MS).toBeGreaterThanOrEqual(90_000);
+    expect(REQUEST_RUN_LIMIT_MS).toBeLessThan(300_000);
+
+    await enqueueJob(db, w.orgId, 'test_finish_by', {});
+    await drain(db, { deadline: Date.now() + 60_000, finishBy: 123 });
+    await enqueueJob(db, w.orgId, 'test_finish_by', {});
+    await drain(db);
+    expect(seen).toEqual([123, undefined]);
   });
 
   it('stops taking new jobs once its time budget is spent, and the next drain finishes them', async () => {

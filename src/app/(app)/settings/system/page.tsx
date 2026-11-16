@@ -6,6 +6,7 @@ import { can } from '@/server/auth/permissions';
 import { requireCtx } from '@/server/auth/session';
 import { queueHealth } from '@/server/jobs';
 import { listInboundMessages } from '@/server/services/inbound';
+import { READING_WINDOW_DAYS, readerLabel, readingQuality, type ReadingTally } from '@/server/services/reading-quality';
 import { deploymentHealth, listFailedJobs } from '@/server/services/system';
 import { RetryJobButton } from './retry-button';
 
@@ -31,6 +32,7 @@ export default async function SystemStatusPage() {
   const ours = await queueHealth(db, ctx.orgId);
   const failed = await listFailedJobs(db, ctx);
   const inbound = await listInboundMessages(db, ctx, 25);
+  const reading = await readingQuality(db, ctx);
   const canRetry = can(ctx.role, 'application:upload');
 
   const rows: Array<{ name: string; tone: 'pass' | 'warn' | 'block' | 'neutral'; status: string; detail: string }> = [
@@ -92,9 +94,10 @@ export default async function SystemStatusPage() {
           <PanelHeader title="Health" description={<>Also available to a monitoring service, without sign-in and without any organisation’s data, at <code className="text-ink">/api/health</code>.</>} />
           <ul>
             {rows.map((r) => (
-              <li key={r.name} className="flex items-start gap-4 border-b border-line px-4 py-3 last:border-b-0">
-                <div className="w-44 shrink-0 text-[13px] font-medium text-ink">{r.name}</div>
-                <p className="min-w-0 flex-1 text-[13px] text-ink-2">{r.detail}</p>
+              <li key={r.name} className="flex flex-wrap items-start gap-x-4 gap-y-1 border-b border-line px-4 py-3 last:border-b-0 sm:flex-nowrap">
+                <div className="min-w-0 flex-1 text-[13px] font-medium text-ink sm:w-44 sm:flex-none">{r.name}</div>
+                {/* On a phone the explanation goes below the name and status. */}
+                <p className="order-last w-full text-[13px] text-ink-2 sm:order-none sm:w-auto sm:min-w-0 sm:flex-1">{r.detail}</p>
                 <Badge tone={r.tone}>{r.status}</Badge>
               </li>
             ))}
@@ -134,6 +137,56 @@ export default async function SystemStatusPage() {
                     <Td className="whitespace-nowrap text-xs text-ink-2">{formatDateTime(j.finishedAt)}</Td>
                     <Td align="right" className="pr-4">
                       {canRetry && j.retryable ? <RetryJobButton jobId={j.id} /> : null}
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+        </Panel>
+
+        <Panel className="overflow-hidden" id="reading">
+          <PanelHeader
+            title="What reviewers changed after the reader"
+            description={`Applications approved or rejected in the last ${READING_WINDOW_DAYS} days, and how many of the values read from their documents a reviewer had to fix or key by hand. This is not an accuracy rate: a misread value nobody noticed counts as correct here. Accuracy on your documents is measured with the double-keyed check described in docs/extraction-evaluation.md.`}
+          />
+          {reading.length === 0 ? (
+            <EmptyState title="Nothing decided yet" description={`No application for ${ctx.orgName} has been approved or rejected in the last ${READING_WINDOW_DAYS} days.`} />
+          ) : (
+            <Table>
+              <thead>
+                <tr>
+                  <Th className="pl-4">Read by</Th>
+                  <Th align="right">Applications</Th>
+                  <Th align="right">Summary figures</Th>
+                  <Th align="right">Schedule lines</Th>
+                  <Th align="right">Lien waivers</Th>
+                  <Th align="right" className="pr-4">Documents</Th>
+                </tr>
+              </thead>
+              <tbody className="[&_tr:last-child>td]:border-b-0">
+                {reading.map((t) => (
+                  <tr key={t.reader}>
+                    <Td className="pl-4 font-medium">{readerLabel(t.reader)}</Td>
+                    <Td align="right">
+                      <Count main={t.applications} />
+                      <Sub>{t.withChanges === 0 ? 'none changed' : `${t.withChanges} changed`}</Sub>
+                    </Td>
+                    <Td align="right">
+                      <Count main={t.summary.read} unit="read" />
+                      <Sub>{changes(t.summary.misread, 'corrected', t.summary.missed, 'keyed where blank')}</Sub>
+                    </Td>
+                    <Td align="right">
+                      <Count main={t.lines.read} unit="read" />
+                      <Sub>{changes(t.lines.corrected, 'corrected', t.lines.keyedByHand, 'added by hand')}</Sub>
+                    </Td>
+                    <Td align="right">
+                      <Count main={t.waivers.read} unit="read" />
+                      <Sub>{changes(t.waivers.corrected, 'corrected', t.waivers.keyedByHand, 'added by hand')}</Sub>
+                    </Td>
+                    <Td align="right" className="pr-4">
+                      <Count main={t.documents.total} />
+                      <Sub>{documentsNote(t)}</Sub>
                     </Td>
                   </tr>
                 ))}
@@ -184,4 +237,27 @@ export default async function SystemStatusPage() {
       </div>
     </>
   );
+}
+
+function Count({ main, unit }: { main: number; unit?: string }) {
+  return (
+    <div className="num text-[13px] text-ink">
+      {main}
+      {unit ? <span className="text-ink-3"> {unit}</span> : null}
+    </div>
+  );
+}
+
+function Sub({ children }: { children: React.ReactNode }) {
+  return <div className="text-[11px] text-ink-3">{children}</div>;
+}
+
+function changes(fixed: number, fixedWord: string, added: number, addedWord: string): string {
+  const parts = [fixed ? `${fixed} ${fixedWord}` : null, added ? `${added} ${addedWord}` : null].filter(Boolean);
+  return parts.length ? parts.join(', ') : 'none changed';
+}
+
+function documentsNote(t: ReadingTally): string {
+  const parts = [t.documents.notRead ? `${t.documents.notRead} not read` : null, t.documents.backupReader ? `${t.documents.backupReader} by the backup reader` : null].filter(Boolean);
+  return parts.length ? parts.join(', ') : 'all read';
 }

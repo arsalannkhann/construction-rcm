@@ -197,7 +197,15 @@ function best<T extends { confidence: number }>(items: T[]): T | undefined {
   return [...items].sort((a, b) => b.confidence - a.confidence)[0];
 }
 
-export type ProcessOptions = { now?: Date; extract?: ExtractOptions };
+export type ProcessOptions = {
+  now?: Date;
+  extract?: ExtractOptions;
+  /** Epoch ms by which processing must be done (the job's time limit). Reading stops early enough to save what was read. */
+  finishBy?: number;
+};
+
+/** Time kept back from the job's limit for saving the result once reading is over. */
+const SAVE_MARGIN_MS = 20_000;
 
 type DocRow = typeof documents.$inferSelect;
 type Outcome = Awaited<ReturnType<typeof extractDocument>>;
@@ -253,10 +261,13 @@ export async function processApplication(db: DB, orgId: string, appId: string, o
   });
   if (!docs) return;
 
+  const extract: ExtractOptions = { ...opts.extract };
+  if (opts.finishBy !== undefined) extract.readBy = Math.min(extract.readBy ?? Infinity, opts.finishBy - SAVE_MARGIN_MS);
+
   try {
     const readings: Reading[] = await mapInOrder(docs, READ_CONCURRENCY, async (doc) => {
       const bytes = await getObject(doc.storageKey);
-      return { doc, outcome: await extractDocument({ filename: doc.filename, mimeType: doc.mimeType, bytes }, opts.extract) };
+      return { doc, outcome: await extractDocument({ filename: doc.filename, mimeType: doc.mimeType, bytes }, extract) };
     });
     await withOrgLock(db, orgId, (tx) => applyReading(tx, orgId, appId, readings, now));
   } catch (err) {
@@ -611,8 +622,8 @@ async function applyReading(db: DB, orgId: string, appId: string, readings: Read
 
 registerJobHandler(
   'process_application',
-  async (db, orgId, payload) => {
-    await processApplication(db, orgId, String(payload.applicationId));
+  async (db, orgId, payload, run) => {
+    await processApplication(db, orgId, String(payload.applicationId), { finishBy: run.finishBy });
   },
   {
     // Every automatic attempt failed. Make sure a person finds out.
@@ -642,6 +653,40 @@ registerJobHandler(
     },
   },
 );
+
+/**
+ * Read the package of an undecided application again, because a document in it
+ * was not read the way it should have been: its AI read failed or ran out of
+ * time (status `failed`), or it was read by the text-layer reader only because
+ * the AI read failed. Reviewer corrections are kept, as on any re-read.
+ */
+export const rereadPackage = locked(async function rereadPackage(db: DB, ctx: Ctx, appId: string): Promise<void> {
+  assertCan(ctx, 'application:review');
+  const [app] = await db.select().from(payApplications).where(and(eq(payApplications.orgId, ctx.orgId), eq(payApplications.id, appId)));
+  if (!app) throw new UserError('Application not found.');
+  if (['approved', 'rejected', 'void'].includes(app.status)) throw new UserError('This application has been decided. Reopen it before reading it again.');
+  if (app.status === 'processing') throw new UserError('This package is already being read.');
+  const docs = await db.select().from(documents).where(eq(documents.payApplicationId, appId));
+  const missed = docs.filter(missedByAi);
+  if (missed.length === 0) throw new UserError('Every document in this package was read. There is nothing to read again.');
+  await db.update(payApplications).set({ version: nextVersion, status: 'processing', processingError: null, holdSince: null, updatedAt: new Date() }).where(eq(payApplications.id, appId));
+  await recordAudit(db, {
+    orgId: ctx.orgId,
+    actor: ctx,
+    action: 'application.reread_requested',
+    entityType: 'pay_application',
+    entityId: appId,
+    payApplicationId: appId,
+    summary: `Asked for the package to be read again, because ${missed.map((d) => `“${d.filename}”`).join(', ')} ${missed.length === 1 ? 'was' : 'were'} not fully read`,
+    data: { documents: missed.map((d) => d.filename) },
+  });
+  await enqueueJob(db, ctx.orgId, 'process_application', { applicationId: appId });
+});
+
+/** A document whose AI read failed: not read at all, or read by the text-layer reader instead. Reading it again may go better. */
+export function missedByAi(doc: { status: string; statusDetail: string | null }): boolean {
+  return doc.status === 'failed' || (doc.status === 'processed' && doc.statusDetail !== null);
+}
 
 /** Put an application whose processing failed back on the queue. */
 export const retryProcessing = locked(async function retryProcessing(db: DB, ctx: Ctx, appId: string): Promise<void> {
