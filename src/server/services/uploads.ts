@@ -55,7 +55,7 @@ export async function stagePart(db: DB, ctx: Ctx, uploadId: string, part: number
     .onConflictDoUpdate({ target: [uploadParts.userId, uploadParts.uploadId, uploadParts.part], set: { bytes, orgId: ctx.orgId, createdAt: now } });
 }
 
-const stagedSchema = z.object({
+export const stagedSchema = z.object({
   uploadId: z.string().regex(UPLOAD_ID),
   name: z.string().trim().min(1).max(255),
   type: z.string().max(200).optional().default(''),

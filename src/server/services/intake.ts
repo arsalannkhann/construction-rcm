@@ -7,10 +7,10 @@
  * Originals are stored before anything else happens and are never modified.
  */
 import path from 'node:path';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import type { DB } from '@/db';
 import { locked, withOrgLock } from '@/db/tx';
-import { contracts, documents, extractions, lienWaivers, payAppLines, payApplications, projects, sovLines, subcontractors, nextVersion } from '@/db/schema';
+import { auditEvents, contracts, documents, extractions, lienWaivers, payAppLines, payApplications, projects, sovLines, subcontractors, nextVersion } from '@/db/schema';
 import { recordAudit, type AuditActor } from '@/server/audit';
 import { assertCan, UserError, type Ctx } from '@/server/auth/permissions';
 import { extractDocument, type ExtractOptions } from '@/server/documents/extract';
@@ -91,11 +91,48 @@ export type CreateApplicationInput = {
   receivedAt?: Date;
   /** Skip the queue; the caller will run processApplication itself (seeding, tests). */
   defer?: boolean;
+  /**
+   * The sender's own name for this submission (the mobile app makes one per
+   * draft). Sending the same one again returns the application it already
+   * created instead of a second one, so a retry after a lost response is harmless.
+   */
+  clientRef?: string | null;
 };
 
+/** A client reference: what the mobile app sends (a UUID), nothing that could carry a document's content. */
+export const CLIENT_REF = /^[A-Za-z0-9-]{16,64}$/;
+/** How long a client reference is remembered. A draft is never retried after this. */
+const CLIENT_REF_DAYS = 30;
+
+/** The application this person already created with this client reference, if any. */
+export async function findByClientRef(db: DB, orgId: string, userId: string, clientRef: string, now: Date = new Date()): Promise<string | null> {
+  if (!CLIENT_REF.test(clientRef)) return null;
+  const [row] = await db
+    .select({ id: auditEvents.payApplicationId })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.orgId, orgId),
+        eq(auditEvents.action, 'application.received'),
+        eq(auditEvents.actorId, userId),
+        gt(auditEvents.createdAt, new Date(now.getTime() - CLIENT_REF_DAYS * 86_400_000)),
+        sql`${auditEvents.data}->>'clientRef' = ${clientRef}`,
+      ),
+    )
+    .limit(1);
+  return row?.id ?? null;
+}
+
 /** Record a new submission and queue it for processing. */
-export const createApplication = locked(async function createApplication(db: DB, actor: IntakeActor, input: CreateApplicationInput): Promise<{ id: string }> {
+export const createApplication = locked(async function createApplication(db: DB, actor: IntakeActor, input: CreateApplicationInput): Promise<{ id: string; duplicate?: boolean }> {
   if (!isSystem(actor)) assertCan(actor, 'application:upload');
+  const clientRef = !isSystem(actor) && input.clientRef ? input.clientRef : null;
+  if (clientRef) {
+    if (!CLIENT_REF.test(clientRef)) throw new UserError('The upload was not understood. Try again.');
+    // Inside the organisation's lock, so two copies of the same request cannot both get past this.
+    const existing = await findByClientRef(db, actor.orgId, (actor as Ctx).userId, clientRef, input.receivedAt);
+    if (existing) return { id: existing, duplicate: true };
+  }
   validateFiles(input.files);
   const orgId = actor.orgId;
   const at = input.receivedAt ?? new Date();
@@ -135,7 +172,7 @@ export const createApplication = locked(async function createApplication(db: DB,
     entityId: id,
     payApplicationId: id,
     summary: `Billing package received by ${via === 'email' ? `email${input.senderEmail ? ` from ${input.senderEmail}` : ''}` : 'upload'}: ${stored.map((d) => d.filename).join(', ')}`,
-    data: { files: stored.map((d) => d.filename), via, senderEmail: input.senderEmail ?? null },
+    data: { files: stored.map((d) => d.filename), via, senderEmail: input.senderEmail ?? null, ...(clientRef ? { clientRef } : {}) },
     at,
   });
 

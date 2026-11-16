@@ -72,7 +72,7 @@ export type ApplicationRow = Awaited<ReturnType<typeof listApplications>>[number
 export async function listApplications(
   db: DB,
   ctx: Ctx,
-  filter: { statuses?: AppStatus[]; projectId?: string; contractId?: string; subcontractorId?: string; assigneeId?: string; limit?: number } = {},
+  filter: { statuses?: AppStatus[]; projectId?: string; contractId?: string; subcontractorId?: string; assigneeId?: string; submittedBy?: string; limit?: number } = {},
 ) {
   const where = [eq(payApplications.orgId, ctx.orgId)];
   if (filter.statuses?.length) where.push(inArray(payApplications.status, filter.statuses));
@@ -80,6 +80,7 @@ export async function listApplications(
   if (filter.contractId) where.push(eq(payApplications.contractId, filter.contractId));
   if (filter.subcontractorId) where.push(eq(payApplications.subcontractorId, filter.subcontractorId));
   if (filter.assigneeId) where.push(eq(payApplications.assigneeId, filter.assigneeId));
+  if (filter.submittedBy) where.push(eq(payApplications.submittedBy, filter.submittedBy));
   return db
     .select(applicationColumns)
     .from(payApplications)
