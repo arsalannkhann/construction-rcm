@@ -21,7 +21,26 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Zephric uses the camera to photograph pay applications, lien waivers and other billing documents you choose to submit.",
         "NSPhotoLibraryUsageDescription": "Zephric reads the photos you pick so you can submit billing documents.",
-        "NSFaceIDUsageDescription": "Zephric uses Face ID to unlock the app when you have turned on biometric unlock."
+        "NSFaceIDUsageDescription": "Zephric uses Face ID to unlock the app when you have turned on biometric unlock.",
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "PDF document",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "com.adobe.pdf"
+            ]
+          },
+          {
+            "CFBundleTypeName": "Image",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "public.image"
+            ]
+          }
+        ],
+        "LSSupportsOpeningDocumentsInPlace": false
       },
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [
@@ -63,6 +82,36 @@
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION"
+      ],
+      "intentFilters": [
+        {
+          "action": "SEND",
+          "category": [
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "mimeType": "application/pdf"
+            },
+            {
+              "mimeType": "image/*"
+            }
+          ]
+        },
+        {
+          "action": "SEND_MULTIPLE",
+          "category": [
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "mimeType": "application/pdf"
+            },
+            {
+              "mimeType": "image/*"
+            }
+          ]
+        }
       ],
       "versionCode": 1
     },

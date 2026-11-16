@@ -1,0 +1,20 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.zephric'
+version = '1.0.0'
+
+expoModule {
+  // A module of this app only, built from source with it.
+  canBePublished false
+}
+
+android {
+  namespace "com.zephric.shareintake"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}

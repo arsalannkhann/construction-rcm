@@ -2,11 +2,14 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import FileUp from 'lucide-react-native/icons/file-up';
 import Info from 'lucide-react-native/icons/info';
 import Server from 'lucide-react-native/icons/server';
 import { messageOf, ping } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { defaultServer, normalizeServer } from '@/lib/prefs';
+import { usePendingShare } from '@/lib/shared';
+import { waitingTitle } from '@/lib/shared-rules';
 import { usePalette } from '@/theme';
 import { Banner, BrandMark, Button, Field, T } from '@/ui/kit';
 
@@ -20,6 +23,7 @@ export default function SignIn() {
   const [error, setError] = useState<string | null>(null);
   const [serverOpen, setServerOpen] = useState(false);
   const notice = state.status === 'signed_out' ? state.notice : null;
+  const shared = usePendingShare();
 
   const submit = async () => {
     if (!email.trim() || !password) {
@@ -51,6 +55,11 @@ export default function SignIn() {
         </View>
 
         {notice ? <Banner tone="neutral" icon={Info}>{notice}</Banner> : null}
+        {shared ? (
+          <Banner tone="neutral" icon={FileUp} title={waitingTitle(shared.files.length)}>
+            Sign in and {shared.files.length === 1 ? 'it opens' : 'they open'} as a new capture. Nothing is sent until you choose to send it.
+          </Banner>
+        ) : null}
         {error ? <Banner tone="block">{error}</Banner> : null}
 
         <View style={{ gap: 14 }}>

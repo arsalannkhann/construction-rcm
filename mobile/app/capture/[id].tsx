@@ -10,6 +10,7 @@ import ArrowRight from 'lucide-react-native/icons/arrow-right';
 import Camera from 'lucide-react-native/icons/camera';
 import CircleCheck from 'lucide-react-native/icons/circle-check';
 import FileText from 'lucide-react-native/icons/file-text';
+import FileUp from 'lucide-react-native/icons/file-up';
 import FolderOpen from 'lucide-react-native/icons/folder-open';
 import Images from 'lucide-react-native/icons/images';
 import RotateCw from 'lucide-react-native/icons/rotate-cw';
@@ -18,6 +19,7 @@ import Trash2 from 'lucide-react-native/icons/trash';
 import X from 'lucide-react-native/icons/x';
 import { addToDraft, deleteDraft, DraftLimitError, isSendable, MAX_DRAFT_FILES, moveInDraft, removeFromDraft, rotatePhoto, updateDraft, useDraft, type DraftFile, type IncomingSource } from '@/lib/drafts';
 import { bytes, plural } from '@/lib/format';
+import { useSignedIn } from '@/lib/auth';
 import { submitDraft } from '@/lib/sender';
 import { radius, usePalette } from '@/theme';
 import { Banner, Button, Card, Field, IconButton, Row, Screen, Section, T } from '@/ui/kit';
@@ -25,7 +27,8 @@ import { OfflineBanner, useOnline } from '@/ui/parts';
 
 export default function DraftScreen() {
   const p = usePalette();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, shared } = useLocalSearchParams<{ id: string; shared?: string }>();
+  const session = useSignedIn();
   const draft = useDraft(id);
   const online = useOnline();
   const [busy, setBusy] = useState<string | null>(null);
@@ -112,6 +115,12 @@ export default function DraftScreen() {
       <Stack.Screen options={{ title: draft.title.trim() || 'New capture', headerRight: () => (draft.status !== 'sending' ? <IconButton icon={Trash2} label="Delete draft" onPress={remove} /> : null) }} />
       <Screen>
         <OfflineBanner />
+
+        {shared === '1' && draft.status === 'draft' ? (
+          <Banner tone="neutral" icon={FileUp} title="Added from another app">
+            {`This capture is for ${session.profile.orgName ?? 'your organisation'}. Check the files, choose the subcontract, and press Send when it is ready.`}
+          </Banner>
+        ) : null}
 
         {draft.status === 'submitted' ? (
           <Banner tone="pass" icon={CircleCheck} title="Received by Zephric" action={draft.applicationId ? <Button label="View application" size="sm" kind="secondary" onPress={() => router.replace(`/application/${draft.applicationId}`)} /> : undefined}>

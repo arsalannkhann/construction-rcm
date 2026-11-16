@@ -164,6 +164,37 @@ shows no records or figures until it reconnects, and then reloads by itself.
 It does not approve, request information, comment or compute anything
 offline: those need the server, and the buttons say so.
 
+### Sharing from another app
+
+On Android, Zephric is listed in the system Share sheet for PDFs and images,
+one or several at a time (from Files, the gallery, an email attachment and
+the like). On iOS it is offered under "Open in" / "Copy to" for PDFs and
+images; that has not been built or tested (see
+[Building for iOS](#building-for-ios)).
+
+- Each file is copied into the app's own storage the moment it arrives,
+  because the other app's permission to read it ends soon after. Only PDFs
+  and images are kept, up to 25 MB each and 20 at a time; anything else is
+  left out and the app says what and why ("One file is not a PDF or an
+  image."). On Android the app only takes files another app offers it
+  (`content://` addresses from another app's provider), never its own files
+  or a plain file path.
+- If someone with upload access is signed in and the app is unlocked, the
+  files open straight away as a new capture in the organisation they are
+  signed in to, with a note naming it. If nobody is signed in, the sign-in
+  screen says a shared file is waiting, and the capture opens after signing
+  in. Waiting files survive the app being closed and are removed after 7
+  days if nobody signs in. Someone whose role cannot upload (a viewer) is
+  told so and the files are removed from the phone.
+- Nothing is sent until the person checks the capture, optionally chooses
+  the subcontract, and presses Send. From there it is an ordinary draft, as
+  above.
+
+The code is in `mobile/modules/share-intake` (the Android side, a small
+Expo module that takes the shared files from the system),
+`mobile/src/lib/shared.ts` (keeping them until someone signs in) and
+`mobile/app/+native-intent.tsx` (iOS "Open in").
+
 ## Approving from a phone
 
 The phone offers **Approve** only when all of these hold (the server's
@@ -218,9 +249,10 @@ clean `prebuild` of this change. See
 
 | Artifact | Size |
 |---|---|
-| Android release APK, arm64-v8a (the architecture of practically every Android phone in use) | **26,012,491 bytes (24.8 MiB)** |
-| The same APK compressed with `gzip -9`, a rough stand-in for the download | 10,560,916 bytes (10.1 MiB) |
-| Space used after installing, on the emulator (Android 16): the app's code folder, then its data after one launch | 31,064 KiB (30.3 MiB), then 884 KiB |
+| Android release APK, arm64-v8a (the architecture of practically every Android phone in use) | **26,025,539 bytes (24.8 MiB)** |
+| The same APK compressed with `gzip -9`, a rough stand-in for the download | 10,568,346 bytes (10.1 MiB) |
+| Space used after installing, on the emulator (Android 16): the app's code folder, then its data after one launch | 31,084 KiB (30.4 MiB), then 896 KiB |
+| The arm64 release APK before sharing from other apps was added | 26,012,491 bytes (24.8 MiB) |
 | The arm64 release APK earlier the same day, before unused native modules were left out | 29,862,371 bytes (28.5 MiB) |
 | iOS | Not built (no Xcode on this machine) |
 
@@ -232,6 +264,13 @@ as Hermes bytecode 2.5 MB, and resources 1.4 MB. Android keeps native
 libraries and the bytecode uncompressed inside the APK so it can map them
 straight into memory; the store compresses them for the download, which is
 why the download is well under half the APK.
+
+Sharing from other apps added 13,048 bytes to the APK. By part: the
+JavaScript bytecode grew 12,708 bytes, the compiled Java and Kotlin 5,044
+bytes (the share module is plain Kotlin, with no native library), and the
+manifest and resources 316 bytes; together that is more than the APK grew
+because the parts are padded to alignment boundaries inside it. Both APKs
+were built from a clean `prebuild` and signed with a throwaway upload key.
 
 For Android this is under the 50 MB aim and well under the 100 MB limit.
 On the emulator the installed code folder is the APK itself (24.7 MiB on
@@ -380,8 +419,12 @@ Face ID usage descriptions and the privacy manifest are already in
 
 Before the first iOS release, check on a real iPhone: sign-in and the second
 step, Face ID unlock and its fallback, the app-switcher cover, camera and
-photo capture, Files import, document preview, and sending on a poor
-connection. On iOS, drafts are kept in the app's Documents folder, which
+photo capture, Files import, document preview, sending on a poor
+connection, and "Open in Zephric" for a PDF from Files and from a Mail
+attachment, signed in and signed out. iOS receives those through the
+document types in `app.json` (`CFBundleDocumentTypes` for PDF and
+`public.image`, with `LSSupportsOpeningDocumentsInPlace` off so iOS hands
+over a copy in the app's Inbox folder rather than the original). On iOS, drafts are kept in the app's Documents folder, which
 the phone's own backup includes; decide whether to exclude it.
 
 ## The mobile API
@@ -421,8 +464,10 @@ routes in `tests/mobile.test.ts` (sign-in, the second step, a member who owes
 their organisation two-step verification, bearer-only tokens, sign-out
 revocation, organisation isolation, duplicate-safe capture, photos joined
 into one PDF, role refusals, the phone approval gate and the amount check,
-comments) and the app's money and date formatting in
-`tests/mobile-format.test.ts`. `npx tsc --noEmit` in `mobile/` is clean.
+comments), the app's money and date formatting in
+`tests/mobile-format.test.ts`, and the rules for files shared from another
+app (which types are taken, the 20-file limit, what the person is told) in
+`tests/mobile-shared.test.ts`. `npx tsc --noEmit` in `mobile/` is clean.
 
 **Builds.** The JavaScript bundle (`expo export`) and the Android release APK
 (arm64) build from a clean `prebuild`. The signing plugin was checked with a
@@ -431,11 +476,11 @@ The variant guard was checked both ways (a mismatched Gradle run stops with
 its message; a matching one builds).
 
 **The release build on the emulator** (package `com.zephric.app`, built
-from a clean `prebuild` of this change and signed with the throwaway upload
-key): it opens to sign-in pointed at `https://zephric.vercel.app`, and
-refuses a plain `http://` server address. Its installed size was measured
-there. It was not signed in to the live site: test accounts are not used
-there.
+from a clean `prebuild` and signed with a throwaway upload key): it opens to
+sign-in pointed at `https://zephric.vercel.app`. The build before sharing
+was added also refused a plain `http://` server address there. Both builds'
+installed sizes were measured there. Neither was signed in to the live
+site: test accounts are not used there.
 
 **The local test variant on the emulator**, against Zephric running on this
 Mac with a scratch database of the demo data:
@@ -459,6 +504,33 @@ Mac with a scratch database of the demo data:
   application, read and matched it, and the phone showed Received by Zephric
   with a link to it. The same PDF in a second capture became a second
   application with a blocking "already submitted" finding.
+- Sharing from other apps, all through the system Share sheet, where the
+  app was listed as "Zephric Test":
+  - A PDF shared from the Files app while signed out, with the app not yet
+    opened since it was installed: the app opened to sign-in with "A shared
+    file is waiting"; after signing in the capture opened with the PDF and
+    the note naming the organisation; sent with Zephric left to match it,
+    the server created the application (`201`) and the phone showed
+    Received by Zephric.
+  - Two photos selected and shared from the Gallery app while signed in to
+    the demo organisation, with the app in the background: one capture
+    with both photos; Lone Star Electric chosen, sent, received, and the
+    application opened from the receipt. The local server has no AI
+    reading configured, so the photographed pages were not read and the
+    application shows "No pay application in the package", which is the
+    server's existing handling of photos without AI reading.
+  - A PDF, a photo and a spreadsheet shared together from Files: the
+    capture held the PDF and the photo, and the app said "One file is not
+    a PDF or an image."
+  - A photo shared while signed out was still waiting after the app was
+    force-stopped and opened again; after signing in it opened as a
+    capture, and the server's log shows no upload until Send. That draft
+    and the previous one were deleted unsent.
+  - Opening the app again from the recent-apps screen after a share,
+    including after force-stopping it, did not add the shared file again.
+  - A file the app had not been given permission to read (sent from the
+    command line) was refused with "One file could not be read; try sharing
+    again."
 - Opened with no connection: the offline notice and no figures; on
   reconnecting the overview and profile reloaded without a tap.
 - Biometric unlock with a simulated fingerprint enrolled on the emulator:
@@ -481,7 +553,13 @@ Mac with a scratch database of the demo data:
 
 **Not verified:**
 
-- Any physical Android phone, and anything on iOS (not built).
+- Any physical Android phone, and anything on iOS (not built), including
+  "Open in Zephric".
+- Sharing to the app: a file over 25 MB, more than 20 files at once,
+  sharing from Google Drive, Gmail or other apps that hand over files they
+  fetch from the internet, sharing while the app is locked, and sharing to
+  someone whose role cannot upload. The type, size and count rules are
+  covered by `tests/mobile-shared.test.ts`; the rest was not exercised.
 - Signing in with a recovery code in the app. The route uses the website's
   second step, whose recovery codes are tested; the app's recovery-code mode
   was not used on the emulator.
@@ -505,9 +583,13 @@ Mac with a scratch database of the demo data:
   of work: its own role, its own queries filtered to one subcontractor, and
   its own tests for that boundary.
 - **No push notifications** (see [Notifications](#notifications)).
-- **No share-sheet target.** Files are added from the app's own Files picker;
-  "Share to Zephric" from another app is not implemented (it needs a native
-  share extension on iOS and an intent filter on Android).
+- **Sharing from other apps has limits.** Shared files become a capture in
+  the organisation you are signed in to when it opens; for another
+  organisation, delete that capture, switch organisation in Profile and
+  share again. On iOS the app uses "Open in" rather than a share
+  extension, so it is not expected to appear where only share extensions
+  are listed, such as the Photos app's share sheet (not checked: iOS has
+  not been built); the app's own Photos button covers photos.
 - **Sending happens while the app is open.** Queued drafts are not uploaded
   by a background task when the app is closed; they send the next time it is
   opened with a connection.
