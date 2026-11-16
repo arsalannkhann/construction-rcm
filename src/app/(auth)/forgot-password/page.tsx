@@ -12,10 +12,10 @@ export default function ForgotPasswordPage() {
   const canEmail = emailDeliveryConfigured();
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight">Reset your password</h1>
+      <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.025em]">Reset your password</h1>
       {canEmail ? (
         <>
-          <p className="mt-1.5 text-[13px] text-ink-2">Enter the email address you sign in with. If it has an account, we email it a link to set a new password. The link works once, for {RESET_LINK_MINUTES} minutes.</p>
+          <p className="mt-2 text-[14px] leading-relaxed text-ink-2">Enter the email address you sign in with. If it has an account, we email it a link to set a new password. The link works once, for {RESET_LINK_MINUTES} minutes.</p>
           <div className="mt-7">
             <ForgotForm />
           </div>

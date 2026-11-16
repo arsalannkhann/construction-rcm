@@ -14,10 +14,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const ctx = await requireCtx();
   kickIfIdle();
   const db = await getDb();
-  const organizations = await listMyOrganizations(db, ctx.userId);
-  const unread = await unreadCount(db, ctx);
-  const notifications = await listNotifications(db, ctx, 12);
-  const counts = await queueCounts(db, ctx);
+  // Independent reads, all scoped to the signed-in member's organisation: run them together.
+  const [organizations, unread, notifications, counts] = await Promise.all([
+    listMyOrganizations(db, ctx.userId),
+    unreadCount(db, ctx),
+    listNotifications(db, ctx, 12),
+    queueCounts(db, ctx),
+  ]);
   const attention = counts.needs_matching + counts.needs_review + (can(ctx.role, 'application:approve') ? counts.pending_approval : 0);
 
   return (

@@ -400,15 +400,22 @@ real billing, one project first.
 
 ## The public website
 
-Someone who is not signed in and opens `/` sees the Zephric website
-(`public/landing/`, plain HTML, CSS and browser JavaScript; fonts and images are
-served from the same site, nothing is loaded from elsewhere). A signed-in member
-who opens `/` goes on to the app. `next.config.ts` does this with a rewrite on
-the session cookie; the page carries its own Content-Security-Policy. Its
-"Sign in" link goes to `/login`.
+Everyone who opens `/` sees the Zephric website, a statically rendered Next.js
+page (`src/app/(marketing)/page.tsx`, components in `src/components/marketing/`)
+that shares its design tokens with the app (`src/app/globals.css`). Nothing is
+loaded from other sites. Being signed in never redirects anyone away from it:
+the header and hero offer "Continue to dashboard" instead of "Sign in", and,
+when this browser recently had an app page open, a link to resume it. Both are
+read from a plain marker cookie (`zephric_signed_in`, set and cleared beside
+the HttpOnly session cookie, carrying no secret) and from the last page's path
+in `localStorage`; neither grants access, so a stale marker only means the
+dashboard link asks the person to sign in. Old `/landing/...` links redirect
+to `/`.
 
-The page was built separately (a standalone project with its own small Node
-server); only its files were brought here. Edit them in `public/landing/`.
+The product previews on the page use illustrative, internally consistent
+figures and are labelled as such. Keep its claims in line with what is
+verified: anything built but unverified is listed under "Built, in
+verification", never as available.
 
 ### Website inquiries
 

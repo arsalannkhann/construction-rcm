@@ -1,29 +1,43 @@
 @import "tailwindcss";
 
 /*
- * Design tokens. A quiet, paper-like neutral palette with one accent; colour
- * is otherwise reserved for meaning (pass / warning / blocking), so anything
- * coloured on screen is telling the reviewer something.
+ * Design tokens, shared by the public website, the sign-in screens and the app.
+ *
+ * Cool, quiet neutrals taken from the logo's navy, one working accent (the
+ * logo's blue) and one signal colour (the aqua of the dot over the "i"), used
+ * sparingly for what is verified or live. Colour is otherwise reserved for
+ * meaning (pass / warning / blocking), so anything coloured on screen is
+ * telling the reviewer something.
  */
 @theme {
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
 
-  --color-canvas: #f6f6f3;
+  --color-canvas: #f5f6f8;
   --color-surface: #ffffff;
-  --color-sunken: #efefeb;
-  --color-line: #e5e4df;
-  --color-line-strong: #d0cfc8;
+  --color-sunken: #eef0f3;
+  --color-line: #e3e6eb;
+  --color-line-strong: #cdd2da;
 
-  --color-ink: #1a1a18;
-  --color-ink-2: #53524d;
-  --color-ink-3: #85847d;
-  --color-ink-4: #adaca4;
+  --color-ink: #0b1220;
+  --color-ink-2: #4a5468;
+  --color-ink-3: #737c8f;
+  --color-ink-4: #a6adbb;
 
   --color-accent: #1f4fd1;
-  --color-accent-soft: #eaf0fe;
-  --color-accent-line: #c3d3f8;
-  --color-accent-ink: #173a9c;
+  --color-accent-soft: #ebf0fd;
+  --color-accent-line: #c5d3f7;
+  --color-accent-ink: #183fa8;
+
+  /* The dot over the "i": verified, live, done. Never for body text on white. */
+  --color-aqua: #12c2b4;
+  --color-aqua-soft: #e3f8f6;
+  --color-aqua-ink: #0b7d74;
+
+  /* Deep brand navy for dark bands and the sign-in panel. */
+  --color-navy: #070d1a;
+  --color-navy-2: #0e1729;
+  --color-navy-line: #1f2a40;
 
   --color-pass: #1b7a4a;
   --color-pass-soft: #e7f4ed;
@@ -37,11 +51,14 @@
   --color-block-soft: #fcebe8;
   --color-block-line: #f0c1ba;
 
-  --shadow-pop: 0 1px 2px rgb(26 26 24 / 0.06), 0 8px 24px rgb(26 26 24 / 0.1);
-  --shadow-card: 0 1px 0 rgb(26 26 24 / 0.03);
+  --shadow-pop: 0 1px 2px rgb(11 18 32 / 0.06), 0 8px 24px rgb(11 18 32 / 0.1);
+  --shadow-card: 0 1px 0 rgb(11 18 32 / 0.03);
+  --shadow-float: 0 1px 1px rgb(11 18 32 / 0.04), 0 12px 32px -8px rgb(11 18 32 / 0.14), 0 32px 64px -24px rgb(11 18 32 / 0.18);
 
   --animate-in: fade-in 120ms ease-out;
   --animate-pop: pop-in 140ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  --animate-rise: rise-in 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-shimmer: shimmer 1.4s ease-in-out infinite;
 
   @keyframes fade-in {
     from { opacity: 0; }
@@ -50,6 +67,14 @@
   @keyframes pop-in {
     from { opacity: 0; transform: translateY(4px) scale(0.985); }
     to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes rise-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes shimmer {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
   }
 }
 
@@ -99,4 +124,60 @@
   .focus-ring:focus-visible {
     box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px color-mix(in srgb, var(--color-accent) 45%, transparent);
   }
+  /* The diagonal of the Z: the brand's one gradient, for thin strokes and marks only. */
+  .brand-gradient {
+    background-image: linear-gradient(115deg, #1f4fd1 0%, #2f7cf2 52%, #12c2b4 100%);
+  }
+  .brand-text {
+    background-image: linear-gradient(100deg, #1f4fd1 10%, #2f7cf2 55%, #12b3c2 95%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  /* Ledger rules: the faint grid behind the website's hero and the sign-in panel. */
+  .ledger-grid {
+    background-image:
+      linear-gradient(to right, rgb(11 18 32 / 0.045) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(11 18 32 / 0.045) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+  .ledger-grid-dark {
+    background-image:
+      linear-gradient(to right, rgb(255 255 255 / 0.045) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(255 255 255 / 0.045) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+}
+
+/* Scroll reveals on the website (src/components/marketing/reveal.tsx). Visible by default without script. */
+.js-reveal [data-reveal] {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 640ms cubic-bezier(0.2, 0.8, 0.2, 1), transform 640ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+.js-reveal [data-reveal].is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  .js-reveal [data-reveal] {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The scan line over the source document in the website's product preview. */
+@keyframes scan {
+  0% { transform: translateY(0); opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { transform: translateY(190px); opacity: 0; }
 }

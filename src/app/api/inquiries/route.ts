@@ -1,5 +1,5 @@
 /**
- * The public website's "design partner" form posts here (public/landing/app.js).
+ * The public website's "design partner" form posts here (src/components/marketing/partner-form.tsx).
  * No sign-in. See src/server/services/inquiries.ts for what is accepted.
  */
 import { getDb } from '@/db';

@@ -1,15 +1,17 @@
 'use client';
 
-import { ArrowUpFromLine, Bell, Building2, Check, ChevronsUpDown, FlaskConical, History, Inbox, LayoutDashboard, LogOut, Plus, Send, Settings, Users } from 'lucide-react';
+import { ArrowUpFromLine, Bell, Building2, Check, ChevronsUpDown, FlaskConical, Globe, History, Inbox, LayoutDashboard, Loader2, LogOut, Plus, Send, Settings, Users } from 'lucide-react';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState, useSyncExternalStore, useTransition } from 'react';
+import { useEffect, useState, useSyncExternalStore, useTransition } from 'react';
 import { toast } from 'sonner';
-import { logoutAction, switchOrgAction } from '@/app/(auth)/actions';
+import { switchOrgAction } from '@/app/(auth)/actions';
 import { markNotificationsReadAction } from '@/app/(app)/shell-actions';
 import { BrandMark } from '@/components/brand';
 import { Avatar } from '@/components/ui/data';
 import { Menu, MenuItem, MenuLabel, MenuSeparator, Popover, Tooltip } from '@/components/ui/overlay';
+import { LAST_PAGE_KEY } from '@/lib/session-markers';
+import { signOut } from '@/lib/sign-out';
 import { cn, formatRelative } from '@/lib/utils';
 import { ROLE_LABEL } from '@/server/auth/permissions';
 import type { Role } from '@/server/types';
@@ -53,12 +55,25 @@ export function AppShell({
   const rail = narrow || /^\/applications\/(?!new$)[^/]+$/.test(pathname);
   const active = (href: string) => pathname === href || pathname.startsWith(`${href}/`) || (href === '/projects' && pathname.startsWith('/contracts'));
 
+  const [leaving, setLeaving] = useState<null | 'signing-out' | 'switching'>(null);
+  useRememberPage(pathname);
+  useReloadWhenRestored();
+
+  // A full page load into the other organisation, replacing this history entry, so nothing from this one stays on screen or in memory.
   const switchTo = (id: string) =>
     start(async () => {
+      setLeaving('switching');
       const result = await switchOrgAction(id);
-      if (!result.ok) toast.error(result.error);
-      else window.location.assign('/overview');
+      if (!result.ok) {
+        setLeaving(null);
+        toast.error(result.error);
+      } else window.location.replace('/overview');
     });
+
+  const leave = () => {
+    setLeaving('signing-out');
+    void signOut();
+  };
 
   const item = (href: string, label: string, Icon: typeof Inbox, badge?: number) => {
     const on = active(href);
@@ -93,12 +108,22 @@ export function AppShell({
   return (
     <div className="flex h-screen overflow-hidden">
       <aside className={cn('flex shrink-0 flex-col border-r border-line bg-canvas transition-[width] duration-150', rail ? 'w-[52px] items-center px-0 py-3' : 'w-[232px] px-3 py-3')}>
+        <div className={cn('flex items-center', rail ? 'flex-col gap-2' : 'gap-1')}>
+          <Tooltip content="Overview" side="right">
+            <Link href="/overview" className="focus-ring flex size-8 shrink-0 items-center justify-center rounded-lg transition-transform hover:bg-ink/[0.045] active:scale-95" aria-label="Zephric, go to overview">
+              <BrandMark className="size-[22px]" />
+            </Link>
+          </Tooltip>
         <Menu
           align="start"
           trigger={
-            <button className={cn('focus-ring flex items-center gap-2 rounded-lg text-left hover:bg-ink/[0.045]', rail ? 'size-8 justify-center' : 'h-10 w-full px-2')} aria-label="Switch organisation">
-              <BrandMark className={rail ? 'size-6' : 'size-6 shrink-0'} />
-              {rail ? null : (
+            <button
+              className={cn('focus-ring flex items-center gap-2 rounded-lg text-left hover:bg-ink/[0.045]', rail ? 'size-8 justify-center' : 'h-10 min-w-0 flex-1 px-2')}
+              aria-label={`Organisation: ${org.name}. Switch organisation`}
+            >
+              {rail ? (
+                <span className="flex size-6 items-center justify-center rounded-md border border-line bg-surface text-[11px] font-semibold text-ink-2">{org.name.trim().charAt(0).toUpperCase() || '·'}</span>
+              ) : (
                 <>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px] font-semibold leading-4 text-ink">{org.name}</span>
@@ -122,6 +147,7 @@ export function AppShell({
             {organizations.some((o) => o.isDemo) ? 'About the demo workspace' : 'Explore a demo workspace'}
           </MenuItem>
         </Menu>
+        </div>
 
         {canUpload ? (
           rail ? (
@@ -163,7 +189,11 @@ export function AppShell({
             <MenuItem onSelect={() => router.push('/settings/profile')} icon={<Settings />}>
               Profile and password
             </MenuItem>
-            <MenuItem onSelect={() => logoutAction()} icon={<LogOut />}>
+            <MenuItem onSelect={() => router.push('/')} icon={<Globe />}>
+              Zephric website
+            </MenuItem>
+            <MenuSeparator />
+            <MenuItem onSelect={leave} icon={<LogOut />}>
               Sign out
             </MenuItem>
           </Menu>
@@ -186,8 +216,58 @@ export function AppShell({
         ) : null}
         <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
       </div>
+
+      {/* Covers the app while leaving it, so nothing stays on screen (or in a back-forward cache snapshot) after signing out or switching. */}
+      {leaving ? (
+        <div className="fixed inset-0 z-[100] flex animate-in items-center justify-center bg-canvas" role="status" aria-live="polite">
+          <div className="flex items-center gap-2.5 text-[13px] text-ink-2">
+            <Loader2 className="size-4 animate-spin text-ink-3" />
+            {leaving === 'signing-out' ? 'Signing out…' : 'Switching organisation…'}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+/** Page-type labels for the public website's "Resume …" link. Never record names or figures. */
+function pageLabel(path: string): string | null {
+  if (path === '/applications/new') return 'your upload';
+  if (/^\/applications\/[^/]+/.test(path)) return 'the pay application you were reviewing';
+  if (/^\/projects\/[^/]+/.test(path)) return 'the project you were viewing';
+  if (/^\/contracts\/[^/]+/.test(path)) return 'the subcontract you were viewing';
+  if (/^\/subcontractors\/[^/]+/.test(path)) return 'the subcontractor you were viewing';
+  const top: Record<string, string> = { '/applications': 'pay applications', '/projects': 'projects', '/subcontractors': 'subcontractors', '/transfers': 'transfers', '/activity': 'activity', '/settings': 'settings' };
+  const key = Object.keys(top).find((k) => path === k || path.startsWith(`${k}/`));
+  return key ? top[key] : null;
+}
+
+/** Remembers the last app page (its path only) so the website can offer to resume it. Cleared on sign-out. */
+function useRememberPage(pathname: string) {
+  useEffect(() => {
+    const label = pageLabel(pathname);
+    try {
+      if (label) window.localStorage.setItem(LAST_PAGE_KEY, JSON.stringify({ path: pathname, label }));
+      else if (pathname === '/overview') window.localStorage.removeItem(LAST_PAGE_KEY);
+    } catch {
+      // Storage unavailable: nothing to offer later.
+    }
+  }, [pathname]);
+}
+
+/**
+ * A page brought back from the browser's back-forward cache (Back after
+ * signing out or switching organisation) is a snapshot of the past: reload it,
+ * so the server decides again what this browser may see.
+ */
+function useReloadWhenRestored() {
+  useEffect(() => {
+    const onShow = (e: PageTransitionEvent) => {
+      if (e.persisted) window.location.reload();
+    };
+    window.addEventListener('pageshow', onShow);
+    return () => window.removeEventListener('pageshow', onShow);
+  }, []);
 }
 
 function NotificationsButton({ rail, unread, notifications }: { rail: boolean; unread: number; notifications: Notice[] }) {

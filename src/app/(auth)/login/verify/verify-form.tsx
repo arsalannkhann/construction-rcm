@@ -52,7 +52,7 @@ export function VerifyForm({ attemptsLeft: initialAttempts, next = null }: { att
           const outcome = result.data;
           if (outcome.status === 'signed_in') {
             if (outcome.invitationNoLongerValid) return setInviteGone(true);
-            window.location.assign(outcome.recoveryCodesLeft !== null && outcome.recoveryCodesLeft <= 3 ? '/settings/profile#two-step' : (next ?? '/overview'));
+            window.location.replace(outcome.recoveryCodesLeft !== null && outcome.recoveryCodesLeft <= 3 ? '/settings/profile#two-step' : (next ?? '/overview'));
           } else if (outcome.status === 'wrong_code') {
             const tries = `${outcome.attemptsLeft === 1 ? 'One more try' : `${outcome.attemptsLeft} more tries`} before you have to sign in again.`;
             // Used recovery codes are deleted, so a reused one cannot be told apart from a mistyped one: say both.

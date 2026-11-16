@@ -12,7 +12,7 @@ export default async function ResetPasswordPage({ params }: { params: Promise<{ 
   if (!reset) {
     return (
       <>
-        <h1 className="text-2xl font-semibold tracking-tight">This reset link is no longer valid</h1>
+        <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.025em]">This reset link is no longer valid</h1>
         <p className="mt-2 text-[13px] text-ink-2">Reset links work once and for 60 minutes, and a newer link replaces an older one. Ask for a new link, or ask an owner or admin of your organisation to create one for you.</p>
         <p className="mt-6 flex gap-5 text-[13px]">
           <Link href="/forgot-password" className="font-medium text-accent hover:underline">
@@ -28,8 +28,8 @@ export default async function ResetPasswordPage({ params }: { params: Promise<{ 
 
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight">Set a new password</h1>
-      <p className="mt-1.5 text-[13px] text-ink-2">For {reset.email}. Setting it signs this account out on every device; then you sign in with the new password.</p>
+      <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.025em]">Set a new password</h1>
+      <p className="mt-2 text-[14px] leading-relaxed text-ink-2">For {reset.email}. Setting it signs this account out on every device; then you sign in with the new password.</p>
       <div className="mt-7">
         <ResetForm token={token} email={reset.email} />
       </div>

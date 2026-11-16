@@ -3,7 +3,8 @@
 import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, FormError, Input } from '@/components/ui/form';
-import { createOrgAction, logoutAction } from '../(auth)/actions';
+import { signOut } from '@/lib/sign-out';
+import { createOrgAction } from '../(auth)/actions';
 
 export function WelcomeForm() {
   const [name, setName] = useState('');
@@ -24,13 +25,13 @@ export function WelcomeForm() {
     >
       <FormError message={error} />
       <Field label="Company name">
-        <Input required autoFocus value={name} onChange={(e) => setName(e.target.value)} className="h-9" />
+        <Input required autoFocus value={name} onChange={(e) => setName(e.target.value)} className="h-10 text-[14px]" />
       </Field>
       <div className="flex items-center gap-2">
         <Button type="submit" variant="primary" size="lg" loading={pending} className="flex-1">
           Create organisation
         </Button>
-        <Button type="button" variant="ghost" size="lg" onClick={() => logoutAction()}>
+        <Button type="button" variant="ghost" size="lg" onClick={() => signOut()}>
           Sign out
         </Button>
       </div>

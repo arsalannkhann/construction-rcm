@@ -26,7 +26,7 @@ export function DemoWorkspaceCard({ hasDemo, inDemo, variant = 'panel' }: { hasD
     start(async () => {
       const result = await deleteDemoWorkspaceAction();
       if (!result.ok) toast.error(result.error);
-      else window.location.assign('/');
+      else window.location.replace('/overview');
     });
 
   return (

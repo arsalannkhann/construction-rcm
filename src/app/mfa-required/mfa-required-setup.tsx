@@ -3,7 +3,8 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useAction } from '@/lib/use-action';
-import { logoutAction, switchOrgAction } from '../(auth)/actions';
+import { signOut } from '@/lib/sign-out';
+import { switchOrgAction } from '../(auth)/actions';
 import { MfaSetupFlow } from '../(app)/settings/profile/mfa-setup';
 
 export function MfaRequiredSetup({ orgName, elsewhere }: { orgName: string; elsewhere: { id: string; name: string }[] }) {
@@ -44,7 +45,7 @@ export function MfaRequiredSetup({ orgName, elsewhere }: { orgName: string; else
         ) : null}
         <p>
           Lost access to your phone, or cannot set this up now?{' '}
-          <button type="button" className="font-medium text-accent hover:underline" onClick={() => logoutAction()}>
+          <button type="button" className="font-medium text-accent hover:underline" onClick={() => signOut()}>
             Sign out
           </button>{' '}
           and ask an owner or admin of {orgName} for help.

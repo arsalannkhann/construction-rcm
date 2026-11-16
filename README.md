@@ -17,9 +17,10 @@ deployment. The repository and the Vercel and Supabase projects keep the old
 name; everything a customer sees says Zephric. Authenticator entries
 made before the rename are labelled "Construction RCM" and keep working.
 
-Visitors who are not signed in see the public Zephric website at `/`
-(`public/landing/`), with a "design partner" inquiry form stored in the
-`inquiries` table; members go straight to the app. See
+Everyone who opens `/` sees the public Zephric website
+(`src/app/(marketing)/`), with a "design partner" inquiry form stored in the
+`inquiries` table; a signed-in member is offered "Continue to dashboard"
+rather than being sent away from the page. See
 [operations: the public website](docs/operations.md#the-public-website).
 
 **Contents:** [Quick start](#quick-start) ·
