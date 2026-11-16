@@ -9,13 +9,13 @@ import { useAction } from '@/lib/use-action';
 import { updateProjectAction } from '../actions';
 import { ProjectFields, type ProjectValues } from '../project-fields';
 
-type Project = { id: string; name: string; number: string | null; address: string | null; city: string | null; state: string | null; ownerName: string | null; status: string };
+type Project = { id: string; name: string; number: string | null; address: string | null; city: string | null; state: string | null; ownerName: string | null; budget: number | null; status: string };
 type Status = 'active' | 'closed';
 
-const valuesOf = (p: Project): ProjectValues => ({ name: p.name, number: p.number ?? '', address: p.address ?? '', city: p.city ?? '', state: p.state ?? '', ownerName: p.ownerName ?? '' });
+const valuesOf = (p: Project): ProjectValues => ({ name: p.name, number: p.number ?? '', address: p.address ?? '', city: p.city ?? '', state: p.state ?? '', ownerName: p.ownerName ?? '', budget: p.budget });
 const statusOf = (p: Project): Status => (p.status === 'closed' ? 'closed' : 'active');
 
-export function ProjectDialogButton({ project }: { project: Project }) {
+export function ProjectDialogButton({ project, label = 'Edit', variant }: { project: Project; label?: string; variant?: 'primary' | 'secondary' | 'ghost' }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<ProjectValues>(() => valuesOf(project));
   const [status, setStatus] = useState<Status>(() => statusOf(project));
@@ -29,6 +29,8 @@ export function ProjectDialogButton({ project }: { project: Project }) {
   return (
     <>
       <Button
+        variant={variant}
+        size={label === 'Edit' ? undefined : 'sm'}
         onClick={() => {
           setForm(valuesOf(project));
           setStatus(statusOf(project));
@@ -36,7 +38,7 @@ export function ProjectDialogButton({ project }: { project: Project }) {
         }}
       >
         <Pencil className="size-3.5" />
-        Edit
+        {label}
       </Button>
       <Dialog
         open={open}

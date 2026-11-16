@@ -1,9 +1,11 @@
 import { Building2, Plus } from 'lucide-react';
 import Link from '@/components/ui/link';
 import { getDb } from '@/db';
+import { BudgetStandingBadge } from '@/components/records/billing';
 import { RecordStatusBadge } from '@/components/records/figures';
 import { buttonClass } from '@/components/ui/button';
 import { Badge, EmptyState, Money, Page, PageHeader, Panel, Table, Td, Th } from '@/components/ui/data';
+import { formatMoney } from '@/lib/money';
 import { can } from '@/server/auth/permissions';
 import { requireCtx } from '@/server/auth/session';
 import { listProjects } from '@/server/services/records-queries';
@@ -46,6 +48,7 @@ export default async function ProjectsPage() {
                 <Th>Owner</Th>
                 <Th align="right">Subcontracts</Th>
                 <Th align="right">Committed</Th>
+                <Th align="right">Budget</Th>
                 <Th align="right">Approved to date</Th>
                 <Th>In review</Th>
                 <Th className="pr-4">Status</Th>
@@ -67,6 +70,15 @@ export default async function ProjectsPage() {
                     <Td align="right">{p.contracts}</Td>
                     <Td align="right">
                       <Money cents={p.contracts ? p.committed : null} />
+                      {p.cost.pendingChanges !== 0 ? <div className="text-xs text-warn">{formatMoney(p.cost.pendingChanges)} pending</div> : null}
+                    </Td>
+                    <Td align="right">
+                      <Money cents={p.budget} />
+                      {p.budget !== null ? (
+                        <div className="mt-0.5">
+                          <BudgetStandingBadge cost={p.cost} />
+                        </div>
+                      ) : null}
                     </Td>
                     <Td align="right">
                       <Money cents={p.contracts ? p.approvedToDate : null} />

@@ -440,3 +440,6 @@ export async function listAwaitingTransfer(db: DB, ctx: Ctx) {
     .orderBy(desc(payApplications.decidedAt));
   return rows.map((r) => ({ id: r.id, applicationNumber: r.applicationNumber, periodTo: r.periodTo, approvedAmount: r.approvedAmount, decidedAt: r.decidedAt, transferStatus: r.transferStatus, subcontractor: r.record?.subcontractor.name ?? '', project: r.record?.project.name ?? '', approvedBy: r.record?.approvedBy.name ?? '' }));
 }
+
+/** The CSV helpers, for other reports built from approved records. */
+export { row as csvRow, amount as csvAmount };

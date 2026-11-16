@@ -255,6 +255,20 @@ const iso = (d: Date) => d.toISOString().slice(0, 10);
 const fileStem = (company: string) => company.split(',')[0]!.replace(/&/g, 'and').replace(/[^A-Za-z0-9]+/g, '');
 
 /** The last day of each of the five billing months before `now`'s month. */
+/**
+ * Budgets chosen so the three projects show the three standings: comfortably
+ * within budget, close to it, and over it once a pending change order counts.
+ */
+function demoBudget(project: Plan['project']): number {
+  const plans = PLANS.filter((p) => p.project === project);
+  const committed = plans.reduce((t, p) => t + p.lines.reduce((a, l) => a + l[2], 0) + (p.changeOrders ?? []).filter((c) => c.status === 'approved').reduce((a, c) => a + c.amount, 0), 0);
+  const pending = plans.reduce((t, p) => t + (p.changeOrders ?? []).filter((c) => c.status === 'pending').reduce((a, c) => a + c.amount, 0), 0);
+  const roundTo = (dollars: number, step: number) => Math.round(dollars / step) * step;
+  if (project === 0) return D(roundTo(committed * 1.08, 5000));
+  if (project === 1) return D(roundTo(committed + pending - 25000, 1000));
+  return D(roundTo((committed + pending) / 0.97, 1000));
+}
+
 function periodEnds(now: Date): string[] {
   const out: string[] = [];
   for (let back = 5; back >= 1; back--) out.push(iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back + 1, 0))));
@@ -352,10 +366,10 @@ export async function createDemoWorkspace(db: DB, userId: string, now: Date = ne
 
   // Records. Inserted directly (not through the record services) only so they can carry past dates.
   const projectIds: string[] = [];
-  for (const p of PROJECTS) {
+  for (const [index, p] of PROJECTS.entries()) {
     const id = newId('prj');
     projectIds.push(id);
-    await db.insert(projects).values({ id, orgId, name: p.name, number: p.number, address: p.address, city: p.city, state: p.state, ownerName: p.owner, createdBy: userId, createdAt: start });
+    await db.insert(projects).values({ id, orgId, name: p.name, number: p.number, address: p.address, city: p.city, state: p.state, ownerName: p.owner, budget: demoBudget(index as Plan['project']), createdBy: userId, createdAt: start });
     await recordAudit(db, { orgId, actor: owner, action: 'project.created', entityType: 'project', entityId: id, summary: `Created project ${p.name}`, at: start });
   }
   const contractIds = new Map<Plan, string>();

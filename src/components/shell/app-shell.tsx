@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowUpFromLine, Bell, Building2, Check, ChevronsUpDown, FlaskConical, Globe, History, Inbox, LayoutDashboard, Loader2, LogOut, Plus, Send, Settings, Users } from 'lucide-react';
+import { ArrowUpFromLine, Bell, Building2, CalendarRange, Check, ChevronsUpDown, FlaskConical, Globe, History, Inbox, LayoutDashboard, Loader2, LogOut, Plus, Send, Settings, Users } from 'lucide-react';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, useSyncExternalStore, useTransition } from 'react';
@@ -22,6 +22,7 @@ type Notice = { id: string; title: string; body: string | null; href: string | n
 const NAV = [
   { href: '/overview', label: 'Overview', icon: LayoutDashboard },
   { href: '/applications', label: 'Pay applications', icon: Inbox },
+  { href: '/billing', label: 'Billing periods', icon: CalendarRange },
   { href: '/projects', label: 'Projects', icon: Building2 },
   { href: '/subcontractors', label: 'Subcontractors', icon: Users },
   { href: '/transfers', label: 'Transfers', icon: Send },

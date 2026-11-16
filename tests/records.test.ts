@@ -147,6 +147,7 @@ describe('project and contract figures', () => {
       originalAmount: D(500000),
       approvedChangeOrders: 0,
       contractSum: D(500000),
+      pendingChangeOrders: 0,
       approvedToDate: 0,
       completedStored: 0,
       retainageHeld: 0,
@@ -206,6 +207,7 @@ describe('project and contract figures', () => {
       originalAmount: D(500000),
       approvedChangeOrders: 0,
       contractSum: D(500000),
+      pendingChangeOrders: 0,
       approvedToDate: D(99000),
       completedStored: D(110000),
       retainageHeld: D(11000),
@@ -243,7 +245,8 @@ describe('project and contract figures', () => {
     await createChangeOrder(w.db, w.accountant, w.contractId, { number: 'CO-2', title: 'Generator pad', amount: D(40000), status: 'pending' });
 
     const contract = (await getContractDetail(w.db, w.viewer, w.contractId))!;
-    expect(contract.position).toMatchObject({ originalAmount: D(500000), approvedChangeOrders: D(12000), contractSum: D(512000), earnedLessRetainage: D(202500), balanceToFinish: D(309500) });
+    // The pending one is exposure: shown, but not committed.
+    expect(contract.position).toMatchObject({ originalAmount: D(500000), approvedChangeOrders: D(12000), contractSum: D(512000), pendingChangeOrders: D(40000), earnedLessRetainage: D(202500), balanceToFinish: D(309500) });
     expect(contract.changeOrders.map((c) => [c.number, c.amount, c.status, c.approvedOn])).toEqual([
       ['CO-1', D(12000), 'approved', '2026-11-03'],
       ['CO-2', D(40000), 'pending', null],
@@ -259,7 +262,8 @@ describe('project and contract figures', () => {
 
     const project = (await getProjectDetail(w.db, w.viewer, w.projectId))!;
     expect(project.totals).toMatchObject({ committed: D(512000), balanceToFinish: D(309500) });
-    expect((await listProjects(w.db, w.viewer))[0]).toMatchObject({ committed: D(512000) });
+    expect(project.cost).toEqual({ budget: null, committed: D(512000), pendingChanges: D(40000), projected: D(552000), remaining: null, percentOfBudget: null });
+    expect((await listProjects(w.db, w.viewer))[0]).toMatchObject({ committed: D(512000), cost: { pendingChanges: D(40000), projected: D(552000) } });
   });
 
   it('lets the schedule be edited in place: lines keep their ids and change-order lines are left alone', async () => {

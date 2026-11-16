@@ -1,8 +1,9 @@
-import { ArrowRight, Check, CircleDashed } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, CircleDashed, OctagonAlert } from 'lucide-react';
 import Link from '@/components/ui/link';
 import { getDb } from '@/db';
 import { BillingByPeriod, FindingsByCategory, PipelineBar, TurnaroundTrend } from '@/components/charts';
 import { DemoWorkspaceCard } from '@/components/demo/demo-workspace-card';
+import { BudgetStandingBadge } from '@/components/records/billing';
 import { buttonClass } from '@/components/ui/button';
 import { Avatar, Badge, EmptyState, Money, Page, PageHeader, Panel, PanelHeader, StatusBadge, Table, Td, Th } from '@/components/ui/data';
 import { formatMoney, formatMoneyCompact } from '@/lib/money';
@@ -14,6 +15,8 @@ import { findDemoOrganization } from '@/server/services/demo';
 import { FINDING_CATEGORY_LABEL } from '@/server/types';
 
 export const metadata = { title: 'Overview' };
+
+const RISKS_SHOWN = 8;
 
 export default async function OverviewPage() {
   const ctx = await requireCtx();
@@ -212,8 +215,68 @@ export default async function OverviewPage() {
         </Panel>
       </div>
 
+      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <Panel className="xl:col-span-2">
+          <PanelHeader title="Cost and billing risks" description="Rules run over your records: budgets, pending change orders and missed billing periods. Each links to what it is about." />
+          {d.risks.length === 0 ? (
+            <p className="px-4 py-8 text-center text-[13px] text-ink-3">No project is over or close to its budget, no subcontract has large pending changes, and nobody missed last period’s billing.</p>
+          ) : (
+            <ul className="divide-y divide-line">
+              {d.risks.slice(0, RISKS_SHOWN).map((r) => (
+                <li key={r.key} className="relative flex items-start gap-3 px-4 py-2.5 hover:bg-canvas/70">
+                  {r.tone === 'block' ? <OctagonAlert className="mt-0.5 size-4 shrink-0 text-block" aria-label="Needs action" /> : <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" aria-label="Watch" />}
+                  <div className="min-w-0">
+                    <Link href={r.href} className="text-[13px] font-medium after:absolute after:inset-0">
+                      {r.title}
+                    </Link>
+                    <p className="text-xs text-ink-3">{r.detail}</p>
+                  </div>
+                </li>
+              ))}
+              {d.risks.length > RISKS_SHOWN ? <li className="px-4 py-2.5 text-xs text-ink-3">and {pluralize(d.risks.length - RISKS_SHOWN, 'more')}.</li> : null}
+            </ul>
+          )}
+        </Panel>
+
+        <Panel>
+          <PanelHeader
+            title="Billing periods"
+            description="Applications expected from subcontracts that are billing."
+            actions={
+              <Link href="/billing" className="flex items-center gap-1 text-xs font-medium text-accent hover:underline">
+                Open <ArrowRight className="size-3" />
+              </Link>
+            }
+          />
+          <dl className="divide-y divide-line">
+            {[
+              { p: d.billing.last, label: formatMonth(d.billing.last.month), closed: true },
+              { p: d.billing.current, label: `${formatMonth(d.billing.current.month)} (current)`, closed: false },
+            ].map(({ p, label, closed }) => (
+              <div key={p.month} className="px-4 py-3">
+                <dt className="flex items-center justify-between gap-2 text-[12.5px] font-medium">
+                  <Link href={`/billing?period=${p.month}`} className="hover:underline">
+                    {label}
+                  </Link>
+                  {closed && p.missing ? <Badge tone="block">{p.missing} missing</Badge> : !closed && p.due ? <Badge tone="warn">{p.due} not received yet</Badge> : p.expected ? <Badge tone="pass">All in</Badge> : null}
+                </dt>
+                <dd className="mt-1 text-xs text-ink-3">
+                  {p.expected ? (
+                    <>
+                      {p.received} of {pluralize(p.expected, 'expected application')} received, {p.approved} approved, <span className="num">{formatMoney(p.approvedAmount)}</span> approved for payment
+                    </>
+                  ) : (
+                    'No applications expected.'
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </Panel>
+      </div>
+
       <Panel className="mt-4">
-        <PanelHeader title="Projects" description="Committed subcontract value against approved billing." />
+        <PanelHeader title="Projects" description="Committed subcontract value against approved billing, and against each project’s budget where one is set." />
         {d.projects.length === 0 ? (
           <EmptyState className="py-10" title="No projects" description="Add a project to see its billing position here." />
         ) : (
@@ -240,6 +303,11 @@ export default async function OverviewPage() {
                       {p.name}
                     </Link>
                     <div className="text-xs text-ink-3">{[p.number, p.state].filter(Boolean).join(' · ')}</div>
+                    {p.cost.budget !== null ? (
+                      <div className="mt-0.5">
+                        <BudgetStandingBadge cost={p.cost} />
+                      </div>
+                    ) : null}
                   </Td>
                   <Td align="right">{p.contracts}</Td>
                   <Td align="right">
