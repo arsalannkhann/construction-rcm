@@ -123,7 +123,8 @@ export default async function ApplicationsPage({ searchParams }: { searchParams:
             <tbody>
               {rows.map((r) => {
                 const amount = r.status === 'approved' ? r.approvedAmount : r.verifiedAmount;
-                const diff = r.claimedAmount !== null && amount !== null ? r.claimedAmount - amount : null;
+                // Shown amount minus the request: −$10.00 means $10.00 less than asked for (the detail page uses the same sign).
+                const diff = r.claimedAmount !== null && amount !== null ? amount - r.claimedAmount : null;
                 const age = daysBetween(r.receivedAt);
                 const open = ['needs_matching', 'needs_review', 'pending_approval', 'on_hold'].includes(r.status);
                 return (
@@ -142,7 +143,7 @@ export default async function ApplicationsPage({ searchParams }: { searchParams:
                     </Td>
                     <Td align="right">
                       <Money cents={amount} className="font-medium" />
-                      {diff ? <div className="num text-[11px] font-normal text-block">{formatDelta(-diff)}</div> : null}
+                      {diff ? <div className="num text-[11px] font-normal text-block">{formatDelta(diff)}</div> : null}
                     </Td>
                     <Td>
                       {r.status === 'processing' ? (

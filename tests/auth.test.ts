@@ -493,6 +493,12 @@ describe('signing in with two-step verification', () => {
     expect(challenge.expiresAt.getTime() - now.getTime()).toBe(minutes(10));
     const [stored] = await w.db.select().from(loginChallenges).where(eq(loginChallenges.id, sha256Hex(challenge.token)));
     expect(stored).toMatchObject({ userId: w.controller.userId, attempts: 0 });
+    // The second-step page reads when two-step was set up, to name the app entry it was given then.
+    expect(await findLoginChallenge(w.db, challenge.token, now)).toEqual({
+      attemptsLeft: CHALLENGE_MAX_ATTEMPTS,
+      expiresAt: challenge.expiresAt,
+      mfaEnabledAt: (await userRow(w.db, w.controller.userId)).mfaEnabledAt,
+    });
 
     const done = await completeSecondStep(w.db, challenge.token, totpCode(secret, now), { now, userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15', ipAddress: '203.0.113.7' });
     if (done.status !== 'signed_in') throw new Error(`expected to be signed in, got ${done.status}`);

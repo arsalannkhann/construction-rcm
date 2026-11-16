@@ -187,7 +187,7 @@ export function RevokeOtherSessionsButton({ count }: { count: number }) {
         onOpenChange={setConfirming}
         size="sm"
         title={`Sign out ${count === 1 ? 'the other session' : `all ${count} other sessions`}?`}
-        description="Anyone using them will have to sign in again. This device stays signed in."
+        description={`Anyone using ${count === 1 ? 'it' : 'them'} will have to sign in again. This device stays signed in.`}
         footer={
           <>
             <Button variant="ghost" onClick={() => setConfirming(false)}>

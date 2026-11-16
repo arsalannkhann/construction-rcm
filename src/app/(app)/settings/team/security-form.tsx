@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/data';
 import { Dialog } from '@/components/ui/overlay';
 import { useAction } from '@/lib/use-action';
 import { pluralize } from '@/lib/utils';
-import { updatePolicyAction } from './actions';
+import { updatePolicyAction } from '../policy/actions';
 
 /**
  * Whether every member must use two-step verification. Owners and admins only:
@@ -53,11 +53,7 @@ export function SecurityForm({ requireMfa, canEdit, viewerHasMfa, withoutMfa, or
       {!canEdit ? <p className="text-xs text-ink-3">Only an owner or admin can change this.</p> : null}
       {withoutMfa > 0 ? (
         <p className="text-xs text-ink-2">
-          {pluralize(withoutMfa, 'active member')} {withoutMfa === 1 ? 'has' : 'have'} not set it up yet{requireMfa ? ' and cannot work here until they do' : ''}. See the Two-step column in{' '}
-          <Link href="/settings/team" className="font-medium text-accent hover:underline">
-            Settings → Team
-          </Link>
-          .
+          {pluralize(withoutMfa, 'active member')} {withoutMfa === 1 ? 'has' : 'have'} not set it up yet{requireMfa ? ' and cannot work here until they do' : ''}. See the Two-step column under Members above.
         </p>
       ) : (
         <p className="text-xs text-ink-2">Every active member has set it up.</p>

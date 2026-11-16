@@ -4,11 +4,12 @@ import { PermissionNote } from '@/components/settings/permission-note';
 import { Avatar, Badge, EmptyState, PageHeader, Panel, PanelHeader, Table, Td, Th } from '@/components/ui/data';
 import { cn, formatDateTime, formatRelative, pluralize } from '@/lib/utils';
 import { can, ROLE_DESCRIPTION, ROLE_LABEL } from '@/server/auth/permissions';
-import { requireCtx } from '@/server/auth/session';
+import { getSession, requireCtx } from '@/server/auth/session';
 import { emailDeliveryConfigured } from '@/server/email';
 import { getOrganization, listInvitations, listMembers } from '@/server/services/team';
 import { resolveSettings, ROLES, type Role } from '@/server/types';
 import { InviteDialogButton } from './invite-dialog';
+import { SecurityForm } from './security-form';
 import { MemberMenu, RevokeInviteButton, RoleSelect } from './team-controls';
 
 export const metadata = { title: 'Team' };
@@ -22,6 +23,7 @@ export default async function TeamSettingsPage() {
   const members = await listMembers(db, ctx);
   const invitations = await listInvitations(db, ctx);
   const { requireMfa } = resolveSettings((await getOrganization(db, ctx)).settings);
+  const session = await getSession();
   const now = new Date();
 
   // The controls offered below mirror what the team service will accept, so nobody is handed a
@@ -154,6 +156,17 @@ export default async function TeamSettingsPage() {
               </tbody>
             </Table>
           )}
+        </Panel>
+
+        <Panel id="security">
+          <PanelHeader title="Security" description="How members of this organisation have to sign in." />
+          <SecurityForm
+            requireMfa={requireMfa}
+            canEdit={canManage}
+            viewerHasMfa={!!session?.user.mfaEnabled}
+            withoutMfa={members.filter((m) => m.status === 'active' && !m.mfaEnabled).length}
+            orgName={ctx.orgName}
+          />
         </Panel>
 
         <Panel>

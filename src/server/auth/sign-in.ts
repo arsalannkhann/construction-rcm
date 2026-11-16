@@ -51,11 +51,19 @@ export async function createLoginChallenge(db: DB, userId: string, opts: { now?:
 }
 
 /** Whether a challenge can still be answered, for the page that asks for the code. */
-export async function findLoginChallenge(db: DB, token: string | null | undefined, now: Date = new Date()): Promise<{ attemptsLeft: number; expiresAt: Date } | null> {
+export async function findLoginChallenge(
+  db: DB,
+  token: string | null | undefined,
+  now: Date = new Date(),
+): Promise<{ attemptsLeft: number; expiresAt: Date; mfaEnabledAt: Date | null } | null> {
   if (!token) return null;
-  const [row] = await db.select().from(loginChallenges).where(and(eq(loginChallenges.id, sha256Hex(token)), gt(loginChallenges.expiresAt, now)));
+  const [row] = await db
+    .select({ attempts: loginChallenges.attempts, expiresAt: loginChallenges.expiresAt, mfaEnabledAt: users.mfaEnabledAt })
+    .from(loginChallenges)
+    .innerJoin(users, eq(users.id, loginChallenges.userId))
+    .where(and(eq(loginChallenges.id, sha256Hex(token)), gt(loginChallenges.expiresAt, now)));
   if (!row || row.attempts >= CHALLENGE_MAX_ATTEMPTS) return null;
-  return { attemptsLeft: CHALLENGE_MAX_ATTEMPTS - row.attempts, expiresAt: row.expiresAt };
+  return { attemptsLeft: CHALLENGE_MAX_ATTEMPTS - row.attempts, expiresAt: row.expiresAt, mfaEnabledAt: row.mfaEnabledAt };
 }
 
 export type SecondStepResult =
