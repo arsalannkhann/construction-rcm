@@ -25,9 +25,9 @@ between the two:
    GitHub Actions is locked on the owner's account for a billing issue, and the
    backup needs the owner's encryption key and database secrets.
 3. **Email, AI reading and Procore have never been used with the real
-   services.** The code was checked against each provider's official
-   documentation this phase, and corrected where it differed, but nothing has
-   been sent to or received from them.
+   services.** The email and Procore code was checked against the providers'
+   official documentation, and corrected where it differed; the AI reader is
+   tested with a stub. Nothing has been sent to or received from any of them.
 4. **The hosting plans are not for commercial use.** Vercel Hobby is
    non-commercial and runs the scheduler once a day; Supabase Free has no
    downloadable backups and no point-in-time recovery.
