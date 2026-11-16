@@ -327,6 +327,9 @@ ol {
   font-weight: 600;
   margin-left: 6px;
 }
+.nav .nav-cta {
+  display: none;
+}
 .header-actions {
   display: flex;
   align-items: center;
@@ -1886,6 +1889,18 @@ dialog p {
   .header-actions .button-small {
     display: none;
   }
+  .nav .nav-cta {
+    display: inline-flex;
+    justify-content: center;
+    margin-top: 12px;
+    padding: 14px 20px;
+    color: #fff;
+    border-radius: 999px;
+  }
+  .nav .nav-cta:hover {
+    color: #fff;
+    background: var(--blue-deep);
+  }
   .hero {
     padding-top: 36px;
   }
@@ -1898,6 +1913,9 @@ dialog p {
   }
   .doc {
     padding: 18px 16px 14px;
+  }
+  .doc-foot {
+    padding-bottom: 36px;
   }
   .doc-line {
     font-size: 13px;

@@ -19,6 +19,7 @@ function setMenu(open) {
   nav.classList.toggle("is-open", open);
   menuToggle.setAttribute("aria-expanded", String(open));
   menuToggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+  menuToggle.querySelector("use").setAttribute("href", open ? "#i-close" : "#i-menu");
 }
 menuToggle.addEventListener("click", () => setMenu(menuToggle.getAttribute("aria-expanded") !== "true"));
 nav.addEventListener("click", (event) => {
