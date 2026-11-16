@@ -110,13 +110,13 @@ export default async function ApplicationsPage({ searchParams }: { searchParams:
               <tr>
                 <Th className="pl-4">Subcontractor</Th>
                 <Th>Project</Th>
-                <Th align="right">App.</Th>
-                <Th>Period to</Th>
+                <Th align="right" className="hidden xl:table-cell">App.</Th>
+                <Th className="hidden xl:table-cell">Period to</Th>
                 <Th align="right">Requested</Th>
                 <Th align="right">{view.key === 'approved' ? 'Approved' : 'Verified'}</Th>
                 <Th>Findings</Th>
-                <Th>Received</Th>
-                <Th>Reviewer</Th>
+                <Th className="hidden xl:table-cell">Received</Th>
+                <Th className="hidden 2xl:table-cell">Reviewer</Th>
                 <Th className="pr-4">Status</Th>
               </tr>
             </thead>
@@ -134,10 +134,17 @@ export default async function ApplicationsPage({ searchParams }: { searchParams:
                         {r.subcontractorName ?? r.stated?.contractorName ?? 'Unidentified'}
                       </Link>
                       {r.contractNumber ? <div className="text-xs text-ink-3">{r.contractNumber}</div> : null}
+                      {/* On narrower screens the number, period and age columns fold in here. */}
+                      <div className="text-xs text-ink-3 xl:hidden">
+                        {[r.applicationNumber !== null ? `#${r.applicationNumber}` : null, r.periodTo ? formatDate(r.periodTo) : null].filter(Boolean).join(' · ')}
+                        {open && age >= 5 ? <span className="text-warn"> · {age} days open</span> : null}
+                      </div>
                     </Td>
-                    <Td className="max-w-[220px] truncate text-ink-2">{r.projectName ?? <span className="text-ink-4">Not matched</span>}</Td>
-                    <Td align="right">{r.applicationNumber !== null ? `#${r.applicationNumber}` : '—'}</Td>
-                    <Td className="whitespace-nowrap text-ink-2">{formatDate(r.periodTo)}</Td>
+                    <Td className="max-w-[136px] truncate text-ink-2 xl:max-w-[220px]">{r.projectName ?? <span className="text-ink-4">Not matched</span>}</Td>
+                    <Td align="right" className="hidden xl:table-cell">
+                      {r.applicationNumber !== null ? `#${r.applicationNumber}` : '—'}
+                    </Td>
+                    <Td className="hidden whitespace-nowrap text-ink-2 xl:table-cell">{formatDate(r.periodTo)}</Td>
                     <Td align="right">
                       <Money cents={r.claimedAmount} />
                     </Td>
@@ -160,14 +167,14 @@ export default async function ApplicationsPage({ searchParams }: { searchParams:
                         <span className="text-ink-4">—</span>
                       )}
                     </Td>
-                    <Td className="whitespace-nowrap">
+                    <Td className="hidden whitespace-nowrap xl:table-cell">
                       <span className="flex items-center gap-1.5 text-ink-2">
                         {r.receivedVia === 'email' ? <Mail className="size-3 text-ink-3" aria-label="Received by email" /> : null}
                         {formatRelative(r.receivedAt)}
                       </span>
                       {open && age >= 5 ? <div className="text-[11px] text-warn">{age} days open</div> : null}
                     </Td>
-                    <Td>
+                    <Td className="hidden 2xl:table-cell">
                       {r.assigneeName ? (
                         <span className="flex items-center gap-1.5 text-ink-2">
                           <Avatar name={r.assigneeName} size="sm" />
