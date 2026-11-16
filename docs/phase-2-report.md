@@ -433,7 +433,7 @@ short:
 
 1. **Organisation and security.** The controller signs up and names the
    organisation. They turn on two-step verification, save the codes, and require
-   it for everyone (Settings → Review policy → Security).
+   it for everyone (Settings → Team → Security; it moved there in Phase 3).
 2. **Team.** Invite people by role: owner or admin, controller (approves and
    overrides), project accountant (reviews), project manager, viewer. Without
    outbound email, copy each invitation link and send it yourself.
