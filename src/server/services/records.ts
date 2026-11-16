@@ -101,8 +101,13 @@ export type ScheduleLineInput = { id?: string; itemNo: string; description: stri
 /**
  * Parse a pasted or uploaded schedule: one line per row, columns separated by
  * tabs or commas, in the order item number, description, scheduled value. A
- * header row is skipped. Rows that cannot be read are reported, not dropped.
+ * header row is skipped, and so are total and subtotal rows (a total that does
+ * not match the lines above it is reported). Rows that cannot be read are
+ * reported, not dropped.
  */
+/** "Total", "Grand total:", "Subtotal", "Total contract sum", "Contract sum": a label on its own, not "Total station layout". */
+const TOTAL_ROW = /^(?:(?:grand|contract)\s+)?(?:sub[\s-]?)?totals?(?:\s+(?:contract|schedule|scheduled|value|values|amount|sum|of))*\s*:?$|^contract\s+(?:sum|total|amount|value)\s*:?$/i;
+
 export function parseScheduleText(text: string): { lines: ScheduleLineInput[]; problems: string[] } {
   const lines: ScheduleLineInput[] = [];
   const problems: string[] = [];
@@ -128,6 +133,15 @@ export function parseScheduleText(text: string): { lines: ScheduleLineInput[]; p
       return;
     }
     const value = parseMoney(trimmed[amountIdx]!)!;
+    // A spreadsheet's total or subtotal row is not a line of work. A total is checked against the lines above it.
+    const labels = trimmed.slice(0, amountIdx).filter(Boolean);
+    if (labels.length === 1 && TOTAL_ROW.test(labels[0]!)) {
+      const sum = lines.reduce((acc, l) => acc + l.scheduledValue, 0);
+      if (!/sub/i.test(labels[0]!) && value !== sum) {
+        problems.push(`Row ${index + 1}: the total row says ${formatMoney(value)}, but the rows above add up to ${formatMoney(sum)}. It was left out; check the rows.`);
+      }
+      return;
+    }
     const itemNo = amountIdx >= 2 ? trimmed[0]! : String(lines.length + 1);
     const description = (amountIdx >= 2 ? trimmed.slice(1, amountIdx) : trimmed.slice(0, amountIdx)).filter(Boolean).join(', ').trim();
     if (!description) {

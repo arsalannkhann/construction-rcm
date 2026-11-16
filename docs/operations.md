@@ -347,8 +347,8 @@ real billing, one project first.
 1. **Organisation.** The controller signs up and names the organisation after
    the company. Settings → Organisation.
    **Two-step verification.** The controller turns it on (Settings → Profile),
-   saves the recovery codes, then requires it for everyone (Settings → Review
-   policy → Security). Each member is asked to set it up at their first
+   saves the recovery codes, then requires it for everyone (Settings → Team →
+   Security). Each member is asked to set it up at their first
    sign-in. A member who loses their phone and their codes is reset by an
    owner or admin (Settings → Team), or by you with `pnpm reset-password` if
    they also belong to another organisation (`docs/authentication.md`).
@@ -370,7 +370,15 @@ real billing, one project first.
    and on stored materials. If retainage steps down (e.g. 10% until 50%
    complete, then 5%), set it under **Edit terms** on the contract. Paste the
    schedule of values from the subcontract's spreadsheet into the schedule
-   editor. Add change orders, approved and pending.
+   editor (header, total and subtotal rows are left out; a total that does not
+   match the rows is reported). Add change orders, approved and pending. A
+   subcontractor that is not on file yet can be added from the subcontract
+   form itself.
+   **Package first?** A package uploaded before its subcontract exists waits
+   under "Needs matching". **Set up its subcontract** on that application
+   fills in the subcontractor, project and contract number it states (never
+   amounts or retainage, which must come from the subcontract), and matches
+   the application as soon as the subcontract is created.
 7. **Contracts already being billed.** Upload the most recent approved pay
    application first. It will report that there is no billing history; an
    approver chooses **Set opening balances…** on that finding, which records the

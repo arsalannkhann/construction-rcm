@@ -580,13 +580,14 @@ its documented API.
 
 ## What is and is not verified
 
-Status on 2026-11-16, `main`. The phase as a whole is summarised in
+Status on 2026-11-16, `main`. The current phase is summarised in
+[docs/phase-3-report.md](docs/phase-3-report.md), the previous one in
 [docs/phase-2-report.md](docs/phase-2-report.md).
 
-**Verified by automated tests.** `pnpm test`: 429 passed, 3 skipped (the
-skipped tests need a PostgreSQL server). `pnpm test:pg` on PostgreSQL 18.6:
-432 passed. `pnpm typecheck` is clean and `pnpm build` succeeds, on Node 22.
-Covered:
+**Verified by automated tests.** `pnpm test`: 466 passed, 3 skipped (the
+skipped tests need a PostgreSQL server). `pnpm test:pg` on a throwaway
+PostgreSQL server: 469 passed. `pnpm typecheck` is clean and `pnpm build`
+succeeds, on Node 22. Covered:
 
 - Money parsing and rounding; every reconciliation check, including stepped
   retainage, releases and deductive change orders; waiver pre-screening and
@@ -611,7 +612,16 @@ Covered:
   security-review finding written as the attack (`tests/auth-hardening.test.ts`).
 - Database connections: TLS verification against a real PostgreSQL server
   with a generated CA, and both migration modes.
-- Email intake (one processing per message, sender check); exports.
+- Email intake (one processing per message, sender check, the secret checked
+  before the body is read, spam and SPF failures turned away); outbound email
+  against a stub of Resend's documented API (idempotency key, one safe retry,
+  "not confirmed" when no answer comes); exports.
+- AI reading under time limits (a hanging call stopped by the per-read and the
+  job's limit, fallback to the text reader), the backup-reader warning, Read
+  again, and the reviewer-correction counts.
+- Setting up a schedule of values from a spreadsheet (total and subtotal rows
+  left out and checked) and a subcontract from a package that could not be
+  matched.
 - Serverless hosting: the request-driven queue and its time budget, the
   scheduler endpoint's secret check, and large files sent in parts (joined in
   order, retried parts, missing parts refused, parts invisible to other members
@@ -754,3 +764,5 @@ vercel.json              region and scheduled run for Vercel
 | [docs/procore-api-notes.md](docs/procore-api-notes.md) | What the Procore integration relies on in Procore's public API |
 | [docs/procore-validation.md](docs/procore-validation.md) | The procedure for validating the Procore integration against a developer sandbox |
 | [docs/phase-2-report.md](docs/phase-2-report.md) | Phase 2 report: issues found, changes, what is verified, remaining risks, pilot steps |
+| [docs/phase-3-report.md](docs/phase-3-report.md) | Phase 3 report: pilot readiness, what is verified, blockers, owner actions, first-customer onboarding |
+| [docs/email-provider-notes.md](docs/email-provider-notes.md) | Email providers: what was checked against Postmark's and Resend's documentation, and what is unverified |

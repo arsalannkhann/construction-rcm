@@ -189,7 +189,7 @@ function PasteDialog({ existing, onClose, onLoad }: { existing: number; onClose:
       }}
       size="lg"
       title="Paste from spreadsheet"
-      description="Copy the rows from your spreadsheet and paste them here, with columns in this order: item number, description, scheduled value. A header row is skipped."
+      description="Copy the rows from your spreadsheet and paste them here, with columns in this order: item number, description, scheduled value. Header, total and subtotal rows are left out."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>

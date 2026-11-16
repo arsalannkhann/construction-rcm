@@ -21,12 +21,14 @@ export default async function OverviewPage() {
   const d = await getDashboard(db, ctx);
   const hasDemo = ctx.isDemo || (await findDemoOrganization(db, ctx.userId)) !== null;
   const canUpload = can(ctx.role, 'application:upload');
+  const canWrite = can(ctx.role, 'records:write');
+  const canInvite = can(ctx.role, 'team:manage');
 
   if (d.setup.applications === 0) {
     return (
       <Page width="narrow">
-        <PageHeader title={`Welcome to ${ctx.orgName}`} description="Four steps take you from an empty workspace to a verified, approval-ready pay application. You do not need to connect any other software first." />
-        <GettingStarted setup={d.setup} canWrite={can(ctx.role, 'records:write')} canUpload={canUpload} canInvite={can(ctx.role, 'team:manage')} />
+        <PageHeader title={`Welcome to ${ctx.orgName}`} description="These steps take you from an empty workspace to a verified, approval-ready pay application, checked by your own team. You do not need to connect any other software first." />
+        <GettingStarted setup={d.setup} canWrite={canWrite} canUpload={canUpload} canInvite={canInvite} />
         {!ctx.isDemo ? (
           <div className="mt-5">
             <DemoWorkspaceCard hasDemo={hasDemo} inDemo={false} />
@@ -55,6 +57,12 @@ export default async function OverviewPage() {
           ) : null
         }
       />
+
+      {d.setup.applications < SETUP_REMINDER_UNTIL_APPLICATIONS && setupSteps(d.setup, canWrite, canUpload, canInvite).some((s) => !s.done) ? (
+        <div className="mb-5">
+          <GettingStarted setup={d.setup} canWrite={canWrite} canUpload={canUpload} canInvite={canInvite} remainingOnly />
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
         <Tile label="Awaiting review" href="/applications?view=attention" value={String(k.awaitingReview.count)} unit={pluralize(k.awaitingReview.count, 'application').replace(/^\S+ /, '')} sub={k.awaitingReview.count ? `${formatMoney(k.awaitingReview.amount)} to verify` : 'Nothing waiting'} />
@@ -347,8 +355,13 @@ function Tile({ label, value, unit, sub, href, tone }: { label: string; value: s
   );
 }
 
-function GettingStarted({ setup, canWrite, canUpload, canInvite }: { setup: { projects: number; contracts: number; applications: number; members: number }; canWrite: boolean; canUpload: boolean; canInvite: boolean }) {
-  const steps = [
+type Setup = { projects: number; contracts: number; applications: number; members: number; requireMfa: boolean };
+
+/** While the organisation is new, the steps it has not done yet stay on the overview. */
+const SETUP_REMINDER_UNTIL_APPLICATIONS = 5;
+
+function setupSteps(setup: Setup, canWrite: boolean, canUpload: boolean, canInvite: boolean) {
+  return [
     {
       done: setup.projects > 0,
       title: 'Add a project',
@@ -368,7 +381,7 @@ function GettingStarted({ setup, canWrite, canUpload, canInvite }: { setup: { pr
     {
       done: setup.applications > 0,
       title: 'Upload a billing package',
-      body: 'The pay application, schedule of values and lien waiver. They are read, matched to the subcontract and checked against the contract.',
+      body: 'The pay application, schedule of values and lien waiver. They are read, matched to the subcontract and checked against the contract. For a subcontract already being billed, upload its latest approved pay application first: you will be asked to set opening balances from it, and the next one is checked against them.',
       href: '/applications/new',
       cta: 'Upload package',
       allowed: canUpload,
@@ -381,15 +394,29 @@ function GettingStarted({ setup, canWrite, canUpload, canInvite }: { setup: { pr
       cta: 'Invite teammates',
       allowed: canInvite,
     },
+    {
+      done: setup.requireMfa,
+      title: 'Require two-step verification',
+      body: 'Turn it on for yourself under Profile, then require it for everyone. Each person is asked to set it up the next time they sign in.',
+      href: '/settings/team#security',
+      cta: 'Security settings',
+      allowed: canInvite,
+    },
   ];
-  const next = steps.findIndex((s) => !s.done);
+}
+
+function GettingStarted({ setup, canWrite, canUpload, canInvite, remainingOnly = false }: { setup: Setup; canWrite: boolean; canUpload: boolean; canInvite: boolean; remainingOnly?: boolean }) {
+  const all = setupSteps(setup, canWrite, canUpload, canInvite);
+  const next = all.findIndex((s) => !s.done);
+  const steps = all.map((s, i) => ({ ...s, n: i + 1 })).filter((s) => !remainingOnly || !s.done);
   return (
     <Panel>
+      {remainingOnly ? <PanelHeader title="Finish setting up" description={`${steps.length} of ${all.length} setup steps left.`} /> : null}
       <ol>
         {steps.map((s, i) => (
           <li key={s.title} className={cn('flex items-start gap-3.5 px-5 py-4', i > 0 && 'border-t border-line')}>
-            <span className={cn('mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold', s.done ? 'bg-pass-soft text-pass' : i === next ? 'bg-ink text-white' : 'bg-sunken text-ink-3')}>
-              {s.done ? <Check className="size-3.5" /> : i === next ? i + 1 : <CircleDashed className="size-3.5" />}
+            <span className={cn('mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold', s.done ? 'bg-pass-soft text-pass' : s.n - 1 === next ? 'bg-ink text-white' : 'bg-sunken text-ink-3')}>
+              {s.done ? <Check className="size-3.5" /> : s.n - 1 === next ? s.n : <CircleDashed className="size-3.5" />}
             </span>
             <div className="min-w-0 flex-1">
               <h2 className={cn('text-sm font-medium', s.done && 'text-ink-2')}>{s.title}</h2>
@@ -398,7 +425,7 @@ function GettingStarted({ setup, canWrite, canUpload, canInvite }: { setup: { pr
             {s.done ? (
               <span className="mt-1 text-xs text-pass">Done</span>
             ) : s.allowed ? (
-              <Link href={s.href} className={buttonClass({ variant: i === next ? 'primary' : 'secondary' })}>
+              <Link href={s.href} className={buttonClass({ variant: s.n - 1 === next ? 'primary' : 'secondary' })}>
                 {s.cta}
               </Link>
             ) : (

@@ -11,7 +11,18 @@ import { createSubcontractorAction, updateSubcontractorAction } from './actions'
 type Values = { name: string; trade: string | null; contactName: string | null; contactEmail: string | null; phone: string | null; address: string | null };
 const EMPTY: Values = { name: '', trade: null, contactName: null, contactEmail: null, phone: null, address: null };
 
-export function SubcontractorDialogButton(props: { mode: 'create'; variant?: 'primary' | 'secondary' } | { mode: 'edit'; subcontractor: Values & { id: string }; label?: string }) {
+type CreateProps = {
+  mode: 'create';
+  variant?: 'primary' | 'secondary';
+  /** Show as a text link instead of a button (inside another form's hint). */
+  asLink?: string;
+  /** Called with the new subcontractor, for a form that should select it. */
+  onCreated?: (created: { id: string; label: string }) => void;
+  /** A name to start from, such as the one printed on a package. */
+  initialName?: string;
+};
+
+export function SubcontractorDialogButton(props: CreateProps | { mode: 'edit'; subcontractor: Values & { id: string }; label?: string }) {
   const [open, setOpen] = useState(false);
   const initial = props.mode === 'edit' ? props.subcontractor : EMPTY;
   const [form, setForm] = useState<Values>(initial);
@@ -20,7 +31,14 @@ export function SubcontractorDialogButton(props: { mode: 'create'; variant?: 'pr
 
   const submit = () => {
     if (props.mode === 'create') {
-      run(() => createSubcontractorAction(form), { success: `${form.name} added`, onSuccess: () => setOpen(false) });
+      const { name, trade } = form;
+      run(() => createSubcontractorAction(form), {
+        success: `${name} added`,
+        onSuccess: ({ id }) => {
+          setOpen(false);
+          props.onCreated?.({ id, label: trade?.trim() ? `${name.trim()} · ${trade.trim()}` : name.trim() });
+        },
+      });
     } else {
       run(() => updateSubcontractorAction(props.subcontractor.id, form), { success: 'Subcontractor updated', onSuccess: () => setOpen(false) });
     }
@@ -28,7 +46,18 @@ export function SubcontractorDialogButton(props: { mode: 'create'; variant?: 'pr
 
   return (
     <>
-      {props.mode === 'create' ? (
+      {props.mode === 'create' && props.asLink ? (
+        <button
+          type="button"
+          className="focus-ring rounded font-medium text-accent hover:underline"
+          onClick={() => {
+            setForm({ ...EMPTY, name: props.initialName ?? '' });
+            setOpen(true);
+          }}
+        >
+          {props.asLink}
+        </button>
+      ) : props.mode === 'create' ? (
         <Button
           variant={props.variant ?? 'secondary'}
           onClick={() => {
@@ -84,6 +113,8 @@ export function SubcontractorDialogButton(props: { mode: 'create'; variant?: 'pr
           className="grid grid-cols-2 gap-4"
           onSubmit={(e) => {
             e.preventDefault();
+            // The dialog may be opened from inside another form (a new subcontract); React passes events up through the portal.
+            e.stopPropagation();
             submit();
           }}
         >

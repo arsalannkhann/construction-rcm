@@ -17,6 +17,7 @@ export function MatchingPanel() {
   const { pending, run } = useAction();
   const [choice, setChoice] = useState('');
   const ranked = (app.matchCandidates ?? []).map((c) => ({ ...c, contract: data.contractCandidates.find((x) => x.id === c.contractId) })).filter((c) => c.contract);
+  const setUpHref = `/contracts/new?from=${app.id}`;
   const assign = (contractId: string) => run(() => assignContractAction(app.id, contractId), { success: 'Matched. Checking against the contract.' });
 
   return (
@@ -84,10 +85,14 @@ export function MatchingPanel() {
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-2">{ranked.length > 0 ? 'Or choose another' : 'Choose the subcontract'}</h3>
           {data.contractCandidates.length === 0 ? (
             <div className="rounded-lg border border-line px-4 py-5 text-center">
-              <p className="text-[13px] text-ink-2">You have not set up any subcontracts yet.</p>
-              <Link href="/projects" className={buttonClass({ variant: 'primary', className: 'mt-3' })}>
-                Set up a project and subcontract
-              </Link>
+              <p className="text-[13px] text-ink-2">You have not set up any subcontracts yet. Set up this one from what the package states; it is matched as soon as you create it.</p>
+              {perms.records ? (
+                <Link href={setUpHref} className={buttonClass({ variant: 'primary', className: 'mt-3' })}>
+                  Set up its subcontract
+                </Link>
+              ) : (
+                <p className="mt-2 text-xs text-ink-3">Someone who can edit projects and subcontracts needs to set it up.</p>
+              )}
             </div>
           ) : (
             <div className="flex items-end gap-2">
@@ -106,9 +111,21 @@ export function MatchingPanel() {
               </Button>
             </div>
           )}
-          <p className="mt-3 text-xs text-ink-3">
-            Not there? <Link href="/projects" className="font-medium text-accent hover:underline">Create the subcontract</Link> first, then come back to this application.
-          </p>
+          {data.contractCandidates.length > 0 ? (
+            <p className="mt-3 text-xs text-ink-3">
+              Not there?{' '}
+              {perms.records ? (
+                <>
+                  <Link href={setUpHref} className="font-medium text-accent hover:underline">
+                    Set up its subcontract
+                  </Link>{' '}
+                  from what the package states; it is matched as soon as you create it.
+                </>
+              ) : (
+                'Someone who can edit projects and subcontracts needs to set it up.'
+              )}
+            </p>
+          ) : null}
         </section>
       ) : (
         <p className="mt-6 text-xs text-ink-3">Someone with review access needs to match this application.</p>
