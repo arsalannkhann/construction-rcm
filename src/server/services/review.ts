@@ -853,7 +853,7 @@ const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
  * `sending`, so if the process dies mid-send the record says "delivery not
  * confirmed" rather than nothing, or worse, "sent".
  */
-export async function sendSubcontractorMessage(db: DB, ctx: Ctx, appId: string, input: MessageInput): Promise<{ status: 'sent' | 'not_sent' | 'failed'; detail: string | null }> {
+export async function sendSubcontractorMessage(db: DB, ctx: Ctx, appId: string, input: MessageInput): Promise<{ status: 'sent' | 'not_sent' | 'failed' | 'unconfirmed'; detail: string | null }> {
   const now = input.now ?? new Date();
   const to = input.to.trim();
   const subject = input.subject.trim();
@@ -878,7 +878,9 @@ export async function sendSubcontractorMessage(db: DB, ctx: Ctx, appId: string, 
           ? `This exact message was already sent to ${to} a few minutes ago. It has not been sent again.`
           : twin.status === 'sending'
             ? `This exact message to ${to} is already being sent.`
-            : `This exact message to ${to} is already saved on the record as a draft.`,
+            : twin.status === 'unconfirmed'
+              ? `This exact message to ${to} may already have been sent a few minutes ago: the email provider did not confirm it. Check with the recipient. It has not been sent again.`
+              : `This exact message to ${to} is already saved on the record as a draft.`,
       );
     }
 
@@ -887,7 +889,8 @@ export async function sendSubcontractorMessage(db: DB, ctx: Ctx, appId: string, 
     return id;
   });
 
-  const result = await sendEmail({ to, subject, text: input.body, replyTo: ctx.userEmail });
+  // The record's id makes a retry inside sendEmail safe: the provider sends one message per key.
+  const result = await sendEmail({ to, subject, text: input.body, replyTo: ctx.userEmail, idempotencyKey: messageId });
 
   return withOrgLock(db, ctx.orgId, async (tx) => {
     await tx
@@ -896,31 +899,44 @@ export async function sendSubcontractorMessage(db: DB, ctx: Ctx, appId: string, 
         status: result.status,
         provider: result.provider,
         providerRef: result.status === 'sent' ? result.providerRef : null,
-        error: result.status === 'failed' ? result.error : result.status === 'not_sent' ? result.reason : null,
+        error: result.status === 'failed' || result.status === 'unconfirmed' ? result.error : result.status === 'not_sent' ? result.reason : null,
       })
       .where(eq(communications.id, messageId));
 
-    // Waiting on the subcontractor only makes sense if the message can reach them.
+    // Waiting on the subcontractor only makes sense if the message reached them (or will: a draft the reviewer sends themselves).
     const app = await loadApp(tx, ctx, appId);
-    const hold = !!input.hold && result.status !== 'failed' && (OPEN_STATUSES as string[]).includes(app.status) && app.status !== 'needs_matching';
+    const hold = !!input.hold && (result.status === 'sent' || result.status === 'not_sent') && (OPEN_STATUSES as string[]).includes(app.status) && app.status !== 'needs_matching';
     if (hold) await tx.update(payApplications).set({ version: nextVersion, status: 'on_hold', holdSince: now, updatedAt: now }).where(eq(payApplications.id, appId));
 
-    const delivery = result.status === 'sent' ? `Emailed ${to}` : result.status === 'failed' ? `Email to ${to} FAILED to send` : `Drafted a message to ${to} (not sent: email delivery is not configured)`;
+    const delivery =
+      result.status === 'sent'
+        ? `Emailed ${to}`
+        : result.status === 'failed'
+          ? `Email to ${to} FAILED to send`
+          : result.status === 'unconfirmed'
+            ? `Email to ${to} was NOT CONFIRMED by the provider (it may have been sent)`
+            : `Drafted a message to ${to} (not sent: email delivery is not configured)`;
     await recordAudit(tx, {
       orgId: ctx.orgId,
       actor: ctx,
-      action: result.status === 'sent' ? 'message.sent' : result.status === 'failed' ? 'message.failed' : 'message.drafted',
+      action: result.status === 'sent' ? 'message.sent' : result.status === 'failed' ? 'message.failed' : result.status === 'unconfirmed' ? 'message.unconfirmed' : 'message.drafted',
       entityType: 'pay_application',
       entityId: appId,
       payApplicationId: appId,
-      summary: `${delivery}: “${subject}”${hold ? '. Application placed on hold awaiting the subcontractor.' : ''}${input.hold && result.status === 'failed' ? '. The application was not placed on hold because the message did not go out.' : ''}${vouched ? ` ${ctx.userName} confirmed the payment statement in it against the accounting system.` : ''}`,
+      summary: `${delivery}: “${subject}”${hold ? '. Application placed on hold awaiting the subcontractor.' : ''}${input.hold && result.status === 'failed' ? '. The application was not placed on hold because the message did not go out.' : ''}${input.hold && result.status === 'unconfirmed' ? '. The application was not placed on hold because delivery was not confirmed.' : ''}${vouched ? ` ${ctx.userName} confirmed the payment statement in it against the accounting system.` : ''}`,
       data: { to, subject, status: result.status, hold, paymentStatementConfirmed: vouched },
       at: now,
     });
-    if (result.status === 'failed') {
-      await notifyUsers(tx, ctx.orgId, [ctx.userId], { type: 'message.failed', title: 'A message to a subcontractor failed to send', body: result.error, href: `/applications/${appId}` }, now);
+    if (result.status === 'failed' || result.status === 'unconfirmed') {
+      await notifyUsers(
+        tx,
+        ctx.orgId,
+        [ctx.userId],
+        { type: 'message.failed', title: result.status === 'failed' ? 'A message to a subcontractor failed to send' : 'A message to a subcontractor was not confirmed as sent', body: result.error, href: `/applications/${appId}` },
+        now,
+      );
     }
-    return { status: result.status, detail: result.status === 'failed' ? result.error : result.status === 'not_sent' ? result.reason : null };
+    return { status: result.status, detail: result.status === 'failed' || result.status === 'unconfirmed' ? result.error : result.status === 'not_sent' ? result.reason : null };
   });
 }
 

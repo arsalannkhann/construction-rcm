@@ -538,7 +538,7 @@ export const communications = pgTable(
     toEmail: text('to_email'),
     subject: text('subject').notNull(),
     body: text('body').notNull(),
-    /** sent (provider accepted) | not_sent (no provider configured; drafted only) | failed */
+    /** sent (provider accepted) | not_sent (no provider configured; drafted only) | failed | unconfirmed (no answer from the provider: may have been sent) */
     status: text('status').notNull(),
     provider: text('provider'),
     providerRef: text('provider_ref'),

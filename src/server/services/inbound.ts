@@ -20,9 +20,18 @@
  *   - Every message that arrives, accepted or not, is written to the intake
  *     log so nothing disappears without a trace.
  *
- * A sender address can be forged. Verifying SPF/DKIM is the inbound
- * provider's job; configure it to drop mail that fails. Not exercised against
- * a live provider from this repository.
+ *   - Mail the provider marked as spam (X-Spam-Status: Yes), or whose sending
+ *     server failed the sender domain's SPF check (Received-SPF: Fail), is
+ *     logged and turned away: its sender address cannot be trusted. Postmark
+ *     puts both headers on every inbound message.
+ *
+ * Status codes follow Postmark's retry rules: it retries any answer other than
+ * 200 up to ten times over several hours, except 403, which stops it. So 403
+ * is used for what no retry can fix (an unknown address, a body that cannot be
+ * read, a message too large), and 401/503 for what the owner can fix in the
+ * meantime (the shared secret, intake not yet enabled).
+ *
+ * Not exercised against a live provider from this repository.
  */
 import { timingSafeEqual } from 'node:crypto';
 import { and, desc, eq, gte } from 'drizzle-orm';
@@ -39,7 +48,8 @@ import { classifySender } from './reconcile';
 
 export class InboundRejected extends Error {
   constructor(
-    public status: 401 | 404 | 422 | 503,
+    /** 403 is final (Postmark stops retrying); 401 and 503 are retried. */
+    public status: 401 | 403 | 503,
     message: string,
   ) {
     super(message);
@@ -47,7 +57,30 @@ export class InboundRejected extends Error {
   }
 }
 
-export type InboundMessage = { from: string | null; subject: string | null; messageId: string | null; attachments: IncomingFile[] };
+export type InboundMessage = {
+  from: string | null;
+  subject: string | null;
+  messageId: string | null;
+  attachments: IncomingFile[];
+  /** From the provider's X-Spam-Status header: true when it says "Yes". */
+  spam?: { flagged: boolean; score: string | null };
+  /** The result word of the Received-SPF header, lower case: pass, fail, softfail, neutral, none, temperror, permerror. */
+  spf?: string | null;
+};
+
+type Header = { name: string; value: string };
+
+/** What the provider's spam and SPF headers say. */
+function trustSignals(headers: Header[]): Pick<InboundMessage, 'spam' | 'spf'> {
+  const get = (name: string) => headers.find((h) => h.name.toLowerCase() === name)?.value?.trim() ?? null;
+  const status = get('x-spam-status');
+  const score = get('x-spam-score') ?? (status ? /score=(-?[\d.]+)/i.exec(status)?.[1] ?? null : null);
+  const spf = get('received-spf');
+  return {
+    spam: status ? { flagged: /^yes\b/i.test(status), score } : undefined,
+    spf: spf ? (/^([a-z]+)/i.exec(spf)?.[1]?.toLowerCase() ?? null) : null,
+  };
+}
 
 const READABLE = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/webp']);
 /** Signature logos and tracking pixels arrive as attachments too; they are not billing documents. */
@@ -72,7 +105,7 @@ const cleanId = (value: unknown): string | null => (typeof value === 'string' &&
 
 /** Accept Postmark's inbound JSON, or `{ from, subject, messageId, attachments: [{ filename, contentBase64, contentType }] }`. */
 export function parseInboundJson(body: unknown): InboundMessage {
-  if (!body || typeof body !== 'object') throw new InboundRejected(422, 'The request body is not a JSON object.');
+  if (!body || typeof body !== 'object') throw new InboundRejected(403, 'The request body is not a JSON object.');
   const b = body as Record<string, unknown>;
   const list = (Array.isArray(b.Attachments) ? b.Attachments : Array.isArray(b.attachments) ? b.attachments : []) as Array<Record<string, unknown>>;
   const attachments: IncomingFile[] = [];
@@ -81,14 +114,17 @@ export function parseInboundJson(body: unknown): InboundMessage {
     const filename = String(a.Name ?? a.filename ?? a.name ?? 'attachment');
     if (bytes) attachments.push({ filename, mimeType: typeof (a.ContentType ?? a.contentType) === 'string' ? String(a.ContentType ?? a.contentType) : null, bytes });
   }
+  const headers: Header[] = (Array.isArray(b.Headers) ? (b.Headers as Array<Record<string, unknown>>) : [])
+    .filter((h) => typeof h.Name === 'string' && typeof h.Value === 'string')
+    .map((h) => ({ name: String(h.Name), value: String(h.Value) }));
   // Prefer the sender's own Message-ID header (stable across provider retries AND re-deliveries) over the provider's id.
-  const headers = Array.isArray(b.Headers) ? (b.Headers as Array<Record<string, unknown>>) : [];
-  const header = headers.find((h) => typeof h.Name === 'string' && h.Name.toLowerCase() === 'message-id')?.Value;
+  const header = headers.find((h) => h.name.toLowerCase() === 'message-id')?.value;
   return {
     from: addressOf(b.From ?? b.from ?? (b.FromFull as Record<string, unknown> | undefined)?.Email),
     subject: typeof (b.Subject ?? b.subject) === 'string' ? String(b.Subject ?? b.subject) : null,
     messageId: cleanId(header) ?? cleanId(b.messageId) ?? cleanId(b.MessageID),
     attachments,
+    ...trustSignals(headers),
   };
 }
 
@@ -105,6 +141,7 @@ export async function parseInboundMime(raw: Uint8Array): Promise<InboundMessage>
       mimeType: a.mimeType,
       bytes: typeof a.content === 'string' ? new TextEncoder().encode(a.content) : new Uint8Array(a.content),
     })),
+    ...trustSignals(mail.headers.map((h) => ({ name: h.key, value: h.value }))),
   };
 }
 
@@ -117,7 +154,11 @@ export function inboundSecretMatches(presented: string | null): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Where a provider may put the shared secret: a header, a bearer token, the password of basic auth, or (last resort) the query string. */
+/**
+ * Where a provider may put the shared secret: the password of HTTP basic
+ * authentication (what Postmark supports), a bearer token, or an
+ * x-inbound-secret header. Never the query string: addresses end up in logs.
+ */
 export function presentedSecret(request: Request): string | null {
   const direct = request.headers.get('x-inbound-secret');
   if (direct) return direct;
@@ -131,7 +172,7 @@ export function presentedSecret(request: Request): string | null {
       return colon >= 0 ? decoded.slice(colon + 1) : decoded;
     }
   }
-  return new URL(request.url).searchParams.get('secret');
+  return null;
 }
 
 export type InboundResult =
@@ -148,10 +189,35 @@ export type InboundResult =
  * and reported as `rejected`, so the provider does not keep retrying it.
  */
 export async function receiveInboundEmail(db: DB, token: string, presented: string | null, message: InboundMessage): Promise<InboundResult> {
+  return deliverInbound(db, await authorizeInbound(db, token, presented), message);
+}
+
+type Org = typeof organizations.$inferSelect;
+
+/** The organisation a delivery is for, once the caller has shown it may deliver. Checked before the message body is read. */
+export async function authorizeInbound(db: DB, token: string, presented: string | null): Promise<Org> {
   if (!inboundSecretMatches(presented)) throw new InboundRejected(401, 'The shared secret is missing or wrong.');
   const [org] = await db.select().from(organizations).where(eq(organizations.intakeToken, token));
-  if (!org) throw new InboundRejected(404, 'Unknown intake address.');
+  if (!org) throw new InboundRejected(403, 'Unknown intake address.');
+  return org;
+}
 
+/**
+ * Tell the team about a message that was turned away, at most once a day per
+ * sender, so a real subcontractor is noticed and a flood is not. Call it before
+ * logging the message: it looks for an earlier rejection.
+ */
+async function noticeTurnedAway(tx: DB, orgId: string, message: InboundMessage, body: string): Promise<void> {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const [recent] = message.from
+    ? await tx.select({ id: inboundMessages.id }).from(inboundMessages).where(and(eq(inboundMessages.orgId, orgId), eq(inboundMessages.fromEmail, message.from), eq(inboundMessages.outcome, 'rejected'), gte(inboundMessages.createdAt, since))).limit(1)
+    : [];
+  if (recent) return;
+  await notifyPermission(tx, orgId, 'application:review', { type: 'intake.sender_rejected', title: 'An emailed billing package was turned away', body, href: '/settings/system#intake' });
+}
+
+/** Turn an authorised delivery into a billing package, or log why not. */
+export async function deliverInbound(db: DB, org: Org, message: InboundMessage): Promise<InboundResult> {
   const usable: IncomingFile[] = [];
   const ignored: string[] = [];
   for (const file of message.attachments) {
@@ -170,6 +236,19 @@ export async function receiveInboundEmail(db: DB, token: string, presented: stri
       await tx.insert(inboundMessages).values({ id: newId('inb'), orgId: org.id, messageId: key, fromEmail: message.from, subject: message.subject?.slice(0, 300) ?? null, outcome, reason, attachments: message.attachments.length, payApplicationId });
     };
 
+    if (message.spam?.flagged) {
+      const reason = `The email provider marked it as spam${message.spam.score ? ` (score ${message.spam.score})` : ''}.`;
+      await log('rejected', reason, null);
+      return { outcome: 'rejected', reason };
+    }
+    if (message.spf === 'fail') {
+      const reason = `The server that sent it is not allowed to send mail for ${message.from?.split('@')[1] ?? 'the sender’s domain'} (the SPF check failed), so the sender address cannot be trusted.`;
+      const what = `From ${message.from ?? 'an unknown address'}${message.subject ? `, “${message.subject.slice(0, 80)}”` : ''}`;
+      await noticeTurnedAway(tx, org.id, message, `${what}. The sender address failed its SPF check and may be forged. If it is genuine, ask the sender to upload the package or to send it again from their usual mail server.`);
+      await log('rejected', reason, null);
+      return { outcome: 'rejected', reason };
+    }
+
     if (usable.length === 0) {
       const reason = message.attachments.length === 0 ? 'The message had no attachments.' : 'None of the attachments was a PDF or an image of a document.';
       await log('rejected', reason, null);
@@ -182,20 +261,8 @@ export async function receiveInboundEmail(db: DB, token: string, presented: stri
       const known = contacts.some((c) => classifySender(message.from, c.email, []) !== 'unknown') || classifySender(message.from, null, team.map((t) => t.email)) === 'team';
       if (!known) {
         const reason = `The sender ${message.from ?? '(no address)'} is not on file for any subcontractor, and this organisation only accepts email from known senders.`;
-        // Tell the team once a day per sender, so a real subcontractor using a new address is noticed and a flood is not.
-        const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        const [recent] = message.from
-          ? await tx.select({ id: inboundMessages.id }).from(inboundMessages).where(and(eq(inboundMessages.orgId, org.id), eq(inboundMessages.fromEmail, message.from), eq(inboundMessages.outcome, 'rejected'), gte(inboundMessages.createdAt, since))).limit(1)
-          : [];
+        await noticeTurnedAway(tx, org.id, message, `From ${message.from ?? 'an unknown address'}${message.subject ? `, “${message.subject.slice(0, 80)}”` : ''}. Add the address to the subcontractor’s record and ask them to send it again.`);
         await log('rejected', reason, null);
-        if (!recent) {
-          await notifyPermission(tx, org.id, 'application:review', {
-            type: 'intake.sender_rejected',
-            title: 'An emailed billing package was turned away',
-            body: `From ${message.from ?? 'an unknown address'}${message.subject ? `, “${message.subject.slice(0, 80)}”` : ''}. Add the address to the subcontractor’s record and ask them to send it again.`,
-            href: '/settings/system#intake',
-          });
-        }
         return { outcome: 'rejected', reason };
       }
     }

@@ -23,6 +23,7 @@ export default async function OrganizationSettingsPage() {
 
   const endpoint = `${appUrl()}/api/inbound/email/${org.intakeToken}`;
   const secretSet = inboundEmailSecret() !== null;
+  const onVercel = !!process.env.VERCEL;
 
   const driver = await dbDriver();
   const ai = aiConfig();
@@ -82,12 +83,16 @@ export default async function OrganizationSettingsPage() {
                 <div className="text-[13px] font-medium text-ink">Shared secret</div>
                 <p className="mt-0.5 text-xs text-ink-3">
                   {secretSet
-                    ? 'Set on the server as INBOUND_EMAIL_SECRET. Your provider must send it with every request: as the password of HTTP basic authentication, an x-inbound-secret header, or ?secret= on the address above. It is never shown here.'
+                    ? 'Set on the server as INBOUND_EMAIL_SECRET. Your provider must send it with every request, as the password of HTTP basic authentication (in Postmark: https://any-name:secret@ before the address) or an x-inbound-secret header. It is never shown here.'
                     : 'Not set on the server (INBOUND_EMAIL_SECRET). The endpoint rejects all requests until it is set.'}
                 </p>
               </div>
               <Badge tone={secretSet ? 'pass' : 'neutral'}>{secretSet ? 'Configured' : 'Not configured'}</Badge>
             </div>
+            <p className="border-t border-line pt-3 text-xs text-ink-3">
+              {onVercel ? 'On this hosting a message larger than 4.5 MB in all (about 3 MB of attachments) is refused before it reaches Zephric, and the provider gives up after retrying. Ask senders to split large packages, or upload them by hand. ' : ''}
+              Messages the provider marks as spam, or whose sender fails its SPF check, are turned away.
+            </p>
             <p className="border-t border-line pt-3 text-xs text-ink-3">
               Each message is processed once, even if the provider delivers it again. Messages from an address that is not on file are handled as set in{' '}
               <a href="/settings/policy" className="text-ink-2 underline underline-offset-2">

@@ -469,10 +469,17 @@ Organisations are separated from each other by the application, not by RLS.
   lost answer as "no answer" rather than "failed", so sending again cannot make
   a second invoice. Built from the public API documentation
   ([docs/procore-api-notes.md](docs/procore-api-notes.md)).
-- **Resend**: invitations and messages to subcontractors. Without a key they
-  are saved and labelled "not sent".
+- **Resend**: invitations, reset links and messages to subcontractors. Each
+  message carries an idempotency key, so one retry after a lost answer cannot
+  send it twice; a message the provider never answered for is recorded as "not
+  confirmed", not "failed", and is not sent again automatically. Without a key
+  they are saved and labelled "not sent".
 - **Inbound email** (`/api/inbound/email/:token`): a provider posts a received
-  message; each message is processed once and the sender is checked.
+  message; each message is processed once and the sender is checked. The
+  secret is checked before the body is read; messages marked as spam or failing
+  SPF are turned away. What was checked against Postmark's and Resend's
+  documentation, and what is still unverified:
+  [docs/email-provider-notes.md](docs/email-provider-notes.md).
 
 ### Observability
 
@@ -649,8 +656,8 @@ were not available:**
 | Claude reading real documents | Never called live (no API key). Accuracy on real pay applications is unmeasured. |
 | Real subcontractor documents | None available. The evaluation harness is ready (`pnpm eval:extraction`, `eval/real/README.md`); scores on the synthetic corpus are a regression signal only. How to measure it, the synthetic results and a pilot protocol: [docs/extraction-evaluation.md](docs/extraction-evaluation.md). |
 | Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`) and tested against an emulator of it; the sandbox procedure is [docs/procore-validation.md](docs/procore-validation.md). The duplicate-invoice check assumes Procore lists a new invoice straight away (validation step 12). |
-| Outbound email (Resend) | Never sent. |
-| Inbound email | The webhook logic is tested; no provider has been pointed at it. |
+| Outbound email (Resend) | Never sent. The request follows Resend's documentation (User-Agent, idempotency key, error names) and is tested against a stub only. |
+| Inbound email | The webhook logic is tested against Postmark's documented payload; no provider has been pointed at it. |
 
 ## Limitations and risks
 

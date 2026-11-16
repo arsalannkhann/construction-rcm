@@ -152,7 +152,8 @@ describe('email intake', () => {
     process.env.INBOUND_EMAIL_SECRET = 'test-inbound-secret';
     await expect(receiveInboundEmail(w.db, token, 'nope', parseInboundJson(postmark()))).rejects.toMatchObject({ status: 401 });
     await expect(receiveInboundEmail(w.db, token, null, parseInboundJson(postmark()))).rejects.toMatchObject({ status: 401 });
-    await expect(receiveInboundEmail(w.db, 'not-a-token', 'test-inbound-secret', parseInboundJson(postmark()))).rejects.toMatchObject({ status: 404 });
+    // Final: Postmark stops retrying on 403. A wrong secret (401) is retried, giving the owner time to fix it.
+    await expect(receiveInboundEmail(w.db, 'not-a-token', 'test-inbound-secret', parseInboundJson(postmark()))).rejects.toMatchObject({ status: 403 });
   });
 
   it('turns the attachments of a provider webhook into a billing package', async () => {
@@ -250,6 +251,8 @@ describe('email intake', () => {
       'From: "Maria Alvarez" <billing@lonestarelectric.example>',
       'To: intake@example.test',
       'Subject: Pay application',
+      'Received-SPF: Pass (sender SPF authorized) identity=mailfrom; client-ip=203.0.113.5',
+      'X-Spam-Status: No, score=0.4',
       'MIME-Version: 1.0',
       `Content-Type: multipart/mixed; boundary="${boundary}"`,
       '',
@@ -268,6 +271,8 @@ describe('email intake', () => {
     ].join('\r\n');
     const message = await parseInboundMime(new TextEncoder().encode(eml));
     expect(message.from).toBe('billing@lonestarelectric.example');
+    expect(message.spf).toBe('pass');
+    expect(message.spam).toEqual({ flagged: false, score: '0.4' });
     expect(message.attachments).toHaveLength(1);
     expect(message.attachments[0]!.bytes.byteLength).toBe(pdf.byteLength);
   });
@@ -281,12 +286,89 @@ describe('email intake', () => {
     expect(() => parseInboundJson('nope')).toThrow(InboundRejected);
   });
 
-  it('reads the shared secret from a header, a bearer token or basic auth before the query string', () => {
+  it('reads the shared secret from basic auth, a bearer token or a header, never from the address', () => {
     const req = (headers: Record<string, string>, url = 'https://rcm.example.test/api/inbound/email/tok') => new Request(url, { method: 'POST', headers });
     expect(presentedSecret(req({ 'x-inbound-secret': 'a-secret' }))).toBe('a-secret');
     expect(presentedSecret(req({ authorization: 'Bearer b-secret' }))).toBe('b-secret');
     expect(presentedSecret(req({ authorization: `Basic ${Buffer.from('postmark:c-secret').toString('base64')}` }))).toBe('c-secret');
-    expect(presentedSecret(req({}, 'https://rcm.example.test/api/inbound/email/tok?secret=d-secret'))).toBe('d-secret');
+    // Addresses end up in access logs, so a secret in the query string is not accepted.
+    expect(presentedSecret(req({}, 'https://rcm.example.test/api/inbound/email/tok?secret=d-secret'))).toBeNull();
     expect(presentedSecret(req({}))).toBeNull();
+  });
+
+  it('checks the secret and the address before reading the body, and tells the provider which refusals are final', async () => {
+    const { POST } = await import('@/app/api/inbound/email/[token]/route');
+    let read = false;
+    // highWaterMark 0: the stream is pulled only when someone reads it.
+    const body = () =>
+      new ReadableStream(
+        {
+          pull() {
+            read = true;
+            throw new Error('the body was read');
+          },
+        },
+        { highWaterMark: 0 },
+      );
+    const call = (tok: string, headers: Record<string, string>, payload: BodyInit | ReadableStream = body()) =>
+      POST(new Request(`https://rcm.example.test/api/inbound/email/${tok}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: payload, duplex: 'half' } as RequestInit), { params: Promise.resolve({ token: tok }) });
+    const basic = (secret: string) => ({ authorization: `Basic ${Buffer.from(`postmark:${secret}`).toString('base64')}` });
+
+    expect((await call(token, basic('wrong'))).status).toBe(401);
+    expect((await call('not-a-token', basic('test-inbound-secret'))).status).toBe(403);
+    expect(read).toBe(false);
+    expect((await call(token, { ...basic('test-inbound-secret'), 'content-length': String(60 * 1024 * 1024) })).status).toBe(403);
+    expect(read).toBe(false);
+    expect((await call(token, basic('test-inbound-secret'), '{not json')).status).toBe(403);
+    const ok = await call(token, basic('test-inbound-secret'), JSON.stringify({ From: 'a@b.example', Subject: 'empty', MessageID: 'route-1', Attachments: [] }));
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ outcome: 'rejected', reason: 'The message had no attachments.' });
+  });
+
+  it('turns away mail the provider marked as spam, without telling anyone', async () => {
+    const spam = parseInboundJson({
+      ...postmark(),
+      MessageID: 'spam-1',
+      Headers: [
+        { Name: 'X-Spam-Status', Value: 'Yes' },
+        { Name: 'X-Spam-Score', Value: '7.2' },
+      ],
+    });
+    expect(spam.spam).toEqual({ flagged: true, score: '7.2' });
+    const result = await receiveInboundEmail(w.db, token, 'test-inbound-secret', spam);
+    expect(result).toEqual({ outcome: 'rejected', reason: 'The email provider marked it as spam (score 7.2).' });
+    const log = await listInboundMessages(w.db, w.owner, 100);
+    expect(log.find((m) => m.messageId === 'spam-1')).toMatchObject({ outcome: 'rejected', payApplicationId: null });
+    // A message the provider scored as not spam goes through as usual.
+    expect(parseInboundJson({ ...postmark(), Headers: [{ Name: 'X-Spam-Status', Value: 'No' }] }).spam).toEqual({ flagged: false, score: null });
+  });
+
+  it('turns away mail that failed its SPF check and tells the team once, but lets a soft fail through', async () => {
+    const w4 = await createWorld();
+    const { organizations, notifications } = await import('@/db/schema');
+    const [org] = await w4.db.select().from(organizations).where(eq(organizations.id, w4.orgId));
+    const bytes = Buffer.from(await renderPackage(packageFor(w4, 0, null))).toString('base64');
+    const message = (id: string, spf: string) =>
+      parseInboundJson({
+        From: 'Maria <maria@lonestarelectric.example>',
+        Subject: 'Pay app',
+        MessageID: id,
+        Headers: [{ Name: 'Received-SPF', Value: `${spf} (domain of lonestarelectric.example does not designate 203.0.113.9 as permitted sender) identity=mailfrom;` }],
+        Attachments: [{ Name: 'payapp.pdf', ContentType: 'application/pdf', Content: bytes }],
+      });
+    expect(message('x', 'Fail').spf).toBe('fail');
+
+    for (const id of ['spf-1', 'spf-2']) {
+      const r = await receiveInboundEmail(w4.db, org!.intakeToken, 'test-inbound-secret', message(id, 'Fail'));
+      expect(r).toMatchObject({ outcome: 'rejected', reason: expect.stringContaining('the SPF check failed') });
+    }
+    expect(await w4.db.select().from(payApplications).where(eq(payApplications.orgId, w4.orgId))).toHaveLength(0);
+    const notes = (await w4.db.select().from(notifications).where(eq(notifications.type, 'intake.sender_rejected'))).filter((n) => n.orgId === w4.orgId);
+    expect(notes.length).toBeGreaterThan(0);
+    expect(new Set(notes.map((n) => n.userId)).size).toBe(notes.length); // once per person, not once per message
+    expect(notes[0]!.body).toContain('may be forged');
+
+    // A soft fail is common with forwarding and is not proof of forgery: accepted, and checked like any other sender.
+    expect((await receiveInboundEmail(w4.db, org!.intakeToken, 'test-inbound-secret', message('spf-3', 'Softfail'))).outcome).toBe('accepted');
   });
 });

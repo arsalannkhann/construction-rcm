@@ -383,8 +383,10 @@ real billing, one project first.
 9. **Email intake (optional).** Set `INBOUND_EMAIL_SECRET`, create an inbound
    stream with an email provider (for example Postmark), and point its webhook
    at the address shown under Settings → Organisation, sending the secret as
-   the HTTP basic-auth password. Send one test package and check it under
-   Settings → System status → Email intake.
+   the HTTP basic-auth password (`https://zephric:<secret>@<address>`). Leave
+   Postmark's spam filtering on: messages it marks as spam are turned away.
+   Send one test package and check it under Settings → System status → Email
+   intake. Details: [email-provider-notes.md](email-provider-notes.md).
 10. **Retainage releases.** When retainage is to be paid out, an approver
     records the release on the contract before the application that bills it.
 
