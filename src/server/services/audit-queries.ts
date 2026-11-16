@@ -23,6 +23,7 @@ export const AUDIT_AREAS: ReadonlyArray<readonly [area: string, label: string]> 
   ['message', 'Messages'],
   ['comment', 'Comments'],
   ['transfer', 'Transfers'],
+  ['billing', 'Billing periods'],
   ['integration', 'Integrations'],
 ];
 

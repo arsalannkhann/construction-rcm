@@ -9,6 +9,10 @@ import { changeOrders, contracts, findings, memberships, organizations, payAppli
 import type { Ctx } from '@/server/auth/permissions';
 import type { AppStatus, FindingCategory } from '@/server/types';
 import { FINDING_CATEGORIES, resolveSettings } from '@/server/types';
+import { formatMoney, percentOf } from '@/lib/money';
+import { formatMonth } from '@/lib/utils';
+import { getBillingBoard, monthOf, shiftMonth } from './billing';
+import { budgetStanding, costPosition, LARGE_PENDING_PERCENT } from './cost';
 
 const OPEN: AppStatus[] = ['needs_matching', 'needs_review', 'pending_approval', 'on_hold'];
 const DAY = 86_400_000;
@@ -47,11 +51,13 @@ export async function getDashboard(db: DB, ctx: Ctx, now: Date = new Date()) {
 
   const projectRows = await db.select().from(projects).where(eq(projects.orgId, ctx.orgId)).orderBy(projects.name);
   const contractRows = await db.select().from(contracts).where(eq(contracts.orgId, ctx.orgId));
-  const approvedCos = await db
-    .select({ contractId: changeOrders.contractId, total: sql<number>`coalesce(sum(${changeOrders.amount}), 0)::float8` })
+  const cos = await db
+    .select({ contractId: changeOrders.contractId, status: changeOrders.status, total: sql<number>`coalesce(sum(${changeOrders.amount}), 0)::float8` })
     .from(changeOrders)
-    .where(and(eq(changeOrders.orgId, ctx.orgId), eq(changeOrders.status, 'approved')))
-    .groupBy(changeOrders.contractId);
+    .where(and(eq(changeOrders.orgId, ctx.orgId), inArray(changeOrders.status, ['approved', 'pending'])))
+    .groupBy(changeOrders.contractId, changeOrders.status);
+  const approvedCos = cos.filter((c) => c.status === 'approved');
+  const pendingCos = new Map(cos.filter((c) => c.status === 'pending').map((c) => [c.contractId, Math.round(c.total)]));
   const members = await db
     .select({ userId: users.id, name: users.name })
     .from(memberships)
@@ -152,6 +158,8 @@ export async function getDashboard(db: DB, ctx: Ctx, now: Date = new Date()) {
       name: p.name,
       number: p.number,
       state: p.state,
+      status: p.status,
+      cost: costPosition(p.budget, committed, cs.reduce((t, c) => t + (pendingCos.get(c.id) ?? 0), 0)),
       contracts: cs.length,
       committed,
       completed,
@@ -194,6 +202,54 @@ export async function getDashboard(db: DB, ctx: Ctx, now: Date = new Date()) {
 
   const awaitingTransfer = approved.filter((a) => a.transferStatus === 'none' || a.transferStatus === 'failed');
 
+  // ── Billing: the last period that has ended, and the current one ──
+  const current = monthOf(now);
+  const lastPeriod = shiftMonth(current, -1);
+  const board = await getBillingBoard(db, ctx, { months: [lastPeriod, current], current });
+  const billing = {
+    last: board.periods[0]!,
+    current: board.periods[1]!,
+  };
+
+  // ── Cost and billing risks: rules over the records, each with its reason ──
+  type Risk = { key: string; tone: 'block' | 'warn'; title: string; detail: string; href: string };
+  const risks: Risk[] = [];
+  for (const p of projectSummaries) {
+    if (p.status !== 'active') continue;
+    const standing = budgetStanding(p.cost);
+    if (standing === 'over')
+      risks.push({ key: `budget:${p.id}`, tone: 'block', title: `${p.name} is projected over budget`, detail: `Committed and pending changes come to ${formatMoney(p.cost.projected)} against a budget of ${formatMoney(p.cost.budget)}: ${formatMoney(-(p.cost.remaining ?? 0))} over.`, href: `/projects/${p.id}` });
+    else if (standing === 'near')
+      risks.push({ key: `budget:${p.id}`, tone: 'warn', title: `${p.name} is close to its budget`, detail: `Committed and pending changes are ${p.cost.percentOfBudget}% of the budget, ${formatMoney(p.cost.remaining)} left.`, href: `/projects/${p.id}` });
+  }
+  const projectName = new Map(projectRows.map((p) => [p.id, p]));
+  for (const c of contractRows) {
+    const pending = pendingCos.get(c.id) ?? 0;
+    const contractSum = c.originalAmount + (coTotal.get(c.id) ?? 0);
+    const share = percentOf(pending, contractSum);
+    if (c.status !== 'active' || projectName.get(c.projectId)?.status !== 'active' || pending <= 0 || share === null || share < LARGE_PENDING_PERCENT) continue;
+    risks.push({
+      key: `pending:${c.id}`,
+      tone: 'warn',
+      title: `Large pending changes on ${c.number}`,
+      detail: `${formatMoney(pending)} of change orders pending, ${share}% of the ${formatMoney(contractSum)} subcontract on ${projectName.get(c.projectId)?.name ?? 'its project'}.`,
+      href: `/contracts/${c.id}`,
+    });
+  }
+  for (const section of board.sections) {
+    for (const row of section.rows) {
+      if (row.cells[0]?.state !== 'missing') continue;
+      risks.push({
+        key: `missing:${row.id}`,
+        tone: 'block',
+        title: `No application from ${row.subcontractorName} for ${formatMonth(lastPeriod)}`,
+        detail: `${row.number} on ${section.project.name} had been billing and still has work left to bill.`,
+        href: `/billing?period=${lastPeriod}`,
+      });
+    }
+  }
+  risks.sort((a, b) => (a.tone === b.tone ? 0 : a.tone === 'block' ? -1 : 1));
+
   return {
     setup: { projects: projectRows.length, contracts: contractRows.length, applications: live.length, members: members.length, approved: approved.length, requireMfa: resolveSettings(org?.settings).requireMfa },
     kpis: {
@@ -215,6 +271,8 @@ export async function getDashboard(db: DB, ctx: Ctx, now: Date = new Date()) {
     pipeline,
     findingsByCategory,
     projects: projectSummaries,
+    billing,
+    risks,
     workload,
     attention,
   };

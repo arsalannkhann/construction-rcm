@@ -30,17 +30,24 @@ const isDate = (s: string | null | undefined) => !s || /^\d{4}-\d{2}-\d{2}$/.tes
 
 // ── Projects ────────────────────────────────────────────────────────────────
 
-export type ProjectInput = { name: string; number?: string | null; address?: string | null; city?: string | null; state?: string | null; ownerName?: string | null };
+/** `budget` is in cents; leave it out to keep what is on file, or pass null to clear it. */
+export type ProjectInput = { name: string; number?: string | null; address?: string | null; city?: string | null; state?: string | null; ownerName?: string | null; budget?: number | null };
+
+function validateBudget(budget: number | null | undefined): number | null | undefined {
+  if (budget === undefined || budget === null) return budget;
+  if (!Number.isSafeInteger(budget) || budget <= 0) throw new UserError('Enter a budget above zero, or leave it blank.');
+  return budget;
+}
 
 function validateProject(input: ProjectInput) {
   const state = clean(input.state)?.toUpperCase() ?? null;
   if (state && !STATE_CODES.has(state)) throw new UserError('Choose a US state.');
-  return { name: required(input.name, 'Project name'), number: clean(input.number), address: clean(input.address), city: clean(input.city), state, ownerName: clean(input.ownerName) };
+  return { name: required(input.name, 'Project name'), number: clean(input.number), address: clean(input.address), city: clean(input.city), state, ownerName: clean(input.ownerName), budget: validateBudget(input.budget) };
 }
 
 export const createProject = locked(async function createProject(db: DB, ctx: Ctx, input: ProjectInput, external?: { source: string; id: string }): Promise<string> {
   assertCan(ctx, 'records:write');
-  const values = validateProject(input);
+  const values = { ...validateProject(input), budget: validateBudget(input.budget) ?? null };
   const id = newId('prj');
   await db.insert(projects).values({ id, orgId: ctx.orgId, ...values, externalSource: external?.source ?? null, externalId: external?.id ?? null, createdBy: ctx.userId });
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'project.created', entityType: 'project', entityId: id, summary: `Created project ${values.name}${external ? ` (imported from ${external.source})` : ''}`, data: values });
@@ -51,9 +58,11 @@ export const updateProject = locked(async function updateProject(db: DB, ctx: Ct
   assertCan(ctx, 'records:write');
   const [project] = await db.select().from(projects).where(and(eq(projects.orgId, ctx.orgId), eq(projects.id, id)));
   if (!project) throw new UserError('Project not found.');
-  const values = validateProject(input);
+  const checked = validateProject(input);
+  // Callers that do not know about the budget (imports, older forms) leave it as it is.
+  const values = { ...checked, budget: checked.budget === undefined ? project.budget : checked.budget };
   await db.update(projects).set({ ...values, status: input.status ?? project.status }).where(eq(projects.id, id));
-  await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'project.updated', entityType: 'project', entityId: id, summary: `Updated project ${values.name}`, data: { before: { name: project.name, state: project.state, status: project.status }, after: { ...values, status: input.status ?? project.status } } });
+  await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'project.updated', entityType: 'project', entityId: id, summary: `Updated project ${values.name}`, data: { before: { name: project.name, state: project.state, status: project.status, budget: project.budget }, after: { ...values, status: input.status ?? project.status } } });
   // The project's state drives which statutory waiver form is expected.
   if (values.state !== project.state) {
     const rows = await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.projectId, id));

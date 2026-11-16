@@ -393,6 +393,34 @@ work only, or on all work). Releases are recorded on the contract by an
 approver before they are billed, so the application that bills one is checked
 against it instead of being flagged for withholding too little.
 
+### Cost control and billing periods
+
+`src/server/services/cost.ts` and `src/server/services/billing.ts`, computed
+from records on every request; nothing is forecast.
+
+- **Budget and commitments.** A project can carry a budget for its
+  subcontracted work. The project page sets it against what is committed
+  (subcontracts plus approved change orders), the change orders still pending,
+  and the projected cost (committed plus pending), and says what is left or by
+  how much it is over. Projects and the overview show the standing.
+- **Billing periods** (`/billing`, and a six-month grid on each project). A
+  period is the calendar month of an application's "period to" date. A
+  subcontract is expected to bill once it has started billing, while it is
+  active and not fully billed. In a month that has ended, an expected
+  subcontract with no application is *missing*; in the current month it is
+  *not received yet*.
+- **Approved billing roll-up.** Per project and period, a CSV of the approved
+  subcontractor figures from the immutable approved records (work this period,
+  stored materials, retainage, payment due): the basis of the owner's invoice.
+  Needs the export permission; each download is in the audit trail.
+- **Cost and billing risks** on the overview: projects over or within 5% of
+  budget, pending change orders of 10% or more of a subcontract, and
+  subcontracts that missed the last closed period. Each is a rule with its
+  numbers and a link, not a model's judgement.
+
+How this compares with Procore's cost management, and what to build next:
+[docs/competitive/procore-cost-management.md](docs/competitive/procore-cost-management.md).
+
 ### Background work
 
 `src/server/jobs.ts`. A queue in the `jobs` table: `queued → running →
@@ -603,9 +631,10 @@ Status on 2026-11-17, `main`. The current phase is summarised in
 [docs/phase-3-report.md](docs/phase-3-report.md), the previous one in
 [docs/phase-2-report.md](docs/phase-2-report.md).
 
-**Verified by automated tests.** `pnpm test`: 493 passed, 3 skipped (the
+**Verified by automated tests.** `pnpm test`: 525 passed, 3 skipped (the
 skipped tests need a PostgreSQL server). `pnpm test:pg` on a throwaway
-PostgreSQL server: 496 passed. `pnpm typecheck` is clean and `pnpm build`
+PostgreSQL server: 496 passed (run before cost control and billing periods
+were added; not re-run since). `pnpm typecheck` is clean and `pnpm build`
 succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
 
 - Money parsing and rounding; every reconciliation check, including stepped
@@ -624,6 +653,13 @@ succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
   behind on failure, the job queue under concurrency and restart, role
   enforcement and tenant isolation.
 - The audit chain, including detection of an edited event.
+- Cost control and billing periods (`tests/cost-billing.test.ts`): budget
+  standing with pending change orders and deducts; which subcontracts are
+  expected, missing, due, fully billed or closed in each period, including
+  resubmissions, void and undated applications and closed projects; the
+  roll-up CSV built from approved records, its permission check and audit
+  entry; organisation isolation of the board and the roll-up; and the risks
+  the overview lists.
 - The mobile API (`tests/mobile.test.ts`): bearer sign-in and sign-out (the
   token is never read from a query string), the second step, organisation
   isolation, refusal of a member who owes their organisation two-step
@@ -739,6 +775,10 @@ were not available:**
 - **Payments are not tracked**, so "unconditional waiver for the previous
   payment" is a policy check, not a check against a payment.
 - **CSV export is generic**, not an import file for a specific accounting system.
+- **Budgets are one figure per project**, for subcontracted work, with no cost
+  codes, forecast to complete or cash-flow projection; billing periods are
+  calendar months. The roll-up gives the figures for an owner invoice but
+  does not produce the main contractor's own G702/G703.
 - **Lien waiver knowledge covers three states**, and only form recognition.
   Other states get completeness and consistency checks only.
 - Times are shown in the viewer's locale; billing dates are calendar dates
@@ -799,6 +839,7 @@ vercel.json              region and scheduled run for Vercel
 | [docs/mobile.md](docs/mobile.md) | The Android and iOS app: what it does, security, capture and offline drafts, phone approvals, building it, its API, sizes, what is verified |
 | [docs/authentication.md](docs/authentication.md) | Sign-in design, two-step verification, recovery, throttling, client addresses, the SSO evaluation |
 | [docs/extraction-evaluation.md](docs/extraction-evaluation.md) | Measuring reading accuracy, the truth format, the regression gate, synthetic results, the pilot protocol |
+| [docs/competitive/procore-cost-management.md](docs/competitive/procore-cost-management.md) | Procore's cost management as it markets it, how we compare, the gaps in order, and what was built in response |
 | [docs/conventions.md](docs/conventions.md) | Code conventions for contributors |
 | [docs/procore-api-notes.md](docs/procore-api-notes.md) | What the Procore integration relies on in Procore's public API |
 | [docs/procore-validation.md](docs/procore-validation.md) | The procedure for validating the Procore integration against a developer sandbox |

@@ -183,6 +183,8 @@ export const projects = pgTable(
     /** Two-letter US state; drives jurisdiction-specific waiver pre-screening. */
     state: text('state'),
     ownerName: text('owner_name'),
+    /** What the main contractor has set aside for this project's subcontracted work. Optional; compared with committed and pending changes. */
+    budget: cents('budget'),
     status: text('status').notNull().default('active'), // active | closed
     externalSource: text('external_source'),
     externalId: text('external_id'),

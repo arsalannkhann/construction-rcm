@@ -5,6 +5,7 @@ import type { DB } from '@/db';
 import { changeOrders, contracts, memberships, payApplications, projects, retainageReleases, sovLines, subcontractors, users } from '@/db/schema';
 import type { Ctx } from '@/server/auth/permissions';
 import { normaliseName } from '@/server/recon/text';
+import { costPosition } from './cost';
 import { OPEN_STATUSES } from '@/server/types';
 
 export async function listSubcontractors(db: DB, ctx: Ctx) {
@@ -40,6 +41,8 @@ export type ContractPosition = {
   approvedChangeOrders: number;
   /** Original amount plus approved change orders. */
   contractSum: number;
+  /** Net of the change orders still pending on the contract: exposure that is not committed yet. */
+  pendingChangeOrders: number;
   /** Payments approved so far: the approved amount of every approved application. */
   approvedToDate: number;
   /** Total completed and stored to date, per the latest approved application. */
@@ -58,10 +61,10 @@ async function loadPositions(db: DB, ctx: Ctx, rows: Array<{ id: string; origina
   if (rows.length === 0) return positions;
   const ids = rows.map((r) => r.id);
 
-  const approvedCos = await db
-    .select({ contractId: changeOrders.contractId, amount: changeOrders.amount })
+  const cos = await db
+    .select({ contractId: changeOrders.contractId, amount: changeOrders.amount, status: changeOrders.status })
     .from(changeOrders)
-    .where(and(eq(changeOrders.orgId, ctx.orgId), inArray(changeOrders.contractId, ids), eq(changeOrders.status, 'approved')));
+    .where(and(eq(changeOrders.orgId, ctx.orgId), inArray(changeOrders.contractId, ids), inArray(changeOrders.status, ['approved', 'pending'])));
 
   const approvedApps = await db
     .select({
@@ -95,7 +98,8 @@ async function loadPositions(db: DB, ctx: Ctx, rows: Array<{ id: string; origina
     : [];
 
   for (const row of rows) {
-    const approvedChangeOrders = sum(approvedCos.filter((c) => c.contractId === row.id).map((c) => c.amount));
+    const approvedChangeOrders = sum(cos.filter((c) => c.contractId === row.id && c.status === 'approved').map((c) => c.amount));
+    const pendingChangeOrders = sum(cos.filter((c) => c.contractId === row.id && c.status === 'pending').map((c) => c.amount));
     const contractSum = row.originalAmount + approvedChangeOrders;
     const last = latest.get(row.id) ?? null;
     const figures = last ? records.find((r) => r.id === last.id)?.record?.approved : undefined;
@@ -104,6 +108,7 @@ async function loadPositions(db: DB, ctx: Ctx, rows: Array<{ id: string; origina
       originalAmount: row.originalAmount,
       approvedChangeOrders,
       contractSum,
+      pendingChangeOrders,
       approvedToDate: sum(approvedApps.filter((a) => a.contractId === row.id).map((a) => a.approvedAmount)),
       completedStored: figures?.totalCompletedStored ?? 0,
       retainageHeld: last?.approvedRetainage ?? figures?.retainageTotal ?? 0,
@@ -128,11 +133,11 @@ export async function listProjects(db: DB, ctx: Ctx) {
     .select({ id: contracts.id, projectId: contracts.projectId, originalAmount: contracts.originalAmount })
     .from(contracts)
     .where(eq(contracts.orgId, ctx.orgId));
-  const approvedCos = await db
-    .select({ contractId: changeOrders.contractId, total: sql<number>`coalesce(sum(${changeOrders.amount}), 0)::bigint`.mapWith(Number) })
+  const cos = await db
+    .select({ contractId: changeOrders.contractId, status: changeOrders.status, total: sql<number>`coalesce(sum(${changeOrders.amount}), 0)::bigint`.mapWith(Number) })
     .from(changeOrders)
-    .where(and(eq(changeOrders.orgId, ctx.orgId), eq(changeOrders.status, 'approved')))
-    .groupBy(changeOrders.contractId);
+    .where(and(eq(changeOrders.orgId, ctx.orgId), inArray(changeOrders.status, ['approved', 'pending'])))
+    .groupBy(changeOrders.contractId, changeOrders.status);
   const approved = await db
     .select({ contractId: payApplications.contractId, total: sql<number>`coalesce(sum(${payApplications.approvedAmount}), 0)::bigint`.mapWith(Number) })
     .from(payApplications)
@@ -147,11 +152,15 @@ export async function listProjects(db: DB, ctx: Ctx) {
   return rows.map((p) => {
     const mine = contractRows.filter((c) => c.projectId === p.id);
     const contractIds = new Set(mine.map((c) => c.id));
+    const changes = (status: string) => sum(cos.filter((c) => c.status === status && contractIds.has(c.contractId)).map((c) => c.total));
+    const committed = sum(mine.map((c) => c.originalAmount)) + changes('approved');
     return {
       ...p,
       contracts: mine.length,
       /** Original contract amounts plus approved change orders. */
-      committed: sum(mine.map((c) => c.originalAmount)) + sum(approvedCos.filter((c) => contractIds.has(c.contractId)).map((c) => c.total)),
+      committed,
+      /** Budget, committed, pending change orders and what is left. */
+      cost: costPosition(p.budget, committed, changes('pending')),
       /** Payments approved so far across the project's subcontracts. */
       approvedToDate: sum(approved.filter((a) => a.contractId && contractIds.has(a.contractId)).map((a) => a.total)),
       /** Applications that are matched to this project and not yet decided. */
@@ -220,15 +229,17 @@ export async function getProjectDetail(db: DB, ctx: Ctx, id: string) {
     .orderBy(desc(payApplications.receivedAt))
     .limit(10);
 
+  const committed = sum(subcontracts.map((c) => c.contractSum));
   return {
     project,
     totals: {
       /** Contract sums to date: original amounts plus approved change orders. */
-      committed: sum(subcontracts.map((c) => c.contractSum)),
+      committed,
       approvedToDate: sum(subcontracts.map((c) => c.approvedToDate)),
       retainageHeld: sum(subcontracts.map((c) => c.retainageHeld)),
       balanceToFinish: sum(subcontracts.map((c) => c.balanceToFinish)),
     },
+    cost: costPosition(project.budget, committed, sum(subcontracts.map((c) => c.pendingChangeOrders))),
     contracts: subcontracts,
     applications,
   };

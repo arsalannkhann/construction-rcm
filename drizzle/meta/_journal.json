@@ -50,6 +50,13 @@
       "when": 1794785541717,
       "tag": "0006_scheduled_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794869256409,
+      "tag": "0007_project_budget",
+      "breakpoints": true
     }
   ]
 }
