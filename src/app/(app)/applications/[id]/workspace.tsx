@@ -196,7 +196,7 @@ export function ReviewWorkspace({ data, perms, extras }: { data: ReviewData; per
         <div className="flex min-h-0 flex-1">
           {viewerOpen ? (
             <section className="min-w-0 basis-[46%] border-r border-line" aria-label="Documents">
-              <DocumentViewer documents={data.documents} target={target} onNavigate={(spot) => show(spot)} canRemove={editable} />
+              <DocumentViewer documents={data.documents} target={target} onNavigate={(spot) => show(spot)} canRemove={editable} rereadFor={editable ? data.app.id : null} />
             </section>
           ) : null}
 

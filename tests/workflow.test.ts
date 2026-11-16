@@ -3,6 +3,7 @@
  * a PDF goes in, gets read, matched, reconciled, reviewed, approved, and
  * leaves an immutable record and an intact audit chain.
  */
+import Anthropic from '@anthropic-ai/sdk';
 import { eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { auditEvents, contracts, documents, findings, payAppLines, payApplications, sovLines } from '@/db/schema';
@@ -11,7 +12,7 @@ import { PermissionError, UserError } from '@/server/auth/permissions';
 import { buildSyntheticCorpus } from '@/server/samples/corpus';
 import { renderPackage, renderTextlessPdf } from '@/server/samples/pdf';
 import { defects, recompute } from '@/server/samples/scenario';
-import { createApplication, processApplication } from '@/server/services/intake';
+import { createApplication, processApplication, rereadPackage } from '@/server/services/intake';
 import { createChangeOrder, updateChangeOrder, updateContract } from '@/server/services/records';
 import {
   acceptFinding,
@@ -377,6 +378,41 @@ describe('a contract that was already under way', () => {
 });
 
 describe('documents that cannot be read automatically', () => {
+  it('stops AI reading in time to save the rest when the job is near its time limit, and says which document and why', async () => {
+    const w = await createWorld();
+    const { id } = await createApplication(w.db, w.accountant, { files: [{ filename: 'scan.pdf', bytes: await renderTextlessPdf() }], contractId: w.contractId, defer: true });
+    // A model call that only ends when it is stopped.
+    const hanging = {
+      beta: {
+        messages: {
+          stream: (_p: unknown, o?: { signal?: AbortSignal }) => ({
+            finalMessage: () => new Promise((_ok, fail) => o?.signal?.addEventListener('abort', () => fail(new Anthropic.APIUserAbortError()))),
+          }),
+        },
+      },
+    } as unknown as Pick<Anthropic, 'beta'>;
+    const started = Date.now();
+    // 20 seconds are kept back for saving; this leaves the read about a fifth of a second.
+    await processApplication(w.db, w.orgId, id, { finishBy: Date.now() + 20_200, extract: { ai: { configured: true, apiKey: 'test', model: 'm' }, claudeClient: hanging } });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect((await getApp(w, id)).status).toBe('needs_review');
+    const [doc] = await w.db.select().from(documents).where(eq(documents.payApplicationId, id));
+    expect(doc!.status).toBe('failed');
+    expect(doc!.statusDetail).toMatch(/AI extraction failed: the AI reading did not finish within the 1 second available and was stopped/);
+
+    // The reviewer asks for it to be read again; this time the read finishes (here: no AI, so the scan is plainly unreadable).
+    await expect(rereadPackage(w.db, w.viewer, id)).rejects.toBeInstanceOf(PermissionError);
+    await rereadPackage(w.db, w.accountant, id);
+    expect((await getApp(w, id)).status).toBe('processing');
+    await expect(rereadPackage(w.db, w.accountant, id)).rejects.toThrow(/already being read/);
+    const [event] = await w.db.select().from(auditEvents).where(eq(auditEvents.action, 'application.reread_requested'));
+    expect(event!.summary).toContain('“scan.pdf” was not fully read');
+    await processApplication(w.db, w.orgId, id, { extract: { ai: { configured: false } } });
+    expect((await getApp(w, id)).status).toBe('needs_review');
+    // Nothing left that a second read could improve.
+    await expect(rereadPackage(w.db, w.accountant, id)).rejects.toThrow(/nothing to read again/);
+  });
+
   it('says so, blocks approval, and supports keying by hand', async () => {
     const w = await createWorld();
     const { id } = await createApplication(w.db, w.accountant, { files: [{ filename: 'scan.pdf', bytes: await renderTextlessPdf() }], contractId: w.contractId, defer: true });

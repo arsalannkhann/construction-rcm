@@ -1,5 +1,5 @@
 /**
- * Runs the document-processing queue now, for up to REQUEST_BUDGET_MS.
+ * Runs the document-processing queue now, taking jobs for up to REQUEST_BUDGET_MS.
  *
  * On serverless hosting nothing runs between requests (src/server/jobs.ts), so
  * a scheduler calls this to pick up work nobody else has: a retry whose delay
@@ -12,7 +12,7 @@
  */
 import { getDb } from '@/db';
 import { bearerMatches } from '@/server/http';
-import { drain, queueHealth, recordScheduledRun, REQUEST_BUDGET_MS } from '@/server/jobs';
+import { drain, queueHealth, recordScheduledRun, requestLimits } from '@/server/jobs';
 import '@/server/services/intake'; // registers the job handler
 
 export const dynamic = 'force-dynamic';
@@ -25,7 +25,7 @@ export async function GET(request: Request) {
   if (!ok) return Response.json({ error: 'Not authorised.' }, { status: 401, headers });
   const db = await getDb();
   const startedAt = new Date();
-  const ran = await drain(db, { deadline: startedAt.getTime() + REQUEST_BUDGET_MS });
+  const ran = await drain(db, requestLimits(startedAt.getTime()));
   const { queued, running, failed } = await queueHealth(db);
   // Proof the scheduler called, which /api/health reports (Vercel Hobby keeps logs for an hour).
   await recordScheduledRun(db, { startedAt, finishedAt: new Date(), ran, queued, failed });

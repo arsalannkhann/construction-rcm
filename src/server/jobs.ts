@@ -37,7 +37,16 @@ import { afterCommit, outsideTransaction } from '@/db/tx';
 import { isInMemory, jobRunnerMode, type JobRunnerMode } from './config';
 import { newId, randomToken } from './ids';
 
-type Run = (db: DB, orgId: string, payload: Record<string, unknown>) => Promise<void>;
+/** What a job is told about the run it is part of. */
+export type JobRun = {
+  /**
+   * Epoch ms by which the job must have finished, when the platform will stop
+   * the server at a fixed time (request mode). Work that can be cut short, such
+   * as an AI read, should stop before then rather than be killed half-way.
+   */
+  finishBy?: number;
+};
+type Run = (db: DB, orgId: string, payload: Record<string, unknown>, run: JobRun) => Promise<void>;
 type Exhausted = (db: DB, orgId: string, payload: Record<string, unknown>, error: string) => Promise<void>;
 type Handler = { run: Run; onExhausted?: Exhausted };
 
@@ -63,6 +72,12 @@ const POLL_MS = 5 * 1000;
  * before the budget runs out still has 150 seconds to finish.
  */
 export const REQUEST_BUDGET_MS = 150 * 1000;
+/**
+ * In request mode, a job must be done this long after the runner started: the
+ * 300-second function limit, less time for the request that started the runner
+ * and for the job to record its outcome.
+ */
+export const REQUEST_RUN_LIMIT_MS = 270 * 1000;
 /** In request mode, a page view looks at the queue at most this often per instance. */
 const IDLE_KICK_MS = 15 * 1000;
 const KEEP_SUCCEEDED_MS = 7 * 24 * 60 * 60 * 1000;
@@ -99,20 +114,27 @@ function keepAlive(work: Promise<unknown>): void {
   }
 }
 
+/** For a runner started at `started` inside a time-limited request: when to stop taking jobs, and when every job must be done. */
+export function requestLimits(started: number): { deadline: number; finishBy: number } {
+  return { deadline: started + REQUEST_BUDGET_MS, finishBy: started + REQUEST_RUN_LIMIT_MS };
+}
+
 /** Start draining in the background if not already doing so. */
 export function kick(): void {
   if (g.__rcmDraining) {
     g.__rcmKickAgain = true;
     return;
   }
-  const deadline = jobRunnerMode() === 'request' ? Date.now() + REQUEST_BUDGET_MS : undefined;
+  const started = Date.now();
+  const limits: { deadline?: number; finishBy?: number } = jobRunnerMode() === 'request' ? requestLimits(started) : {};
+  const deadline = limits.deadline;
   // The runner must not inherit a caller's transaction.
   outsideTransaction(() => {
     g.__rcmDraining = (async () => {
       try {
         do {
           g.__rcmKickAgain = false;
-          await drain(await getDb(), { deadline });
+          await drain(await getDb(), limits);
         } while (g.__rcmKickAgain && (deadline === undefined || Date.now() < deadline));
       } catch (err) {
         console.error('[jobs] runner stopped with an error (it will start again on the next poll):', err);
@@ -151,7 +173,7 @@ async function giveUpOnAbandoned(db: DB): Promise<void> {
   const stale = new Date(Date.now() - LEASE_MS);
   const dead = await db
     .update(jobs)
-    .set({ status: 'failed', finishedAt: new Date(), error: `Stopped responding during attempt ${MAX_ATTEMPTS} of ${MAX_ATTEMPTS} (the server was probably restarted mid-run).` })
+    .set({ status: 'failed', finishedAt: new Date(), error: `Stopped responding during attempt ${MAX_ATTEMPTS} of ${MAX_ATTEMPTS} (the server was stopped mid-run: restarted, or past the hosting time limit).` })
     .where(and(eq(jobs.status, 'running'), lt(jobs.startedAt, stale), gte(jobs.attempts, MAX_ATTEMPTS)))
     .returning();
   for (const job of dead) await exhausted(db, job, job.error ?? 'Abandoned');
@@ -192,9 +214,10 @@ async function exhausted(db: DB, job: Job, error: string): Promise<void> {
 /**
  * Run queued jobs until none are runnable, or until `deadline` (epoch ms) has
  * passed: then no new job is taken and the rest wait for the next drain.
+ * `finishBy` (epoch ms) is passed to each job: when it must be done.
  * Returns how many ran.
  */
-export async function drain(db: DB, opts: { deadline?: number } = {}): Promise<number> {
+export async function drain(db: DB, opts: { deadline?: number; finishBy?: number } = {}): Promise<number> {
   g.__rcmRunnerActivity = Date.now();
   let ran = 0;
   await giveUpOnAbandoned(db);
@@ -212,7 +235,7 @@ export async function drain(db: DB, opts: { deadline?: number } = {}): Promise<n
     heartbeat.unref();
     try {
       if (!handler) throw new Error(`No handler registered for job type "${job.type}"`);
-      await handler.run(db, job.orgId, job.payload);
+      await handler.run(db, job.orgId, job.payload, { finishBy: opts.finishBy });
       await db.update(jobs).set({ status: 'succeeded', finishedAt: new Date(), error: null }).where(eq(jobs.id, job.id));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
