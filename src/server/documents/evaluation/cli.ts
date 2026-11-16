@@ -9,6 +9,7 @@
  *   --real-dir <dir>           where the real corpus lives (default: eval/real)
  *   --dump-synthetic <dir>     write the synthetic corpus to <dir> as files, to look at
  *   --no-gate                  do not apply the synthetic regression gate
+ *   --concurrency <n>          read n files at once (default 1; useful with --engine claude)
  *
  * Exit codes: 0 ok · 1 the synthetic regression gate failed · 2 usage error, missing API key, or a broken truth file.
  */
@@ -32,12 +33,12 @@ export type CliDeps = {
   now?: Date;
 };
 
-const USAGE = 'Usage: pnpm eval:extraction [--set synthetic|real|all] [--engine text|claude|auto] [--json <file>] [--verbose] [--case <text>] [--real-dir <dir>] [--dump-synthetic <dir>] [--no-gate]';
+const USAGE = 'Usage: pnpm eval:extraction [--set synthetic|real|all] [--engine text|claude|auto] [--json <file>] [--verbose] [--case <text>] [--real-dir <dir>] [--dump-synthetic <dir>] [--no-gate] [--concurrency <n>]';
 
-type Args = { set: 'synthetic' | 'real' | 'all'; engine: EngineChoice; json: string | null; verbose: boolean; filter: string | null; realDir: string | null; dump: string | null; gate: boolean };
+type Args = { set: 'synthetic' | 'real' | 'all'; engine: EngineChoice; json: string | null; verbose: boolean; filter: string | null; realDir: string | null; dump: string | null; gate: boolean; concurrency: number };
 
 function parseArgs(argv: string[]): Args | string {
-  const a: Args = { set: 'all', engine: 'text', json: null, verbose: false, filter: null, realDir: null, dump: null, gate: true };
+  const a: Args = { set: 'all', engine: 'text', json: null, verbose: false, filter: null, realDir: null, dump: null, gate: true, concurrency: 1 };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     const value = () => {
@@ -60,6 +61,11 @@ function parseArgs(argv: string[]): Args | string {
       else if (arg === '--real-dir') a.realDir = value();
       else if (arg === '--dump-synthetic') a.dump = value();
       else if (arg === '--no-gate') a.gate = false;
+      else if (arg === '--concurrency') {
+        const n = Number(value());
+        if (!Number.isInteger(n) || n < 1 || n > 16) return '--concurrency must be a whole number from 1 to 16.';
+        a.concurrency = n;
+      }
       else if (arg === '--help' || arg === '-h') return USAGE;
       else return `Unknown option ${arg}.\n${USAGE}`;
     } catch (err) {
@@ -101,7 +107,7 @@ export async function runCli(argv: string[], io: CliIo = { out: (s) => process.s
   const realDir = path.resolve(root, args.realDir ?? 'eval/real');
   const commit = commitOf(root);
   const now = deps.now ?? new Date();
-  const run = { engine: args.engine, ai, claudeClient: deps.claudeClient };
+  const run = { engine: args.engine, ai, claudeClient: deps.claudeClient, concurrency: args.concurrency };
 
   let synthetic: CorpusResult | undefined;
   if (wantSynthetic) {

@@ -14,8 +14,8 @@
  */
 import type { ExtractOutcome } from '@/server/documents/extract';
 import { printedPageGaps, type NumberingGap } from '@/server/documents/integrity';
-import { CLAIMED_FIELDS, DEFAULT_ORG_SETTINGS, LINE_AMOUNT_FIELDS, type ExtractedLine, type ExtractedWaiver, type ExtractionResult, type LineAmountField } from '@/server/types';
-import { expectedOutcome, matchesAbstain, type Flag, type Outcome, type Truth, type TruthLine, type TruthWaiver } from './truth';
+import { CLAIMED_FIELDS, DEFAULT_ORG_SETTINGS, LINE_AMOUNT_FIELDS, type AiUsage, type ExtractedLine, type ExtractedWaiver, type ExtractionResult, type LineAmountField } from '@/server/types';
+import { expectedFlags, expectedOutcome, matchesAbstain, type Flag, type Outcome, type Truth, type TruthLine, type TruthWaiver } from './truth';
 
 export const HIGH_CONFIDENCE = DEFAULT_ORG_SETTINGS.lowConfidenceThreshold;
 
@@ -58,6 +58,8 @@ export type CaseScore = {
   knownLimitation: string | null;
   notes: string[];
   durationMs: number;
+  /** Tokens used, when the AI read the file. */
+  usage: AiUsage | null;
 };
 
 // ── Comparing values ────────────────────────────────────────────────────────
@@ -296,8 +298,8 @@ export function scoreCase(input: { caseId: string; file: string; truth: Truth; o
   scoreWaivers(ctx, truth.waivers, r?.waivers);
 
   const expected = expectedOutcome(truth, input.engineKey);
-  const flags = (truth.expect?.flags ?? []).map((f) => checkFlag(f, outcome));
-  const wantFlags = new Set(truth.expect?.flags ?? []);
+  const flags = expectedFlags(truth, input.engineKey).map((f) => checkFlag(f, outcome));
+  const wantFlags = new Set(expectedFlags(truth, input.engineKey));
   const unexpectedConflicts = (r?.conflicts ?? []).filter((c) => !wantFlags.has(CONFLICT_FLAG[c.kind]!)).map((c) => `${c.kind} (${c.field})`);
   const allNotes = [...(r?.notes ?? []), ...(outcome.detail ? [outcome.detail] : [])];
   const notePatterns = (truth.expect?.notes ?? []).map((pattern) => ({ pattern, met: allNotes.some((n) => new RegExp(pattern, 'i').test(n)) }));
@@ -318,6 +320,7 @@ export function scoreCase(input: { caseId: string; file: string; truth: Truth; o
     knownLimitation: truth.expect?.knownLimitation ?? null,
     notes: allNotes,
     durationMs: outcome.durationMs,
+    usage: r?.usage ?? null,
   };
 }
 

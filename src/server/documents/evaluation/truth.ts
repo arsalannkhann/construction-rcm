@@ -119,8 +119,11 @@ export const Truth = z
       .object({
         /** What the reader should report for the file as a whole. Either one outcome, or one per engine (`text-layer`, `claude`). Default: processed. */
         outcome: z.union([z.enum(OUTCOMES), z.record(z.string(), z.enum(OUTCOMES))]).optional(),
-        /** Conditions the reader's result must make visible. */
-        flags: z.array(z.enum(FLAGS)).optional(),
+        /**
+         * Conditions the reader's result must make visible. Either one list, or one per engine (`text-layer`,
+         * `claude`): a scanned page is unreadable to the text reader, while the AI reads it.
+         */
+        flags: z.union([z.array(z.enum(FLAGS)), z.record(z.string(), z.array(z.enum(FLAGS)))]).optional(),
         /**
          * Field paths where the right behaviour for a reader is to decline (null or low
          * confidence), e.g. an amount whose format is ambiguous. `*` matches any key or index:
@@ -155,6 +158,12 @@ export function expectedOutcome(truth: Truth, engine: string): Outcome {
   if (!o) return 'processed';
   if (typeof o === 'string') return o;
   return o[engine] ?? 'processed';
+}
+
+export function expectedFlags(truth: Truth, engine: string): Flag[] {
+  const f = truth.expect?.flags;
+  if (!f) return [];
+  return Array.isArray(f) ? f : (f[engine] ?? []);
 }
 
 /** Does `path` (like `lines.3.thisPeriod`) match one of the `abstain` patterns? */

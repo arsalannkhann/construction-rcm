@@ -15,6 +15,7 @@
     "reset-password": "tsx scripts/reset-password.ts",
     "samples": "tsx scripts/generate-samples.ts",
     "eval:extraction": "tsx scripts/eval-extraction.ts",
+    "ai:key": "tsx scripts/set-anthropic-key.ts",
     "postinstall": "node scripts/copy-pdf-worker.mjs",
     "test:pg": "vitest run --config vitest.pg.config.mts",
     "db:supabase": "tsx scripts/sync-supabase-migrations.ts",

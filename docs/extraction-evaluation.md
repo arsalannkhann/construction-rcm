@@ -24,7 +24,8 @@ not mean.
 ```bash
 pnpm eval:extraction --set synthetic --engine text     # the gate, as CI runs it
 pnpm eval:extraction --set real --engine text          # your real documents
-pnpm eval:extraction --set real --engine claude        # needs ANTHROPIC_API_KEY
+pnpm eval:extraction --set real --engine claude        # needs ANTHROPIC_API_KEY (pnpm ai:key)
+pnpm eval:extraction --set synthetic --engine claude --concurrency 6   # the AI reader, 6 files at a time (~$10)
 pnpm eval:extraction --set all --json out.json         # both, plus machine-readable output
 pnpm eval:extraction --case g703/ --verbose            # some cases, every miss listed (no gate)
 pnpm eval:extraction --set synthetic --dump-synthetic samples/out/eval-synthetic   # look at the files
@@ -63,7 +64,7 @@ What a truth file holds:
 | `waivers` | One entry per lien waiver, with its page. `exceptions` is a list of distinctive parts of each exception, or `null` for none. |
 | `pageNumbering` | Every "page x of y" marking printed in the file. |
 | `expect.outcome` | `processed` (default), `unreadable` or `failed`; or one per engine. |
-| `expect.flags` | Conditions the reader must surface: `missing_page`, `total_conflict`, `application_number_conflict`, `second_pay_application`, `unreadable_page`. |
+| `expect.flags` | Conditions the reader must surface: `missing_page`, `total_conflict`, `application_number_conflict`, `second_pay_application`, `unreadable_page`. One list, or one per engine (a scan is `unreadable_page` to the text reader only: the AI reads it, and its values are scored instead). |
 | `expect.abstain` | Fields where the right answer is to decline (e.g. an amount whose number format is ambiguous). `*` matches any key or index. |
 | `expect.notes` | Patterns that must appear in the reader's notes. |
 | `expect.knownLimitation` | A limitation this case pins, in words. Misses still count. |
@@ -99,8 +100,13 @@ reconciliation in integer cents. When the file has a text layer, the AI
 reader's printed grand total is checked against the text layer's, and its page
 numbering and conflicts come from the text layer.
 
-The Claude engine has **not been measured** on the synthetic corpus in this
-repository (no API key in the environment where these numbers were produced).
+The Claude engine reads each file in two structured requests that run side by
+side: one for the page types, the G702 summary and the lien waivers, one for the
+schedule rows and grand total. The API refuses the whole schema in one request
+("The compiled grammar is too large"), so it is split; the halves are joined
+before any checking. The model's own "medium" confidence maps to 0.6, below the
+review threshold, so a value it was unsure of is always shown to a person.
+Measured results are in section 7.
 
 ## 5. Reading the report
 
@@ -131,6 +137,11 @@ Schedule rows are matched to the truth first; an unmatched truth row counts as
 declined for every column, and a row read that is not on the sheet (a subtotal
 taken for a line) counts as dangerous.
 
+For the AI reader the header also gives the read time per file (median, 90th
+percentile, longest) and the tokens used, with an estimate in dollars at list
+price (the invoice is what counts). The JSON output carries the same per corpus
+(`cost`) and per file (`durationMs`, `usage`).
+
 **Calibration** lists, per confidence band, how many reported values were
 right. A reader is well calibrated when its high bands are right and its doubts
 are concentrated below 0.75.
@@ -141,8 +152,8 @@ miss.
 
 ## 6. The regression gate
 
-`eval/synthetic/gate.json` holds the thresholds per engine key (today only
-`text-layer`):
+`eval/synthetic/gate.json` holds the thresholds per engine key, `text-layer`
+and `claude`:
 
 - `maxConfidentlyWrong`: **0**. Never raise it.
 - `min`: floors for page type, G702 amounts, identifying fields, row recall,
@@ -150,8 +161,12 @@ miss.
   measured values below.
 
 The CLI applies the gate on a full synthetic run (not with `--case`), and
-`tests/eval-synthetic.test.ts` applies it in `pnpm test`, alongside pinned
-tests for the known limitations in section 8. When the reader improves, raise
+`tests/eval-synthetic.test.ts` applies the text-layer gate in `pnpm test`,
+alongside pinned tests for the known limitations in section 8. The `claude`
+gate applies to `--engine claude` runs, which call the API and are not part of
+`pnpm test`. Its floors sit about one point below the two measured runs,
+because the model does not answer identically every time; its
+`maxConfidentlyWrong` is 0 like the other's. When the reader improves, raise
 the floors to the new measurement in the same commit. Lowering a floor needs a
 reason in the commit message.
 
@@ -198,6 +213,75 @@ The 100 confidently wrong values before, by cause, and what changed:
 
 Each fix is a rule about the layout, not a match on generated strings.
 
+### The AI reader (Claude)
+
+**SYNTHETIC.** Claude engine (`claude-opus-5-5`, adaptive thinking, effort
+high), the same 65 files and 177 pages, measured on 2026-11-17 on top of commit
+`895c38d` with this change, 6 files at a time. "Before" is the first live run,
+with the reader as it was when the API key was first set (after splitting the
+request in two, without which every AI read failed); "after" is the reader as
+committed, measured twice to see how much a rerun varies.
+
+| | Before | After, run 1 | After, run 2 |
+|---|---:|---:|---:|
+| **Confidently wrong** | **4** | **0** | **0** |
+| Wrong but flagged (safe) | 21 | 2 | 2 |
+| Declined (safe) | 238 | 238 | 217 |
+| Document type, per page | 100% | 100% | 100% |
+| G702 amounts, to the cent | 97.7% | 97.7% | 97.7% |
+| G702 identifying fields | 100% | 100% | 100% |
+| Schedule rows: recall / precision | 100% / 99.0% | 100% / 100% | 100% / 100% |
+| Schedule cells | 95.4% | 95.4% | 95.8% |
+| Schedule grand totals | 97.9% | 97.9% | 97.9% |
+| Lien waiver fields | 99.8% | 99.8% | 99.8% |
+| Waiver exceptions reported where none is filled in | 18 | 0 | 0 |
+| Expected flags raised | 4/8 | 4/4 | 4/4 |
+| Expected notes present | 0/1 | 1/1 | 1/1 |
+| Conflicts reported that the truth does not expect | 0 | 0 | 0 |
+| Reader notes per file | 8.5 | 1.8 | 1.7 |
+| Read time per file: median / 90th pct / longest | 19.4 / 29.4 / 42.5 s | 17.5 / 27.0 / 33.2 s | 17.3 / 26.1 / 37.3 s |
+| Cost at list price, per file | $0.149 | $0.145 | $0.145 |
+
+Run 2 is the code as committed; run 1 lacked only the reading of a dash as zero
+(below). The flag expectations went from 8 to 4 because a scanned page is no
+longer expected to be reported unreadable by the AI reader, which reads it
+(section 2, `expect.flags`); its values are scored instead.
+
+Calibration, run 2: every value reported at 0.75 or above was right (6,480 of
+6,480). 178 values (2.7% of those reported) were below the review threshold,
+so a person checks them; 176 of those were right.
+
+What is left, run 2: of the 217 declined values, 214 are the European-format
+amounts (declined by design, as for the text reader), one is a waiver amount
+printed only in words (declined by design), and two are the figures of the
+handwritten-correction case, which the model calls illegible and leaves for a
+person. The two flagged
+values are change-order item numbers on the 72 dpi noisy scan, read "CC-1" and
+"CC-2" for "CO-1" and "CO-2", at confidence 0.6.
+
+What changed between "before" and "after", by cause:
+
+| Cause (before) | Values | Change |
+|---|---:|---|
+| The model's "medium" confidence mapped to 0.75, the review threshold itself, so values it was unsure of were not shown to anyone. Medium values were right 79% of the time, against 99.9% for "high". | — | "medium" is 0.6. The two scan misreads (0.95 and 0.75 before) are now flagged at 0.6, and the prompt asks for medium whenever a look-alike character is in doubt on a scan. |
+| A file with two pay applications: the second application's schedule rows were listed with the first's | 5 (2 at high confidence) | The prompt asks for the first application only, and the code keeps only the schedule rows before the second application starts, as the text reader does. A second application is raised as a conflict from the AI's own page segments, so a scan with two applications is caught too. |
+| The form's standard printed wording (the Texas "except for unpaid retention…", California's "This document does not affect…") reported as waiver exceptions | 18 (flagged) | The prompt and schema say what an exception is and is not, with those examples. |
+| A dash printed for zero on the schedule read as a blank | 21 (declined) | A lone dash is read as zero, as the text reader does; the model is told to report the dash rather than leave the cell empty. |
+| Notes that described the file, or mentioned how the reading is split ("as instructed", "in this pass") | 29 such notes | Notes are for problems a reviewer must check, one sentence each. |
+
+Two related changes that the corpus does not measure: on a scanned page inside
+an otherwise text PDF, an amount is no longer doubted just because the page has
+no text to find it in; and a summary amount the text reader read identically is
+no longer doubted when its printed form (a dash) cannot be located. A file
+read entirely from images gets a note saying nothing could be cross-checked.
+
+The same reader, run through the application on a local server with a scratch
+database on 2026-11-17: the standard Texas package (PDF) and the photographed
+G702 (PNG) uploaded through the mobile API were read by `claude` /
+`claude-opus-5-5` in 22.5 s and 12.9 s, with application number, period,
+subcontractor, claimed amount, contract sum, retainage and balance equal to the
+generator's figures.
+
 ## 8. Known limitations (pinned in tests)
 
 All of these are safe: the reader declines or reports below the review
@@ -206,10 +290,13 @@ affected.
 
 - **Handwritten corrections.** The text layer still carries the printed figure.
   The text reader keeps it at confidence ≤ 0.5 with the note "an image is drawn
-  over the printed …". Reading the ink needs the AI reader.
-- **Scans, photos, and scanned pages inside a text PDF** (251 values declined,
-  1 flagged). Nothing without a text layer is read; such pages are reported as
-  unreadable and must be keyed by hand.
+  over the printed …". The AI reader, on the synthetic case, calls the
+  handwriting illegible, leaves both figures blank and says so in a note.
+- **Scans, photos, and scanned pages inside a text PDF** (text reader: 251
+  values declined, 1 flagged). Nothing without a text layer is read by the text
+  reader; such pages are reported as unreadable and must be keyed by hand. The
+  AI reader reads them, with nothing to cross-check against: on the 72 dpi
+  noisy scan it misread two item numbers, both flagged.
 - **European number formats** (298 declined, by design). `1.234,56` is never
   guessed at.
 - **Ink signatures and unsigned forms** are reported as *unclear*, never as

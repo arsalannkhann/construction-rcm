@@ -341,7 +341,11 @@ export type ExtractionResult = {
   conflicts?: ExtractionConflict[];
   /** Pages of the file with no machine-readable text (blank, or a scanned image) that this engine could not read. */
   unreadablePages?: number[];
+  /** Tokens the AI read used, for cost tracking. Absent for the text-layer reader. */
+  usage?: AiUsage;
 };
+
+export type AiUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
 
 export type Evidence = {
   documentId: string;

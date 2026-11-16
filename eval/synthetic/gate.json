@@ -12,5 +12,19 @@
       "flags": 1,
       "outcomes": 1
     }
+  },
+  "claude": {
+    "maxConfidentlyWrong": 0,
+    "min": {
+      "pageType": 0.99,
+      "header": 0.97,
+      "identity": 0.99,
+      "lineRecall": 0.99,
+      "lineCells": 0.95,
+      "lineTotal": 0.97,
+      "waiver": 0.99,
+      "flags": 1,
+      "outcomes": 1
+    }
   }
 }
