@@ -63,7 +63,8 @@
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION"
-      ]
+      ],
+      "versionCode": 1
     },
     "plugins": [
       "expo-router",
@@ -86,9 +87,6 @@
         "expo-build-properties",
         {
           "android": {
-            "compileSdkVersion": 36,
-            "targetSdkVersion": 36,
-            "buildToolsVersion": "36.0.0",
             "enableMinifyInReleaseBuilds": true,
             "enableShrinkResourcesInReleaseBuilds": true,
             "enablePngCrunchInReleaseBuilds": true,
@@ -111,7 +109,9 @@
             "backgroundColor": "#070d1a"
           }
         }
-      ]
+      ],
+      "./plugins/with-lean-android",
+      "./plugins/with-release-signing"
     ],
     "experiments": {
       "typedRoutes": false

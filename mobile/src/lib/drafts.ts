@@ -83,6 +83,10 @@ function load(): Draft[] {
       const d = JSON.parse(meta.textSync()) as Draft;
       // A send interrupted by the app closing picks up again from where it was.
       if (d.status === 'sending') d.status = 'queued';
+      // iOS moves the app's data folder when the app is updated, so a stored
+      // absolute path goes stale. Every file lives in its draft's folder under
+      // its own generated name; point each one there again.
+      d.files = d.files.map((f) => ({ ...f, path: new File(entry, f.path.split('/').pop() ?? '').uri }));
       out.push(d);
     } catch {
       /* An unreadable draft.json is left on disk, not deleted: its files may still matter. */

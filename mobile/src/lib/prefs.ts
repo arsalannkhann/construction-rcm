@@ -13,7 +13,10 @@ export type Prefs = {
   biometric: boolean;
 };
 
-const DEFAULT_SERVER = String((Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl ?? 'https://zephric.vercel.app');
+const extra = (Constants.expoConfig?.extra ?? {}) as { apiUrl?: string; localTestBuild?: boolean };
+const DEFAULT_SERVER = String(extra.apiUrl ?? 'https://zephric.vercel.app');
+/** The local test variant (mobile/app.config.js), never a distributed build. */
+const LOCAL_TEST_BUILD = extra.localTestBuild === true;
 
 const defaults: Prefs = { theme: 'system', server: DEFAULT_SERVER, biometric: false };
 
@@ -51,7 +54,8 @@ export const defaultServer = DEFAULT_SERVER;
 
 /**
  * A server address someone typed. Release builds talk only to https; a
- * development build may also use a computer on the local network.
+ * development build may also use a computer on the local network, and the
+ * local test variant the phone's own localhost (forwarded by adb reverse).
  */
 export function normalizeServer(input: string): string | null {
   let value = input.trim().replace(/\/+$/, '');
@@ -64,7 +68,8 @@ export function normalizeServer(input: string): string | null {
     return null;
   }
   const local = /^(localhost|127\.0\.0\.1|10\.0\.2\.2|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)$/.test(url.hostname);
-  if (url.protocol === 'http:' && !(__DEV__ && local)) return null;
+  const loopback = /^(localhost|127\.0\.0\.1)$/.test(url.hostname);
+  if (url.protocol === 'http:' && !((__DEV__ && local) || (LOCAL_TEST_BUILD && loopback))) return null;
   if (url.pathname !== '/' && url.pathname !== '') return null;
   return `${url.protocol}//${url.host}`;
 }
