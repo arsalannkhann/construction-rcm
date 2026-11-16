@@ -4,8 +4,8 @@
  * approved. Runs against a real (in-memory) Postgres.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import { createChangeOrder, parseScheduleText, saveSchedule } from '@/server/services/records';
-import { getContractDetail, getProjectDetail, listProjectOptions, listProjects, listSubcontractorOptions } from '@/server/services/records-queries';
+import { createChangeOrder, createSubcontractor, parseScheduleText, saveSchedule } from '@/server/services/records';
+import { getContractDetail, getMatchingDraft, getProjectDetail, listProjectOptions, listProjects, listSubcontractorOptions } from '@/server/services/records-queries';
 import { approveApplication, setOpeningBalances } from '@/server/services/review';
 import { createWorld, dollars as D, packageFor, stateAfter, submit, type World } from './helpers/world';
 
@@ -86,6 +86,28 @@ describe('reading a pasted schedule of values', () => {
       { itemNo: '5', description: 'Fixtures and trim', scheduledValue: D(150000) },
     ]);
     expect(problems).toEqual(['Row 2: “TBD” is not an amount.', 'Row 3: expected an item number, a description and a value.', 'Row 4: missing a description.']);
+  });
+
+  it('leaves out a total row that matches the lines, and says so when it does not', () => {
+    const lines = [
+      { itemNo: '1', description: 'Mobilization', scheduledValue: D(24000) },
+      { itemNo: '2', description: 'Ductwork - Level 1', scheduledValue: D(156000) },
+      { itemNo: '3', description: 'Rooftop units', scheduledValue: D(300000) },
+    ];
+    const rows = ['Item\tDescription\tScheduled Value', '1\tMobilization\t$24,000.00', '2\tDuctwork - Level 1\t$156,000.00', '3\tRooftop units\t$300,000.00'];
+    // The ways a spreadsheet's last row is usually laid out.
+    for (const total of ['\tTOTAL\t$480,000.00', 'Total\t\t480,000.00', 'Grand Total:\t480000', '\tTotal contract sum\t$480,000.00', ',Total,"480,000.00"']) {
+      expect(parseScheduleText([...rows, total].join('\n')), total).toEqual({ lines, problems: [] });
+    }
+    // Subtotals between sections are left out too; the grand total still checks.
+    expect(parseScheduleText(['1\tMobilization\t24,000', '2\tDuctwork - Level 1\t156,000', '\tSubtotal\t180,000', '3\tRooftop units\t300,000', '\tSub-total\t300,000', '\tGrand total\t480,000'].join('\n'))).toEqual({ lines, problems: [] });
+
+    const wrong = parseScheduleText([...rows, '\tTOTAL\t$500,000.00'].join('\n'));
+    expect(wrong.lines).toEqual(lines);
+    expect(wrong.problems).toEqual(['Row 5: the total row says $500,000.00, but the rows above add up to $480,000.00. It was left out; check the rows.']);
+
+    // A line of work whose name only starts with the word is a line.
+    expect(parseScheduleText('7\tTotal station layout\t4,500.00').lines).toEqual([{ itemNo: '7', description: 'Total station layout', scheduledValue: D(4500) }]);
   });
 
   it('returns nothing, and no complaint, for empty text', () => {
@@ -304,5 +326,48 @@ describe('a contract that was already under way', () => {
     await approveApplication(w.db, w.controller, app.id);
     const after = (await getContractDetail(w.db, w.viewer, w.contractId))!;
     expect(after.position).toMatchObject({ approvedToDate: D(103500), completedStored: D(225000), retainageHeld: D(22500), earnedLessRetainage: D(202500), balanceToFinish: D(297500) });
+  });
+});
+
+describe('setting up a subcontract from a package that could not be matched', () => {
+  it('offers what the package states, matched to records on file, and nothing for anyone else', async () => {
+    const w = await createWorld();
+    // A package from a subcontractor and job that are not on file yet.
+    const unmatched = await submit(
+      w,
+      packageFor(w, 0, null, (p) => {
+        p.sub.name = 'Pecos Drywall, Inc.';
+        p.project = { ...p.project, name: 'Cedar Park Clinic', number: '2417' };
+        p.contract.number = 'SC-2417-09';
+      }),
+    );
+    expect(unmatched.status).toBe('needs_matching');
+
+    const draft = await getMatchingDraft(w.db, w.accountant, unmatched.id);
+    expect(draft).toMatchObject({
+      appId: unmatched.id,
+      title: 'Pecos Drywall, Inc. · Application #1',
+      contractorName: 'Pecos Drywall, Inc.',
+      projectName: 'Cedar Park Clinic',
+      projectNumber: '2417',
+      contractNumber: 'SC-2417-09',
+      projectId: null,
+      subcontractorId: null,
+    });
+    // Only identifiers: never an amount or a rate to copy into the subcontract.
+    expect(Object.keys(draft!).sort()).toEqual(['appId', 'contractNumber', 'contractorName', 'projectId', 'projectName', 'projectNumber', 'subcontractorId', 'title']);
+
+    // Once the subcontractor is on file (spelt a little differently), it is recognised.
+    const subId = await createSubcontractor(w.db, w.accountant, { name: 'Pecos Drywall Inc', trade: 'Drywall', contactName: null, contactEmail: null, phone: null, address: null });
+    expect((await getMatchingDraft(w.db, w.accountant, unmatched.id))!.subcontractorId).toBe(subId);
+
+    // Another organisation, a matched application or an unknown id gives nothing.
+    const other = await createWorld();
+    expect(await getMatchingDraft(other.db, other.accountant, unmatched.id)).toBeNull();
+    const matched = await submit(w, packageFor(w, 0, null), { filename: 'matched.pdf' });
+    expect(matched.status).not.toBe('needs_matching');
+    expect(await getMatchingDraft(w.db, w.accountant, matched.id)).toBeNull();
+    expect(await getMatchingDraft(w.db, w.accountant, 'pa_doesnotexist')).toBeNull();
+    expect(await getMatchingDraft(w.db, w.accountant, null)).toBeNull();
   });
 });

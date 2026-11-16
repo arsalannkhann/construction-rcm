@@ -5,10 +5,10 @@
  */
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { DB } from '@/db';
-import { changeOrders, contracts, findings, memberships, payApplications, projects, subcontractors, users } from '@/db/schema';
+import { changeOrders, contracts, findings, memberships, organizations, payApplications, projects, subcontractors, users } from '@/db/schema';
 import type { Ctx } from '@/server/auth/permissions';
 import type { AppStatus, FindingCategory } from '@/server/types';
-import { FINDING_CATEGORIES } from '@/server/types';
+import { FINDING_CATEGORIES, resolveSettings } from '@/server/types';
 
 const OPEN: AppStatus[] = ['needs_matching', 'needs_review', 'pending_approval', 'on_hold'];
 const DAY = 86_400_000;
@@ -57,6 +57,7 @@ export async function getDashboard(db: DB, ctx: Ctx, now: Date = new Date()) {
     .from(memberships)
     .innerJoin(users, eq(users.id, memberships.userId))
     .where(and(eq(memberships.orgId, ctx.orgId), eq(memberships.status, 'active')));
+  const [org] = await db.select({ settings: organizations.settings }).from(organizations).where(eq(organizations.id, ctx.orgId));
 
   const live = apps.filter((a) => a.status !== 'void');
   const open = live.filter((a) => (OPEN as string[]).includes(a.status));
@@ -194,7 +195,7 @@ export async function getDashboard(db: DB, ctx: Ctx, now: Date = new Date()) {
   const awaitingTransfer = approved.filter((a) => a.transferStatus === 'none' || a.transferStatus === 'failed');
 
   return {
-    setup: { projects: projectRows.length, contracts: contractRows.length, applications: live.length, members: members.length, approved: approved.length },
+    setup: { projects: projectRows.length, contracts: contractRows.length, applications: live.length, members: members.length, approved: approved.length, requireMfa: resolveSettings(org?.settings).requireMfa },
     kpis: {
       awaitingReview: group(open.filter((a) => a.status === 'needs_review' || a.status === 'needs_matching')),
       pendingApproval: group(open.filter((a) => a.status === 'pending_approval')),

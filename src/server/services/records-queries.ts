@@ -4,6 +4,7 @@ import { sum } from '@/lib/money';
 import type { DB } from '@/db';
 import { changeOrders, contracts, memberships, payApplications, projects, retainageReleases, sovLines, subcontractors, users } from '@/db/schema';
 import type { Ctx } from '@/server/auth/permissions';
+import { normaliseName } from '@/server/recon/text';
 import { OPEN_STATUSES } from '@/server/types';
 
 export async function listSubcontractors(db: DB, ctx: Ctx) {
@@ -391,4 +392,57 @@ export async function listSubcontractorOptions(db: DB, ctx: Ctx) {
     .from(subcontractors)
     .where(eq(subcontractors.orgId, ctx.orgId))
     .orderBy(asc(subcontractors.name));
+}
+
+// ── Setting up a subcontract from an unmatched package ──────────────────────
+
+export type MatchingDraft = {
+  appId: string;
+  /** "Lone Star Electric, LLC · Application #1" */
+  title: string;
+  contractorName: string | null;
+  projectName: string | null;
+  projectNumber: string | null;
+  contractNumber: string | null;
+  /** Existing records that match what the package states, if any. */
+  projectId: string | null;
+  subcontractorId: string | null;
+};
+
+/**
+ * What an application that could not be matched says about who sent it and
+ * for which job, so its subcontract can be set up from it. Only identifiers
+ * are offered: amounts and retainage must come from the subcontract itself,
+ * or the application would be checked against its own figures. Null unless
+ * the application is in this organisation and still waiting for a match.
+ */
+export async function getMatchingDraft(db: DB, ctx: Ctx, appId: string | null | undefined): Promise<MatchingDraft | null> {
+  if (!appId) return null;
+  const [app] = await db
+    .select({ id: payApplications.id, status: payApplications.status, contractId: payApplications.contractId, stated: payApplications.stated, applicationNumber: payApplications.applicationNumber })
+    .from(payApplications)
+    .where(and(eq(payApplications.orgId, ctx.orgId), eq(payApplications.id, appId)));
+  if (!app || app.contractId || app.status !== 'needs_matching') return null;
+  const stated = app.stated;
+  const clean = (s: string | null | undefined) => (s?.trim() ? s.trim() : null);
+  const contractorName = clean(stated?.contractorName);
+  const projectName = clean(stated?.projectName);
+  const projectNumber = clean(stated?.projectNumber);
+
+  const [projectOptions, subOptions] = await Promise.all([listProjectOptions(db, ctx), listSubcontractorOptions(db, ctx)]);
+  const sameName = (a: string | null, b: string) => !!a && normaliseName(a) !== '' && normaliseName(a) === normaliseName(b);
+  const project =
+    (projectNumber ? projectOptions.find((p) => p.number?.trim().toLowerCase() === projectNumber.toLowerCase()) : undefined) ?? projectOptions.find((p) => sameName(projectName, p.name));
+  const sub = subOptions.find((s) => sameName(contractorName, s.name));
+
+  return {
+    appId: app.id,
+    title: `${contractorName ?? 'Unidentified subcontractor'}${app.applicationNumber ? ` · Application #${app.applicationNumber}` : ''}`,
+    contractorName,
+    projectName,
+    projectNumber,
+    contractNumber: clean(stated?.contractNumber),
+    projectId: project?.id ?? null,
+    subcontractorId: sub?.id ?? null,
+  };
 }

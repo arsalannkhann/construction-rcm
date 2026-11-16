@@ -4,7 +4,7 @@ import Link from '@/components/ui/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { ScheduleDifference } from '@/components/records/figures';
+import { Note, ScheduleDifference } from '@/components/records/figures';
 import { PercentInput, retainageError } from '@/components/records/percent-input';
 import { filledRows, ScheduleEditor, scheduleLinesFrom, scheduleRow, scheduleRowsTotal, type ScheduleRow } from '@/components/records/schedule-editor';
 import { Button, buttonClass } from '@/components/ui/button';
@@ -12,17 +12,50 @@ import { Money, Panel, PanelHeader, Stat } from '@/components/ui/data';
 import { Field, Input, MoneyInput, Select } from '@/components/ui/form';
 import { parsePercentToBps } from '@/lib/money';
 import { useAction } from '@/lib/use-action';
+import { SubcontractorDialogButton } from '../../subcontractors/subcontractor-dialog';
+import { assignContractAction } from '../../applications/actions';
 import { createContractAction } from '../actions';
 
 type Option = { id: string; label: string };
 
-export function ContractForm({ projects, subcontractors, defaultProjectId, cancelHref }: { projects: Option[]; subcontractors: Option[]; defaultProjectId: string; cancelHref: string }) {
+/** An application that could not be matched, whose subcontract is being set up from what it states. */
+export type FromApplication = {
+  id: string;
+  title: string;
+  contractNumber: string | null;
+  subcontractorId: string | null;
+  contractorName: string | null;
+  projectName: string | null;
+  projectMatched: boolean;
+};
+
+function prefilledSentence(from: FromApplication): string {
+  const filled = [from.contractNumber ? 'contract number' : null, from.subcontractorId ? 'subcontractor' : null, from.projectMatched ? 'project' : null].filter((x): x is string => x !== null);
+  if (filled.length === 0) return 'Nothing could be filled in from the package.';
+  const list = filled.length === 1 ? filled[0] : `${filled.slice(0, -1).join(', ')} and ${filled.at(-1)}`;
+  return `The ${list} ${filled.length === 1 ? 'was' : 'were'} filled in from what the package states; check ${filled.length === 1 ? 'it' : 'them'}.`;
+}
+
+export function ContractForm({
+  projects,
+  subcontractors,
+  defaultProjectId,
+  cancelHref,
+  fromApplication = null,
+}: {
+  projects: Option[];
+  subcontractors: Option[];
+  defaultProjectId: string;
+  cancelHref: string;
+  fromApplication?: FromApplication | null;
+}) {
   const router = useRouter();
   const { pending, run } = useAction();
   const [created, setCreated] = useState(false);
   const [projectId, setProjectId] = useState(defaultProjectId);
-  const [subcontractorId, setSubcontractorId] = useState('');
-  const [number, setNumber] = useState('');
+  const [subcontractorOptions, setSubcontractorOptions] = useState(subcontractors);
+  const [subcontractorId, setSubcontractorId] = useState(fromApplication ? (fromApplication.subcontractorId ?? '') : subcontractors.length === 1 ? subcontractors[0]!.id : '');
+  const [number, setNumber] = useState(fromApplication?.contractNumber ?? '');
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState<number | null>(null);
   const [retainageWork, setRetainageWork] = useState('10');
@@ -64,7 +97,22 @@ export function ContractForm({ projects, subcontractors, defaultProjectId, cance
         success: 'Subcontract created',
         onSuccess: ({ id }) => {
           setCreated(true);
-          router.push(`/contracts/${id}`);
+          if (!fromApplication) {
+            router.push(`/contracts/${id}`);
+            return;
+          }
+          // Started from an application that could not be matched: match it to the new subcontract.
+          void assignContractAction(fromApplication.id, id)
+            .then((matched) => {
+              if (matched.ok) {
+                toast.success('Matched. Checking against the contract.');
+                router.push(`/applications/${fromApplication.id}`);
+              } else {
+                toast.error(`The application was not matched: ${matched.error}`);
+                router.push(`/contracts/${id}`);
+              }
+            })
+            .catch(() => router.push(`/contracts/${id}`));
         },
       },
     );
@@ -78,6 +126,26 @@ export function ContractForm({ projects, subcontractors, defaultProjectId, cance
         submit();
       }}
     >
+      {fromApplication ? (
+        <Note>
+          <p className="font-medium">Setting up the subcontract for {fromApplication.title}</p>
+          <p className="mt-0.5">
+            {prefilledSentence(fromApplication)}
+            {fromApplication.projectName && !fromApplication.projectMatched ? (
+              <>
+                {' '}
+                The package names the project “{fromApplication.projectName}”, which is not one of your projects: choose it below, or{' '}
+                <Link href={`/projects/new?from=${fromApplication.id}`} className="font-medium text-accent hover:underline">
+                  create it
+                </Link>
+                .
+              </>
+            ) : null}{' '}
+            Enter the amount, retainage and schedule from the subcontract itself, not from the pay application, so the application is checked against an independent record. When you create the subcontract, the application is matched to it and
+            checked.
+          </p>
+        </Note>
+      ) : null}
       <Panel>
         <PanelHeader title="Contract" description="Who the subcontract is with, and the terms every application on it is checked against." />
         <div className="grid grid-cols-2 gap-4 p-4 lg:grid-cols-4">
@@ -93,29 +161,33 @@ export function ContractForm({ projects, subcontractors, defaultProjectId, cance
               ))}
             </Select>
           </Field>
-          <Field
-            label="Subcontractor"
-            className="col-span-2"
-            hint={
-              <>
-                Not in the list?{' '}
-                <Link href="/subcontractors" className="font-medium text-accent hover:underline">
-                  Add a subcontractor
-                </Link>
-              </>
-            }
-          >
-            <Select required value={subcontractorId} onChange={(e) => setSubcontractorId(e.target.value)}>
-              <option value="" disabled>
-                Select a subcontractor
-              </option>
-              {subcontractors.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
+          <div className="col-span-2">
+            <Field label="Subcontractor">
+              <Select required value={subcontractorId} onChange={(e) => setSubcontractorId(e.target.value)}>
+                <option value="" disabled>
+                  {subcontractorOptions.length ? 'Select a subcontractor' : 'None yet: add one below'}
                 </option>
-              ))}
-            </Select>
-          </Field>
+                {subcontractorOptions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <p className="mt-1 text-xs text-ink-3">
+              {subcontractorOptions.length ? 'Not in the list? ' : ''}
+              <SubcontractorDialogButton
+                mode="create"
+                asLink={fromApplication?.contractorName && !fromApplication.subcontractorId ? `Add ${fromApplication.contractorName}` : 'Add a subcontractor'}
+                initialName={fromApplication?.subcontractorId ? undefined : (fromApplication?.contractorName ?? undefined)}
+                onCreated={(created) => {
+                  setSubcontractorOptions((list) => [...list, created].sort((a, b) => a.label.localeCompare(b.label)));
+                  setSubcontractorId(created.id);
+                }}
+              />
+              {subcontractorOptions.length ? '' : ' without leaving this page.'}
+            </p>
+          </div>
           <Field label="Contract number">
             <Input required value={number} onChange={(e) => setNumber(e.target.value)} placeholder="SC-2301-16" />
           </Field>

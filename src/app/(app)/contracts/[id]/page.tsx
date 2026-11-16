@@ -184,7 +184,7 @@ export default async function ContractPage({ params }: { params: Promise<{ id: s
             <EmptyState
               icon={<Inbox />}
               title="No applications on this contract yet"
-              description={`Upload a billing package from ${subcontractor.name}. It is read, matched to this contract and checked against the terms and schedule above.`}
+              description={`Upload a billing package from ${subcontractor.name.replace(/\.$/, '')}. It is read, matched to this contract and checked against the terms and schedule above.`}
               action={
                 canUpload ? (
                   <Link href="/applications/new" className={buttonClass({ variant: 'primary' })}>
