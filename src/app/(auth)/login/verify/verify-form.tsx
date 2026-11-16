@@ -9,7 +9,7 @@ import { verifyLoginAction } from '../../actions';
 /** A 6-digit code, or a recovery code (ten letters and digits, with or without the dash). */
 const looksValid = (value: string) => /^\d{6}$/.test(value.replace(/\s/g, '')) || value.toLowerCase().replace(/[^a-z0-9]/g, '').length === 10;
 
-export function VerifyForm({ attemptsLeft: initialAttempts }: { attemptsLeft: number }) {
+export function VerifyForm({ attemptsLeft: initialAttempts, next = null }: { attemptsLeft: number; next?: string | null }) {
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [restart, setRestart] = useState<string | null>(null);
@@ -52,11 +52,14 @@ export function VerifyForm({ attemptsLeft: initialAttempts }: { attemptsLeft: nu
           const outcome = result.data;
           if (outcome.status === 'signed_in') {
             if (outcome.invitationNoLongerValid) return setInviteGone(true);
-            window.location.assign(outcome.recoveryCodesLeft !== null && outcome.recoveryCodesLeft <= 3 ? '/settings/profile#two-step' : '/overview');
+            window.location.assign(outcome.recoveryCodesLeft !== null && outcome.recoveryCodesLeft <= 3 ? '/settings/profile#two-step' : (next ?? '/overview'));
           } else if (outcome.status === 'wrong_code') {
+            const tries = `${outcome.attemptsLeft === 1 ? 'One more try' : `${outcome.attemptsLeft} more tries`} before you have to sign in again.`;
+            // Used recovery codes are deleted, so a reused one cannot be told apart from a mistyped one: say both.
+            const wasRecoveryCode = !/^\d{6}$/.test(code.replace(/\s/g, ''));
             setAttemptsLeft(outcome.attemptsLeft);
             setCode('');
-            setError(`That code is not right. ${outcome.attemptsLeft === 1 ? 'One more try' : `${outcome.attemptsLeft} more tries`} before you have to sign in again.`);
+            setError(wasRecoveryCode ? `That recovery code is not right, or it has been used already (each one works once). ${tries}` : `That code is not right. ${tries}`);
           } else {
             setRestart(outcome.message);
           }

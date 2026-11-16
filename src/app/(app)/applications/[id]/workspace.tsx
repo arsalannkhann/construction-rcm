@@ -2,7 +2,7 @@
 
 import { ArrowLeft, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import Link from '@/components/ui/link';
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Money, StatusBadge } from '@/components/ui/data';
 import { Tooltip } from '@/components/ui/overlay';
 import { formatDelta } from '@/lib/money';
@@ -64,6 +64,10 @@ export function ReviewWorkspace({ data, perms, extras }: { data: ReviewData; per
   const [target, setTarget] = useState<ViewerTarget | null>(null);
   const [focusedLine, setFocusedLine] = useState<{ id: string; nonce: number } | null>(null);
   const [viewerOpen, setViewerOpen] = useState(true);
+  // Side by side needs room: on a narrow window the review opens on its own, and the documents are one click away.
+  useEffect(() => {
+    if (window.matchMedia('(max-width: 1023px)').matches) setViewerOpen(false);
+  }, []);
 
   const show = useCallback((spot: Spot | null) => {
     if (!spot) return;
@@ -93,12 +97,19 @@ export function ReviewWorkspace({ data, perms, extras }: { data: ReviewData; per
   }, [data, perms, extras, editable, tab, show, focusLine, focusedLine]);
 
   const title = data.subcontractor?.name ?? app.stated?.contractorName ?? 'Unidentified subcontractor';
-  const difference = app.claimedAmount !== null && app.verifiedAmount !== null ? app.claimedAmount - app.verifiedAmount : null;
   const decided = app.status === 'approved';
+  // The figure shown beside "Requested" minus the request, as on the list: −$10.00 means $10.00 less than asked for.
+  const shownAmount = decided ? app.approvedAmount : app.verifiedAmount;
+  const difference = app.claimedAmount !== null && shownAmount !== null ? shownAmount - app.claimedAmount : null;
 
   const tabs: Array<{ key: TabKey; label: string; count?: number; tone?: 'block' | 'warn' | 'pass' }> = [
     // Once approved, anything still open was acknowledged by the approver; it is no longer work to do.
-    decided ? { key: 'findings', label: 'Findings', count: 0, tone: 'pass' } : { key: 'findings', label: 'Findings', count: open.filter((f) => f.severity !== 'info').length, tone: blocking ? 'block' : warnings ? 'warn' : 'pass' },
+    // Once rejected or voided, nothing will be paid: the count stays, without the colour that asks for action.
+    decided
+      ? { key: 'findings', label: 'Findings', count: 0, tone: 'pass' }
+      : app.status === 'rejected' || app.status === 'void'
+        ? { key: 'findings', label: 'Findings', count: open.filter((f) => f.severity !== 'info').length }
+        : { key: 'findings', label: 'Findings', count: open.filter((f) => f.severity !== 'info').length, tone: blocking ? 'block' : warnings ? 'warn' : 'pass' },
     { key: 'summary', label: 'Summary' },
     { key: 'lines', label: 'Schedule of values', count: data.lines.length },
     { key: 'compliance', label: 'Lien waivers', count: data.waivers.length },
@@ -109,13 +120,14 @@ export function ReviewWorkspace({ data, perms, extras }: { data: ReviewData; per
     <Ctx.Provider value={value}>
       <div className="flex h-full min-h-0 flex-col bg-surface">
         <header className="shrink-0 border-b border-line px-5 pb-3 pt-3.5">
-          <div className="flex items-start gap-3">
+          {/* On a narrow window the decision buttons move under the title instead of squeezing it. */}
+          <div className="flex flex-wrap items-start gap-3">
             <Tooltip content="Back to pay applications" side="bottom">
               <Link href="/applications" className="focus-ring -ml-1.5 mt-0.5 rounded-md p-1.5 text-ink-3 hover:bg-sunken hover:text-ink" aria-label="Back to pay applications">
                 <ArrowLeft className="size-4" />
               </Link>
             </Tooltip>
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 basis-[20rem]">
               <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                 <h1 className="truncate text-[17px] font-semibold leading-6 text-ink">
                   {title}
@@ -191,7 +203,7 @@ export function ReviewWorkspace({ data, perms, extras }: { data: ReviewData; per
           <section className="flex min-w-0 flex-1 flex-col" aria-label="Review">
             {data.contract ? (
               <>
-                <div className="flex shrink-0 items-center gap-1 border-b border-line px-3" role="tablist">
+                <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-3" role="tablist">
                   <Tooltip content={viewerOpen ? 'Hide documents' : 'Show documents'} side="bottom">
                     <button className="focus-ring mr-1 rounded-md p-1.5 text-ink-3 hover:bg-sunken hover:text-ink" onClick={() => setViewerOpen((v) => !v)} aria-label={viewerOpen ? 'Hide documents' : 'Show documents'}>
                       {viewerOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
@@ -204,7 +216,7 @@ export function ReviewWorkspace({ data, perms, extras }: { data: ReviewData; per
                       aria-selected={tab === t.key}
                       onClick={() => setTab(t.key)}
                       className={cn(
-                        'focus-ring relative flex h-10 items-center gap-1.5 px-2.5 text-[13px] transition-colors',
+                        'focus-ring relative flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 text-[13px] transition-colors',
                         tab === t.key ? 'font-medium text-ink' : 'text-ink-3 hover:text-ink',
                       )}
                     >

@@ -30,6 +30,10 @@ const config: NextConfig = {
       { source: '/', missing: [{ type: 'cookie', key: SESSION_COOKIE }], headers: [{ key: 'Content-Security-Policy', value: LANDING_CSP }] },
     ];
   },
+  async redirects() {
+    // The overview is the dashboard; people (and old bookmarks) try this name first.
+    return [{ source: '/dashboard', destination: '/overview', permanent: false }];
+  },
   async rewrites() {
     return {
       // Someone who is not signed in sees the public website at the root; a member goes on to the app (src/app/page.tsx).

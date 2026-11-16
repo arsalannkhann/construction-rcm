@@ -6,7 +6,7 @@ import { formatDateTime, formatRelative, pluralize } from '@/lib/utils';
 import { getMfaStatus } from '@/server/auth/mfa';
 import { ROLE_LABEL } from '@/server/auth/permissions';
 import { requireCtx, requireUser, sessionToken } from '@/server/auth/session';
-import { listMyOrganizations, listSessions } from '@/server/services/team';
+import { listMyOrganizations, listSessions, SESSION_DAYS, SESSION_IDLE_DAYS } from '@/server/services/team';
 import { NameForm, PasswordForm } from './profile-forms';
 import { ManageMfa, RevokeOtherSessionsButton, RevokeSessionButton, SetUpMfaButton } from './security-controls';
 
@@ -82,7 +82,7 @@ export default async function ProfileSettingsPage() {
         <Panel>
           <PanelHeader
             title="Signed-in devices"
-            description="Every browser where your account is signed in right now. A session ends when you sign out, after 14 days, or after 14 days without use."
+            description={`Every browser where your account is signed in right now. A session ends when you sign out${SESSION_IDLE_DAYS < SESSION_DAYS ? `, after ${pluralize(SESSION_IDLE_DAYS, 'day')} without use,` : ''} or ${pluralize(SESSION_DAYS, 'day')} after signing in, whichever comes first.`}
             actions={others > 0 ? <RevokeOtherSessionsButton count={others} /> : null}
           />
           <Table>

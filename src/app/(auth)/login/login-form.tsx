@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Field, FormError, Input } from '@/components/ui/form';
 import { loginAction } from '../actions';
 
-export function LoginForm() {
+/** `next` is a page on this site to open after signing in (already checked by the page). */
+export function LoginForm({ next = null }: { next?: string | null }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -22,7 +23,7 @@ export function LoginForm() {
           const result = await loginAction({ email, password });
           if (!result.ok) setError(result.error);
           // Into the app (which sends anyone who still has something to set up to the right page), or to the second step.
-          else window.location.assign(result.data === 'verify' ? '/login/verify' : '/overview');
+          else window.location.assign(result.data === 'verify' ? (next ? `/login/verify?next=${encodeURIComponent(next)}` : '/login/verify') : (next ?? '/overview'));
         });
       }}
     >

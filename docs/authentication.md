@@ -140,7 +140,7 @@ recovery").
 ## Requiring two-step verification for an organisation
 
 An owner or admin can turn on **Require two-step verification for every member**
-in Settings → Review policy → Security. It is stored as `requireMfa` in the
+in Settings → Team → Security. It is stored as `requireMfa` in the
 organisation's settings.
 
 - It is a team decision, so it needs `team:manage` (owners and admins).

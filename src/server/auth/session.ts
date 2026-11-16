@@ -9,6 +9,7 @@
  */
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { loginPath, REQUEST_PATH_HEADER } from '@/lib/return-path';
 import { cache } from 'react';
 import { getDb } from '@/db';
 import { appUrl, isProduction } from '@/server/config';
@@ -58,9 +59,14 @@ export const getSession = cache(async (): Promise<SessionInfo | null> => {
  * runs through here (every page and action in the app) works for them in that
  * organisation until they have.
  */
+/** The sign-in page, set to come back to the page that was asked for. */
+async function signInFirst(): Promise<never> {
+  redirect(loginPath((await headers()).get(REQUEST_PATH_HEADER)));
+}
+
 export async function requireCtx(): Promise<Ctx> {
   const session = await getSession();
-  if (!session) redirect('/login');
+  if (!session) return signInFirst();
   if (session.mfaRequired) redirect('/mfa-required');
   if (!session.ctx) redirect('/welcome');
   return session.ctx;
@@ -68,7 +74,7 @@ export async function requireCtx(): Promise<Ctx> {
 
 export async function requireUser(): Promise<SessionInfo['user']> {
   const session = await getSession();
-  if (!session) redirect('/login');
+  if (!session) return signInFirst();
   return session.user;
 }
 

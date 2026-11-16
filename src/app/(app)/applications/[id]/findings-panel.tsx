@@ -29,6 +29,10 @@ export function FindingsPanel() {
   const approved = data.app.status === 'approved';
   const blocking = open.filter((f) => f.severity === 'blocking');
   const warnings = open.filter((f) => f.severity === 'warning');
+  // Rejected or voided: nothing will be paid, so open findings are a record, not work to do.
+  const closedUnpaid = data.app.status === 'rejected' || data.app.status === 'void';
+  const closedWord = data.app.status === 'rejected' ? 'rejected' : 'voided';
+  const decider = data.app.decidedBy ? (data.people[data.app.decidedBy] ?? null) : null;
 
   return (
     <div className="space-y-6 px-5 py-4">
@@ -58,6 +62,20 @@ export function FindingsPanel() {
             ))}
             , which {data.replaces.length === 1 ? 'was' : 'were'} voided.
           </p>
+        </div>
+      ) : null}
+      {closedUnpaid && !data.replacedBy ? (
+        <div className="flex items-start gap-3 rounded-lg border border-block-line bg-block-soft px-4 py-3">
+          <OctagonAlert className="mt-0.5 size-4 shrink-0 text-block" />
+          <div className="min-w-0">
+            <p className="text-[13px] font-medium text-block">
+              {closedWord === 'rejected' ? 'Rejected' : 'Voided'}
+              {decider ? ` by ${decider}` : ''}
+              {data.app.decidedAt ? ` on ${formatDate(new Date(data.app.decidedAt).toISOString().slice(0, 10))}` : ''}
+            </p>
+            {data.app.decisionNote ? <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-ink-2">Reason: {data.app.decisionNote}</p> : null}
+            <p className="mt-1 text-xs text-ink-3">Nothing will be paid on this application. An approver can reopen it from the actions menu.</p>
+          </div>
         </div>
       ) : null}
       {approved && open.length > 0 ? (
@@ -94,11 +112,17 @@ export function FindingsPanel() {
       ) : (
         <section>
           <SectionTitle>
-            Needs attention
+            {closedUnpaid ? `Open when it was ${closedWord}` : 'Needs attention'}
             <span className="ml-2 font-normal normal-case tracking-normal text-ink-3">
-              {blocking.length ? `${blocking.length} must be resolved before approval` : ''}
-              {blocking.length && warnings.length ? ' · ' : ''}
-              {warnings.length ? `${warnings.length} to acknowledge` : ''}
+              {closedUnpaid ? (
+                'Kept for the record'
+              ) : (
+                <>
+                  {blocking.length ? `${blocking.length} must be resolved before approval` : ''}
+                  {blocking.length && warnings.length ? ' · ' : ''}
+                  {warnings.length ? `${warnings.length} to acknowledge` : ''}
+                </>
+              )}
             </span>
           </SectionTitle>
           <ul className="space-y-2.5">
