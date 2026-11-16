@@ -274,6 +274,18 @@ once two-step verification is reset.
   - Each row is identified by an id derived from the stored hash, so the browser
     never sees anything that could be used as a session.
   - Signing sessions out is recorded in the audit trail.
+- **The mobile app** uses the same sessions. `POST /api/mobile/session` runs the
+  same sign-in (password, then the second step when it is on, with the same
+  throttling and remembered-device rules) and returns the session token in the
+  response body instead of a cookie. The app keeps it in the phone's secure
+  storage (Keychain on iOS, Android Keystore-backed storage on Android, readable
+  only while the phone is unlocked and never backed up or moved to another
+  device) and sends it as `Authorization: Bearer <token>`. The server reads the
+  token only from that header, never from a query string or a cookie, so
+  another website cannot make a phone's session act. Lifetime, idle timeout,
+  the organisation's two-step rule and every sign-out below apply unchanged; a
+  phone appears under Signed-in devices as "Zephric app on Android" (or iOS)
+  and can be signed out from there. See [docs/mobile.md](mobile.md).
 - **Everything else that signs sessions out:**
   - changing your password (every other session);
   - using a reset link (every session);
@@ -497,15 +509,11 @@ Whichever route is chosen, build the domain claim first.
 These are known and deliberate for now, or need changes outside the
 authentication code:
 
-- **API routes return 401, not 403,** for a member whose organisation requires two-step
-  verification they have not set up. The request is refused either way, because
-  there is no context. The fix is one line in `src/server/http.ts` (`apiCtx`):
-  return 403 when `session.mfaRequired` is set.
-- **The root URL and `/welcome`** do not yet know about `mfaRequired`. Opening `/`
-  directly sends such a member to `/welcome` ("You are not part of an organisation")
-  instead of `/mfa-required`. Every page inside the app redirects correctly.
-  The fix is to check `session.mfaRequired` in `src/app/page.tsx` and
-  `src/app/welcome/page.tsx`.
+- **The website's API routes return 401, not 403,** for a member whose
+  organisation requires two-step verification they have not set up. The
+  request is refused either way, and the body carries `code: "mfa_required"`
+  so a client can tell it apart from a signed-out request. The mobile API
+  (`/api/mobile/*`) already answers 403 with the same code.
 - **Members of more than one organisation** cannot be recovered by any of their
   organisations' admins (see "Admins resetting a member's two-step verification").
   They reset their own password by email, or the operator helps. If such members

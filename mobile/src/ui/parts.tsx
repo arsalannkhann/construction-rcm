@@ -7,13 +7,12 @@ import TriangleAlert from 'lucide-react-native/icons/triangle-alert';
 import OctagonAlert from 'lucide-react-native/icons/octagon-alert';
 import { ago, date, money } from '@/lib/format';
 import { messageOf, type Row as AppRowData } from '@/lib/api';
+import { isOnlineState } from '@/lib/queries';
 import { usePalette } from '@/theme';
 import { Banner, Button, Divider, Pill, Row, statusTone, T } from './kit';
 
 export function useOnline(): boolean {
-  const net = useNetworkState();
-  // Unknown counts as online: the request will say soon enough if it is not.
-  return net.isConnected !== false && net.isInternetReachable !== false;
+  return isOnlineState(useNetworkState());
 }
 
 export function OfflineBanner() {

@@ -26,6 +26,7 @@ cd android && ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
 `plugins/`; change those, never the generated folders. App icons come from
 `scripts/make-icons.mjs` (run it from this folder after changing the mark).
 
-`ZEPHRIC_LOCAL_TEST=1` before `prebuild` makes a "Zephric Test" build for an
-emulator against a server on this computer (`adb reverse tcp:3000 tcp:3000`);
-never distribute it.
+`ZEPHRIC_LOCAL_TEST=1` before both `prebuild` and `./gradlew` makes a
+"Zephric Test" build (`com.zephric.app.localtest`) for an emulator against a
+server on this computer (`adb reverse tcp:3000 tcp:3000`); never distribute
+it. The build stops if the variable differs between the two steps.

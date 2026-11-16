@@ -125,9 +125,9 @@ export default function Profile() {
           <Divider inset={16} />
           <Row
             title="Two-step verification"
-            subtitle={session.me?.user.mfaEnabled ? 'On for your account' : 'Off. Turn it on from Zephric on the web.'}
+            subtitle={!session.me ? 'Shown when Zephric can be reached.' : session.me.user.mfaEnabled ? 'On for your account' : 'Off. Turn it on from Zephric on the web.'}
             chevron={false}
-            right={<Pill label={session.me?.user.mfaEnabled ? 'On' : 'Off'} tone={session.me?.user.mfaEnabled ? 'pass' : 'warn'} />}
+            right={session.me ? <Pill label={session.me.user.mfaEnabled ? 'On' : 'Off'} tone={session.me.user.mfaEnabled ? 'pass' : 'warn'} /> : undefined}
           />
         </Card>
       </Section>

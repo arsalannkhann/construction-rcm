@@ -7,7 +7,7 @@
  * Switching organisation or signing out drops every cached response, so
  * nothing from one organisation is ever shown in another.
  */
-import { useQueryClient } from '@tanstack/react-query';
+import { onlineManager, useQueryClient } from '@tanstack/react-query';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState } from 'react-native';
@@ -107,6 +107,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (err instanceof NetworkError && s.profile) setState((prev) => (prev.status === 'signed_in' ? { ...prev, offline: true } : prev));
     }
   }, []);
+
+  // Opened offline, the app knows only the stored profile. Coming back online
+  // loads the rest (organisations, two-step status) without waiting for the
+  // app to be reopened.
+  useEffect(() => onlineManager.subscribe((online) => {
+    if (online && session.current) void refreshMe();
+  }), [refreshMe]);
 
   // Start: an existing session opens straight into the app; offline, it still opens the drafts.
   useEffect(() => {

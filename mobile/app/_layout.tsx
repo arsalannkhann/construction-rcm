@@ -1,4 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
+import { NavigationBar } from 'expo-navigation-bar';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
@@ -53,6 +54,7 @@ function Shell() {
   return (
     <View style={{ flex: 1, backgroundColor: p.canvas }}>
       <StatusBar style={p.scheme === 'dark' ? 'light' : 'dark'} />
+      <NavigationBar style={p.scheme === 'dark' ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
           headerShown: false,

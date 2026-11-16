@@ -259,6 +259,10 @@ export function Button({
       onPress={onPress}
       disabled={off}
       accessibilityRole="button"
+      // The label must be explicit. Without it React Native on Android sets the
+      // description to "busy" while loading and never clears it, so the button
+      // is read out as "busy" after every failed attempt.
+      accessibilityLabel={label}
       accessibilityState={{ disabled: !!off, busy: !!loading }}
       accessibilityHint={accessibilityHint}
       style={({ pressed }) => [

@@ -23,6 +23,14 @@ Everyone who opens `/` sees the public Zephric website
 rather than being sent away from the page. See
 [operations: the public website](docs/operations.md#the-public-website).
 
+A native Android and iOS app (`mobile/`, React Native through Expo) covers the
+work away from a desk: photographing or attaching a pay application with
+drafts that are kept on the phone until the server confirms receipt, seeing
+what is waiting, reading an application's findings and documents, comments
+and correction requests, and approving when nothing about the application
+needs a desk. It uses the same sessions, permissions and services as the
+website through `/api/mobile/*`. See [docs/mobile.md](docs/mobile.md).
+
 **Contents:** [Quick start](#quick-start) ·
 [What to look at first](#what-to-look-at-first) ·
 [Architecture](#architecture) · [Configuration](#configuration) ·
@@ -567,6 +575,12 @@ pnpm test
 pnpm test:pg
 ```
 
+For the mobile app:
+
+```bash
+cd mobile && npm ci && npx tsc --noEmit
+```
+
 `pnpm test` runs the suite on PGlite. `pnpm test:pg` downloads and starts a real
 PostgreSQL server for the run (removed afterwards) and runs the same suite
 through node-postgres. `pnpm eval:extraction` runs the extraction evaluation;
@@ -585,10 +599,10 @@ Status on 2026-11-16, `main`. The current phase is summarised in
 [docs/phase-3-report.md](docs/phase-3-report.md), the previous one in
 [docs/phase-2-report.md](docs/phase-2-report.md).
 
-**Verified by automated tests.** `pnpm test`: 466 passed, 3 skipped (the
+**Verified by automated tests.** `pnpm test`: 486 passed, 3 skipped (the
 skipped tests need a PostgreSQL server). `pnpm test:pg` on a throwaway
-PostgreSQL server: 469 passed. `pnpm typecheck` is clean and `pnpm build`
-succeeds, on Node 22. Covered:
+PostgreSQL server: 489 passed. `pnpm typecheck` is clean and `pnpm build`
+succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
 
 - Money parsing and rounding; every reconciliation check, including stepped
   retainage, releases and deductive change orders; waiver pre-screening and
@@ -606,6 +620,14 @@ succeeds, on Node 22. Covered:
   behind on failure, the job queue under concurrency and restart, role
   enforcement and tenant isolation.
 - The audit chain, including detection of an edited event.
+- The mobile API (`tests/mobile.test.ts`): bearer sign-in and sign-out (the
+  token is never read from a query string), the second step, organisation
+  isolation, refusal of a member who owes their organisation two-step
+  verification, capture with duplicate protection by client reference, photos
+  combined into one PDF, role checks, and phone approval only for a clean
+  pending application with the amount the phone showed (stale amounts
+  refused, anything else sent to the desktop). Phone money formatting
+  (`tests/mobile-format.test.ts`, in three time zones).
 - Authentication: TOTP against the RFC test vectors, password reset, two-step
   sign-in and recovery codes, sessions, the database-backed throttle across two
   connection pools, remembered browsers, the organisation's two-step
@@ -669,6 +691,8 @@ were not available:**
 | Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`) and tested against an emulator of it; the sandbox procedure is [docs/procore-validation.md](docs/procore-validation.md). The duplicate-invoice check assumes Procore lists a new invoice straight away (validation step 12). |
 | Outbound email (Resend) | Never sent. The request follows Resend's documentation (User-Agent, idempotency key, error names) and is tested against a stub only. |
 | Inbound email | The webhook logic is tested against Postmark's documented payload; no provider has been pointed at it. |
+| Mobile app on real phones | The Android release build has been built and measured, and run only on an emulator on this machine: the release build as far as its sign-in screen, and a local test variant through sign-in with two-step verification, approval, comments, capture, offline queueing, sign-out and being signed out from the website, against a local server with a scratch database ([docs/mobile.md](docs/mobile.md#what-is-and-is-not-verified)). The iOS app has not been built (no Xcode here). Neither has been run on a physical phone or signed in to the live site. |
+| Push notifications | Not built. The app's Activity tab shows notifications while it is open; nothing is pushed. |
 
 ## Limitations and risks
 
@@ -685,6 +709,10 @@ were not available:**
 - **Members of more than one organisation** cannot be recovered by an
   organisation's admins; they reset their own password by email, or the
   operator helps (`pnpm reset-password`).
+- **No subcontractor logins.** Roles are the general contractor's own staff;
+  a subcontractor cannot be given access limited to their own applications.
+  They send packages by email, or a member captures for them in the mobile
+  app (docs/mobile.md, "Limitations").
 - **Tenant isolation is enforced in application code**, with tests. Row-level
   security only shuts out Supabase's public API roles; it does not separate
   organisations from each other.
@@ -731,6 +759,7 @@ src/app                  pages, server actions, route handlers
                          subcontractors, transfers, activity, settings
   api/                   uploads and parts, documents, health, scheduler,
                          inbound email, Procore OAuth, exports
+  api/mobile/            the mobile app's API (bearer sessions)
 src/components           UI kit, shell, charts, record views
 src/lib                  money and retainage arithmetic, upload client, helpers
 src/server
@@ -750,7 +779,8 @@ supabase/                the same migrations for Supabase's GitHub integration (
 eval/                    extraction evaluation: synthetic gate, truth template, real documents (git-ignored)
 scripts/                 seed, reset-password, eval-extraction, samples, migration sync
 tests/                   Vitest
-docs/                    operations, authentication, conventions, extraction evaluation, Procore notes and validation, Phase 2 report
+docs/                    operations, authentication, mobile, conventions, extraction evaluation, Procore notes and validation, phase reports
+mobile/                  the Android and iOS app (Expo); docs/mobile.md
 vercel.json              region and scheduled run for Vercel
 ```
 
@@ -759,6 +789,7 @@ vercel.json              region and scheduled run for Vercel
 | Document | What it covers |
 |---|---|
 | [docs/operations.md](docs/operations.md) | Deploying (Vercel, Supabase, Docker), backups, recovery, monitoring, onboarding the first customer |
+| [docs/mobile.md](docs/mobile.md) | The Android and iOS app: what it does, security, capture and offline drafts, phone approvals, building it, its API, sizes, what is verified |
 | [docs/authentication.md](docs/authentication.md) | Sign-in design, two-step verification, recovery, throttling, client addresses, the SSO evaluation |
 | [docs/extraction-evaluation.md](docs/extraction-evaluation.md) | Measuring reading accuracy, the truth format, the regression gate, synthetic results, the pilot protocol |
 | [docs/conventions.md](docs/conventions.md) | Code conventions for contributors |

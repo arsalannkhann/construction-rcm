@@ -8,6 +8,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { auditEvents, documents, payApplications } from '@/db/schema';
 import { totpCode } from '@/server/auth/totp';
 import { submitForApproval } from '@/server/services/review';
+import { updatePolicy } from '@/server/services/team';
 import { defects } from '@/server/samples/scenario';
 import { enableMfa, PASSWORD } from './helpers/auth';
 import { createWorld, dollars as D, getApp, packageFor, stateAfter, submit, type World } from './helpers/world';
@@ -123,6 +124,29 @@ describe('signing in from the app', () => {
     expect(done.status).toBe('signed_in');
     req('/api/mobile/me', { token: done.token });
     expect((await me.GET()).status).toBe(200);
+  });
+
+  it('opens nothing to a member who owes their organisation a second step, and says why', async () => {
+    const x = await createWorld();
+    await enableMfa(x.db, x.owner.userId);
+    await updatePolicy(x.db, x.owner, { requireMfa: true });
+    const token = await signIn(x.accountant.userEmail);
+
+    req('/api/mobile/home', { token });
+    const refused = await home.GET();
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: 'mfa_required' });
+
+    req('/api/mobile/projects', { token });
+    expect((await projects.GET()).status).toBe(403);
+
+    // The app learns why from /me, without any records.
+    req('/api/mobile/me', { token });
+    const who = await me.GET();
+    expect(who.status).toBe(200);
+    const body = (await who.json()) as Record<string, unknown>;
+    expect(body.mfaRequired).toBeTruthy();
+    expect(body).not.toHaveProperty('applications');
   });
 });
 

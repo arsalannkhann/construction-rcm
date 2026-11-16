@@ -437,6 +437,34 @@ hash of it (so `RCM_SECRET_KEY` must be set). What was sent is never logged.
 Delete inquiries you no longer need, and any the sender asks you to delete; the
 privacy notice on the page promises that.
 
+## The mobile app
+
+The Android and iOS app (`mobile/`, [docs/mobile.md](mobile.md)) needs nothing
+extra on the server: it signs in through `/api/mobile/session`, uses the same
+sessions, permissions and database as the website, and uploads through the
+same staged-upload routes. It points at `https://zephric.vercel.app` (set in
+`mobile/app.json`, `extra.apiUrl`); a person can point it at another HTTPS
+deployment from the sign-in screen.
+
+Operationally:
+
+- Phones appear in each person's Signed-in devices as "Zephric app on
+  Android" or "… on iOS", and are signed out the same way as browsers. To cut
+  off a lost phone, sign out its session there or change the password.
+- A capture from a phone becomes an application exactly like an upload, with
+  an `application.received` audit event carrying the phone's client
+  reference. For 30 days, the same capture sent again (after a dropped
+  connection) returns that application instead of creating a second one.
+  Approvals from a phone carry the note "Approved in the Zephric mobile app."
+- Phone captures can be large (up to 20 files of 25 MB) and arrive in 4 MB
+  parts, like browser uploads, so Vercel's 4.5 MB request limit does not apply.
+  Creating the application from the parts may take up to the function's
+  300-second limit.
+- Push notifications are not set up; see docs/mobile.md for what they need.
+
+Building and signing the apps is described in
+[docs/mobile.md](mobile.md#building-for-android).
+
 ## Backups
 
 Everything is in PostgreSQL, including the documents, so a database backup is

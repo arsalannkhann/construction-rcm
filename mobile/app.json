@@ -111,7 +111,9 @@
         }
       ],
       "./plugins/with-lean-android",
-      "./plugins/with-release-signing"
+      "./plugins/with-release-signing",
+      "./plugins/with-recents-privacy",
+      "./plugins/with-variant-guard"
     ],
     "experiments": {
       "typedRoutes": false

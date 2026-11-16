@@ -23,12 +23,29 @@ export function makeQueryClient(): QueryClient {
   });
 }
 
+/** Unknown counts as online: the request will say soon enough if it is not. */
+export function isOnlineState(state: Pick<Network.NetworkState, 'isConnected' | 'isInternetReachable'>): boolean {
+  return state.isConnected !== false && state.isInternetReachable !== false;
+}
+
 /** Refetch when the app comes back to the foreground, and pause while offline. */
 export function wireQueryLifecycle(): () => void {
   const appSub = AppState.addEventListener('change', (s) => {
     if (Platform.OS !== 'web') focusManager.setFocused(s === 'active');
   });
-  const netSub = Network.addNetworkStateListener((state) => onlineManager.setOnline(state.isConnected !== false));
+  // The listener only reports changes. Without the starting state, an app
+  // opened offline believes it is online, so coming back online is not a
+  // change and nothing refetches.
+  let heard = false;
+  const netSub = Network.addNetworkStateListener((state) => {
+    heard = true;
+    onlineManager.setOnline(isOnlineState(state));
+  });
+  Network.getNetworkStateAsync()
+    .then((state) => {
+      if (!heard) onlineManager.setOnline(isOnlineState(state));
+    })
+    .catch(() => {});
   return () => {
     appSub.remove();
     netSub.remove();
