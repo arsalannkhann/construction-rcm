@@ -599,9 +599,9 @@ Status on 2026-11-16, `main`. The current phase is summarised in
 [docs/phase-3-report.md](docs/phase-3-report.md), the previous one in
 [docs/phase-2-report.md](docs/phase-2-report.md).
 
-**Verified by automated tests.** `pnpm test`: 486 passed, 3 skipped (the
+**Verified by automated tests.** `pnpm test`: 493 passed, 3 skipped (the
 skipped tests need a PostgreSQL server). `pnpm test:pg` on a throwaway
-PostgreSQL server: 489 passed. `pnpm typecheck` is clean and `pnpm build`
+PostgreSQL server: 496 passed. `pnpm typecheck` is clean and `pnpm build`
 succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
 
 - Money parsing and rounding; every reconciliation check, including stepped
@@ -627,7 +627,9 @@ succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
   combined into one PDF, role checks, and phone approval only for a clean
   pending application with the amount the phone showed (stale amounts
   refused, anything else sent to the desktop). Phone money formatting
-  (`tests/mobile-format.test.ts`, in three time zones).
+  (`tests/mobile-format.test.ts`, in three time zones), and which files
+  shared into the app from another app are taken and what the person is
+  told about the rest (`tests/mobile-shared.test.ts`).
 - Authentication: TOTP against the RFC test vectors, password reset, two-step
   sign-in and recovery codes, sessions, the database-backed throttle across two
   connection pools, remembered browsers, the organisation's two-step
@@ -691,7 +693,7 @@ were not available:**
 | Procore | Never run against a Procore account. Built from the public documentation (`docs/procore-api-notes.md`) and tested against an emulator of it; the sandbox procedure is [docs/procore-validation.md](docs/procore-validation.md). The duplicate-invoice check assumes Procore lists a new invoice straight away (validation step 12). |
 | Outbound email (Resend) | Never sent. The request follows Resend's documentation (User-Agent, idempotency key, error names) and is tested against a stub only. |
 | Inbound email | The webhook logic is tested against Postmark's documented payload; no provider has been pointed at it. |
-| Mobile app on real phones | The Android release build has been built and measured, and run only on an emulator on this machine: the release build as far as its sign-in screen, and a local test variant through sign-in with two-step verification, approval, comments, capture, offline queueing, sign-out and being signed out from the website, against a local server with a scratch database ([docs/mobile.md](docs/mobile.md#what-is-and-is-not-verified)). The iOS app has not been built (no Xcode here). Neither has been run on a physical phone or signed in to the live site. |
+| Mobile app on real phones | The Android release build has been built and measured, and run only on an emulator on this machine: the release build as far as its sign-in screen, and a local test variant through sign-in with two-step verification, approval, comments, capture, sharing PDFs and photos into the app from Files and the gallery, offline queueing, sign-out and being signed out from the website, against a local server with a scratch database ([docs/mobile.md](docs/mobile.md#what-is-and-is-not-verified)). The iOS app has not been built (no Xcode here). Neither has been run on a physical phone or signed in to the live site. |
 | Push notifications | Not built. The app's Activity tab shows notifications while it is open; nothing is pushed. |
 
 ## Limitations and risks

@@ -1,17 +1,19 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { NavigationBar } from 'expo-navigation-bar';
-import { Stack } from 'expo-router';
+import { router, Stack, useRootNavigationState } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
 import { useEffect, useRef, useState } from 'react';
-import { AppState, StyleSheet, View } from 'react-native';
+import { Alert, AppState, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Fingerprint from 'lucide-react-native/icons/fingerprint-pattern';
 import { AuthProvider, useAuth } from '@/lib/auth';
-import { tidyReceipts, type Owner } from '@/lib/drafts';
+import { DraftLimitError, tidyReceipts, type Owner } from '@/lib/drafts';
 import { readPrefs, writePrefs } from '@/lib/prefs';
 import { makeQueryClient, wireQueryLifecycle } from '@/lib/queries';
 import { runQueue, startSender } from '@/lib/sender';
+import { clearShared, collectAndroidShare, openSharedAsCapture, usePendingShare } from '@/lib/shared';
+import { onShare } from '../modules/share-intake';
 import { ThemeContext, usePalette, type ThemePref } from '@/theme';
 import { BrandMark, Button, T } from '@/ui/kit';
 import { useOnline } from '@/ui/parts';
@@ -26,6 +28,18 @@ export default function RootLayout() {
   };
   useEffect(() => wireQueryLifecycle(), []);
   useEffect(() => tidyReceipts(), []);
+  // Files shared from another app (Android). They are kept on the phone at
+  // once, signed in or not; SharedIntake opens them once someone can use them.
+  useEffect(() => {
+    const collect = () =>
+      void collectAndroidShare()
+        .then((message) => {
+          if (message) Alert.alert('Some files were not added', message);
+        })
+        .catch(() => Alert.alert('Not added', 'The shared files could not be added. Try sharing them again.'));
+    collect();
+    return onShare(collect);
+  }, []);
 
   return (
     <ThemeContext.Provider value={{ pref, setPref }}>
@@ -83,6 +97,7 @@ function Shell() {
         </Stack.Protected>
       </Stack>
       {signedIn ? <Sender owner={state.profile.orgId ? { userId: state.profile.userId, orgId: state.profile.orgId } : null} /> : null}
+      {signedIn && !locked ? <SharedIntake owner={state.profile.orgId ? { userId: state.profile.userId, orgId: state.profile.orgId } : null} canUpload={state.profile.canUpload} /> : null}
       {locked ? <LockScreen /> : null}
       <PrivacyCover />
     </View>
@@ -108,6 +123,35 @@ function Sender({ owner }: { owner: Owner | null }) {
   useEffect(() => {
     if (online) void runQueue(ownerRef.current, true);
   }, [online]);
+  return null;
+}
+
+/**
+ * Shared files waiting on the phone become a new capture for the person signed
+ * in, in their current organisation, and the capture opens. Nothing is sent
+ * until they press Send there.
+ */
+function SharedIntake({ owner, canUpload }: { owner: Owner | null; canUpload: boolean }) {
+  const pending = usePendingShare();
+  const nav = useRootNavigationState();
+  const busy = useRef(false);
+  useEffect(() => {
+    if (!pending || !owner || !nav?.key || busy.current) return;
+    if (!canUpload) {
+      clearShared();
+      Alert.alert('Your role cannot submit documents', 'The shared files were not added. Ask an admin in your organisation for upload access.');
+      return;
+    }
+    busy.current = true;
+    openSharedAsCapture(owner)
+      .then((id) => {
+        if (id) router.push({ pathname: '/capture/[id]', params: { id, shared: '1' } });
+      })
+      .catch((err) => Alert.alert('Not added', err instanceof DraftLimitError ? err.message : 'The shared files could not be added. Try sharing them again.'))
+      .finally(() => {
+        busy.current = false;
+      });
+  }, [pending, owner?.userId, owner?.orgId, canUpload, nav?.key]);
   return null;
 }
 

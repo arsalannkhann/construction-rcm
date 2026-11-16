@@ -15,6 +15,7 @@ import { uuid } from 'expo-modules-core';
 import { Directory, File, Paths } from 'expo-file-system';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { useSyncExternalStore } from 'react';
+import { MAX_DRAFT_FILES, MAX_FILE_BYTES } from './limits';
 
 export type DraftFileKind = 'photo' | 'pdf' | 'image';
 
@@ -50,10 +51,7 @@ export type Draft = {
 
 export type Owner = Draft['owner'];
 
-/** Most files one application takes (MAX_FILES on the server). */
-export const MAX_DRAFT_FILES = 20;
-/** Largest single file the server accepts (MAX_FILE_BYTES). */
-export const MAX_FILE_BYTES = 25 * 1024 * 1024;
+export { MAX_DRAFT_FILES, MAX_FILE_BYTES };
 /** Photos are scaled so the longer side is at most this, which keeps text legible and uploads small. */
 const PHOTO_LONG_EDGE = 2400;
 

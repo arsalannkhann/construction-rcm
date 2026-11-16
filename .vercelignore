@@ -2,10 +2,8 @@
 # of the website deployment. Patterns are anchored with a leading "/": a bare
 # "mobile" also matches src/app/api/mobile and drops the mobile API.
 /mobile/*
-# Except the formatting helpers: tests/mobile-format.test.ts imports them, and
-# `next build` type-checks the tests.
+# Except the app's plain helpers in mobile/src/lib: tests import some of them
+# (tests/mobile-*.test.ts), and `next build` type-checks the tests.
 !/mobile/src/
 /mobile/src/*
 !/mobile/src/lib/
-/mobile/src/lib/*
-!/mobile/src/lib/format.ts
