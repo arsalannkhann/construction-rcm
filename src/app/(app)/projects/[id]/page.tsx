@@ -1,9 +1,10 @@
-import { CalendarRange, FileText, Inbox, Plus } from 'lucide-react';
+import { CalendarRange, FileText, Inbox, Landmark, Plus } from 'lucide-react';
 import Link from '@/components/ui/link';
 import { notFound } from 'next/navigation';
 import { getDb } from '@/db';
 import { BillingGrid, BudgetStandingBadge, CostBar, CostLegend } from '@/components/records/billing';
 import { Figure, Figures, ProgressBar, RecordStatusBadge } from '@/components/records/figures';
+import { OwnerStatusBadge } from '@/components/records/owner-billing';
 import { BackLink } from '@/components/records/page-parts';
 import { buttonClass } from '@/components/ui/button';
 import { Badge, EmptyState, Money, Page, PageHeader, Panel, PanelHeader, StatusBadge, Table, Td, Th } from '@/components/ui/data';
@@ -12,6 +13,7 @@ import { cn, formatDate, pluralize } from '@/lib/utils';
 import { can } from '@/server/auth/permissions';
 import { requireCtx } from '@/server/auth/session';
 import { getBillingBoard, monthOf, monthsEnding } from '@/server/services/billing';
+import { getOwnerBilling } from '@/server/services/owner-billing';
 import { getProjectDetail } from '@/server/services/records-queries';
 import { ProjectDialogButton } from './project-dialog';
 
@@ -28,6 +30,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   const current = monthOf(new Date());
   const board = await getBillingBoard(db, ctx, { months: monthsEnding(current, 6), current, projectId: project.id });
   const billing = board.sections[0];
+  const owner = await getOwnerBilling(db, ctx, project.id);
+  const ownerLatest = owner?.applications[0] ?? null;
   const completed = sum(contracts.map((c) => c.completedStored));
   const canWrite = can(ctx.role, 'records:write');
   const canUpload = can(ctx.role, 'application:upload');
@@ -95,12 +99,45 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           </div>
         </Panel>
 
-        <Figures className="grid-cols-2 lg:grid-cols-4">
+        <Figures className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
           <Figure label="Completed and stored" cents={completed} note={totals.committed ? `${percentOf(completed, totals.committed) ?? 0}% of committed, as approved` : 'As approved'} />
           <Figure label="Approved to date" cents={totals.approvedToDate} note="Payments approved on applications" />
           <Figure label="Retainage held" cents={totals.retainageHeld} note="As of each subcontract’s latest approval" />
           <Figure label="Balance to finish" cents={totals.balanceToFinish} note="Committed less total earned, incl. retainage" />
         </Figures>
+
+        <Panel>
+          <PanelHeader
+            title="Owner billing"
+            description={owner?.prime ? `Your applications for payment to ${project.ownerName ?? 'the owner'}, built from the subcontractor billing you approved.` : 'Bill the owner from the subcontractor billing you approved: set up your contract with the owner and its schedule of values.'}
+            actions={
+              <Link href={`/projects/${project.id}/owner-billing`} className={buttonClass({ variant: owner?.prime ? 'ghost' : 'secondary', size: 'sm' })}>
+                <Landmark className="size-3.5" />
+                {owner?.prime ? 'Owner billing' : canWrite ? 'Set up owner billing' : 'Owner billing'}
+              </Link>
+            }
+          />
+          {owner?.prime ? (
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 p-4 sm:grid-cols-4">
+              <CostFigure label="Contract sum to date" value={formatMoney(owner.prime.contractSumToDate)} note={owner.prime.pendingChanges ? `${formatMoney(owner.prime.pendingChanges)} pending` : 'with approved change orders'} />
+              <CostFigure label="Completed and stored" value={owner.billed ? formatMoney(owner.billed.totalCompletedStored) : null} note={owner.billed ? `as of application #${owner.billed.applicationNumber}` : 'nothing submitted yet'} />
+              <CostFigure label="Certified for payment" value={owner.billed ? formatMoney(owner.billed.certified) : null} note={owner.billed?.awaitingCertification ? `${formatMoney(owner.billed.awaitingCertification)} awaiting certification` : undefined} />
+              <div className="min-w-0">
+                <dt className="text-[11px] font-medium uppercase tracking-wide text-ink-3">Latest application</dt>
+                {ownerLatest ? (
+                  <dd className="mt-1 flex flex-wrap items-center gap-2">
+                    <Link href={`/projects/${project.id}/owner-billing/${ownerLatest.id}`} className="font-medium hover:underline">
+                      #{ownerLatest.applicationNumber}, {formatDate(ownerLatest.periodTo)}
+                    </Link>
+                    <OwnerStatusBadge status={ownerLatest.status} />
+                  </dd>
+                ) : (
+                  <dd className="mt-0.5 text-[13px] text-ink-4">None yet</dd>
+                )}
+              </div>
+            </dl>
+          ) : null}
+        </Panel>
 
         <Panel className="overflow-hidden">
           <PanelHeader

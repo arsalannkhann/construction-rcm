@@ -20,7 +20,7 @@ export function PageHeader({ title, description, actions, back }: { title: React
           <h1 className="text-[22px] font-semibold leading-7 text-ink">{title}</h1>
           {description ? <p className="mt-1 max-w-2xl text-[13px] text-ink-2">{description}</p> : null}
         </div>
-        {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+        {actions ? <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
     </header>
   );

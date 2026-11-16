@@ -86,7 +86,11 @@ own):
 4. **Overview** shows requested against approved by billing period, open
    work, retainage held and turnaround. Every figure is computed from the
    records; none is illustrative.
-5. **Activity** is the audit trail, with a check that the chain is intact.
+5. **Riverside Medical Office Building → Owner billing** has the contract with
+   the owner and its schedule. Start application #1: it is worked out from the
+   subcontractor billing approved so far, laid out as a G702 and G703, with a
+   draft PDF. Approve *Capitol Concrete #5* and the draft follows.
+6. **Activity** is the audit trail, with a check that the chain is intact.
 
 ### Try it from an empty organisation
 
@@ -421,6 +425,45 @@ from records on every request; nothing is forecast.
 How this compares with Procore's cost management, and what to build next:
 [docs/competitive/procore-cost-management.md](docs/competitive/procore-cost-management.md).
 
+### Owner billing
+
+The main contractor's own application for payment to the owner, laid out as a
+G702 summary and a G703 continuation sheet (`src/server/services/owner-calc.ts`
+for the arithmetic, `owner-billing.ts` for the workflow, `owner-billing-pdf.ts`
+for the PDF; pages under `/projects/[id]/owner-billing`).
+
+- **The contract with the owner** carries its sum, retainage on work and on
+  stored materials, and owner change orders. An approved owner change order
+  adds a line of its own to the owner schedule.
+- **Each schedule line says how it is billed.** *Follows subcontracts*: the
+  line's value times the approved percent complete of the subcontracts linked
+  to it (work and stored materials separately, weighted by contract sum, exact
+  integer arithmetic rounded half away from zero), so a line priced above the
+  subcontract bills in step with it. *Follows the rest of the contract*: fee,
+  insurance and bonds, at the percent complete of the other lines. *Entered
+  each period*: general conditions and self-performed work.
+- **Only approved billing counts.** For each subcontract a draft uses the
+  latest application approved with a period ending in or before the owner
+  application's month, read from its immutable approved record. A draft is
+  worked out again every time it is opened; people can type over columns E and
+  F on any line, with a note, and the worked-out figure stays alongside.
+- **Checks** before submitting: the schedule must add up to the contract sum
+  and no line may be billed beyond its value (both block submission); lines
+  typed above the approved progress, subcontracts not on the schedule and
+  subcontractor applications for the period still in review are warnings.
+- **Submitting** (owners, admins, controllers) freezes the figures into a
+  record with a fingerprint; the submit is refused if the figures changed since
+  the approver looked. The owner's certification is recorded, with a reason
+  when it is short of the amount applied for, and the certified amounts are the
+  previous certificates on the next application. Only the latest submitted
+  application can be reopened, with a reason; a certified one cannot.
+- **PDF**: summary page and landscape continuation sheets, marked DRAFT until
+  submitted, stamped with the record's id and fingerprint. Needs the export
+  permission; each download is in the audit trail. Nothing is emailed: the
+  team sends the PDF to the owner.
+- **Overview risk**: approved subcontractor billing for a month that no
+  submitted application to the owner covers yet.
+
 ### Background work
 
 `src/server/jobs.ts`. A queue in the `jobs` table: `queued → running →
@@ -456,6 +499,10 @@ erDiagram
   organizations ||--o{ projects : runs
   organizations ||--o{ subcontractors : works_with
   projects ||--o{ contracts : has
+  projects ||--o| prime_contracts : "contract with the owner"
+  prime_contracts ||--o{ prime_lines : "owner schedule"
+  prime_contracts ||--o{ prime_change_orders : amended_by
+  prime_contracts ||--o{ owner_applications : billed_by
   subcontractors ||--o{ contracts : signs
   contracts ||--o{ sov_lines : "schedule of values"
   contracts ||--o{ change_orders : amended_by
@@ -478,6 +525,7 @@ erDiagram
 | Identity and access | `organizations`, `users`, `memberships`, `invitations`, `sessions`, `login_challenges`, `password_resets`, `auth_attempts` |
 | Contracts | `projects`, `subcontractors`, `contracts`, `sov_lines`, `change_orders`, `retainage_releases` |
 | Billing | `pay_applications`, `pay_app_lines`, `documents`, `extractions`, `lien_waivers`, `findings`, `comments` |
+| Owner billing | `prime_contracts`, `prime_lines`, `prime_change_orders`, `owner_applications` |
 | Outbound and inbound | `communications`, `notifications`, `transfers`, `integrations`, `inbound_messages` |
 | Platform | `jobs`, `stored_objects`, `upload_parts`, `audit_events` |
 
@@ -631,10 +679,10 @@ Status on 2026-11-17, `main`. The current phase is summarised in
 [docs/phase-3-report.md](docs/phase-3-report.md), the previous one in
 [docs/phase-2-report.md](docs/phase-2-report.md).
 
-**Verified by automated tests.** `pnpm test`: 525 passed, 3 skipped (the
+**Verified by automated tests.** `pnpm test`: 543 passed, 3 skipped (the
 skipped tests need a PostgreSQL server). `pnpm test:pg` on a throwaway
-PostgreSQL server: 496 passed (run before cost control and billing periods
-were added; not re-run since). `pnpm typecheck` is clean and `pnpm build`
+PostgreSQL server: 496 passed (run before cost control, billing periods and
+owner billing were added; not re-run since). `pnpm typecheck` is clean and `pnpm build`
 succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
 
 - Money parsing and rounding; every reconciliation check, including stepped
@@ -660,6 +708,19 @@ succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
   roll-up CSV built from approved records, its permission check and audit
   entry; organisation isolation of the board and the roll-up; and the risks
   the overview lists.
+- Owner billing (`tests/owner-billing.test.ts`): the scaling arithmetic
+  (exact for large amounts, half away from zero), pass-through, marked-up,
+  fee and hand-entered lines, figures typed over, the G702 lines and the
+  checks, by hand-computed expectations; then end to end: who may set up,
+  edit, submit, certify and download, organisation isolation of every read and
+  write, schedule links limited to the project's subcontracts, a draft from
+  approved September billing, edits refused on stale figures, submission
+  refused on figures that changed, frozen figures after a later approval,
+  a short certification needing a reason, the next application building on
+  the certified amount, reopen and delete rules, billed lines and change
+  orders protected, the PDF's pages and filenames, every action audited, and
+  the overview risk. The demo test checks that the demo's owner contract
+  produces a draft with nothing blocking.
 - The mobile API (`tests/mobile.test.ts`): bearer sign-in and sign-out (the
   token is never read from a query string), the second step, organisation
   isolation, refusal of a member who owes their organisation two-step
@@ -708,7 +769,15 @@ second step still required), "Forgot password?" saying plainly that no email
 is set up, system status, accepting an invitation with an account that has
 two-step verification (joined only after the code, signed in to the inviting
 organisation), an owner refused when recovering a member who belongs to
-another organisation, and the password prompt before two-step setup.
+another organisation, and the password prompt before two-step setup. On 2026-11-17,
+on a local server with a scratch database, owner billing on the demo
+workspace: the overview risk for September, starting application #1 for
+September (every figure equal to an independent calculation from the demo's
+percentages), typing over general conditions and seeing the fee follow,
+submitting, the PDF (two pages, read back as images), a short certification
+with its reason, application #2 carrying the certified amount as the previous
+certificate and following a subcontractor approval made meanwhile, the
+overview risk moving to October, and the pages at 375 px.
 
 **Verified against real infrastructure:**
 
