@@ -9,6 +9,7 @@ export const metadata = { title: 'Welcome' };
 export default async function WelcomePage() {
   const session = await getSession();
   if (!session) redirect('/login');
+  if (session.mfaRequired) redirect('/mfa-required');
   if (session.ctx) redirect('/overview');
   return (
     <AuthFrame>

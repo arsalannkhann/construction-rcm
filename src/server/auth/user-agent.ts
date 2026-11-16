@@ -4,6 +4,8 @@
  * header is whatever the browser chose to send.
  */
 const BROWSERS: Array<[pattern: RegExp, name: string]> = [
+  // The Zephric phone app (mobile/src/lib/api.ts): "Zephric Mobile/1.0.0 (Android 35)", where 35 is the API level.
+  [/\bZephric Mobile\//, 'Zephric app'],
   [/\bEdg(?:e|A|iOS)?\//, 'Edge'],
   [/\bOPR\/|\bOpera\b/, 'Opera'],
   [/\bFirefox\/|\bFxiOS\//, 'Firefox'],
@@ -14,6 +16,7 @@ const BROWSERS: Array<[pattern: RegExp, name: string]> = [
 const SYSTEMS: Array<[pattern: RegExp, name: string]> = [
   [/\biPhone\b|\biPod\b/, 'iPhone'],
   [/\biPad\b/, 'iPad'],
+  [/\biOS\b/, 'iOS'],
   [/\bAndroid\b/, 'Android'],
   [/\bWindows\b/, 'Windows'],
   [/\bMac OS X\b|\bMacintosh\b/, 'macOS'],

@@ -856,6 +856,9 @@ describe('sessions', () => {
     expect(clientIp(h({}), {})).toBeNull();
     expect(describeUserAgent(null)).toBe('Unknown device');
     expect(describeUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/131.0 Safari/537.36 Edg/131.0')).toBe('Edge on macOS');
+    expect(describeUserAgent('Zephric Mobile/1.0.0 (Android 35)')).toBe('Zephric app on Android');
+    expect(describeUserAgent('Zephric Mobile/1.0.0 (iOS 18.2)')).toBe('Zephric app on iOS');
+    expect(describeUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 EdgiOS/131.0 Mobile/15E148 Safari/605.1.15')).toBe('Edge on iPhone');
   });
 
   it('set cookies that are HttpOnly, SameSite=Lax and Secure in production', async () => {
