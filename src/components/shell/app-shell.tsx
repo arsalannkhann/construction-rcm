@@ -3,7 +3,7 @@
 import { ArrowUpFromLine, Bell, Building2, Check, ChevronsUpDown, FlaskConical, History, Inbox, LayoutDashboard, LogOut, Plus, Send, Settings, Users } from 'lucide-react';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState, useTransition } from 'react';
+import { useState, useSyncExternalStore, useTransition } from 'react';
 import { toast } from 'sonner';
 import { logoutAction, switchOrgAction } from '@/app/(auth)/actions';
 import { markNotificationsReadAction } from '@/app/(app)/shell-actions';
@@ -48,8 +48,9 @@ export function AppShell({
   const pathname = usePathname();
   const router = useRouter();
   const [, start] = useTransition();
-  // The review workspace needs the width; the sidebar folds to a rail there.
-  const rail = /^\/applications\/(?!new$)[^/]+$/.test(pathname);
+  // The review workspace needs the width, and so does a phone; the sidebar folds to a rail there.
+  const narrow = useNarrowScreen();
+  const rail = narrow || /^\/applications\/(?!new$)[^/]+$/.test(pathname);
   const active = (href: string) => pathname === href || pathname.startsWith(`${href}/`) || (href === '/projects' && pathname.startsWith('/contracts'));
 
   const switchTo = (id: string) =>
@@ -220,7 +221,7 @@ function NotificationsButton({ rail, unread, notifications }: { rail: boolean; u
   );
 
   return (
-    <Popover open={open} onOpenChange={onOpenChange} side="right" align="end" className="w-[360px] p-0" trigger={button}>
+    <Popover open={open} onOpenChange={onOpenChange} side="right" align="end" className="w-[min(360px,calc(100vw-72px))] p-0" trigger={button}>
       <div className="flex items-center justify-between border-b border-line px-3 py-2.5">
         <span className="text-[13px] font-semibold">Notifications</span>
         <span className="text-xs text-ink-3">{unread ? `${unread} unread` : 'All caught up'}</span>
@@ -257,5 +258,20 @@ function NotificationsButton({ rail, unread, notifications }: { rail: boolean; u
         </ul>
       )}
     </Popover>
+  );
+}
+
+const NARROW = '(max-width: 767px)';
+
+/** Whether the window is phone-width. False while rendering on the server, so the first paint has the full sidebar. */
+function useNarrowScreen(): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const query = window.matchMedia(NARROW);
+      query.addEventListener('change', onChange);
+      return () => query.removeEventListener('change', onChange);
+    },
+    () => window.matchMedia(NARROW).matches,
+    () => false,
   );
 }

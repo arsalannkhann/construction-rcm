@@ -75,7 +75,7 @@ export function DecisionBar() {
     });
 
   return (
-    <div className="flex shrink-0 items-center gap-1.5">
+    <div className="flex max-w-full flex-wrap items-center gap-1.5">
       <input ref={fileInput} type="file" multiple hidden accept="application/pdf,image/png,image/jpeg,image/webp" onChange={(e) => upload(e.target.files)} />
 
       {perms.review && undecided ? (
