@@ -13,7 +13,7 @@ import { ROLE_DESCRIPTION, ROLE_LABEL } from '@/server/auth/permissions';
 import type { Role } from '@/server/types';
 import { inviteAction } from './actions';
 
-type Outcome = { to: string; link: string; email: 'sent' | 'not_sent' | 'failed'; detail: string | null };
+type Outcome = { to: string; link: string; email: 'sent' | 'not_sent' | 'failed' | 'unconfirmed'; detail: string | null };
 
 /**
  * `roles` are the roles this person may grant, most senior first.
@@ -82,6 +82,10 @@ export function InviteDialogButton({ roles, emailConfigured }: { roles: Role[]; 
             {outcome.email === 'sent' ? (
               <Notice tone="pass" icon={<MailCheck strokeWidth={1.9} />}>
                 Invitation emailed to {outcome.to}.
+              </Notice>
+            ) : outcome.email === 'unconfirmed' ? (
+              <Notice tone="warn" icon={<MailX strokeWidth={1.9} />}>
+                The email provider did not confirm the invitation to {outcome.to}; it may or may not have arrived. Send this link to {outcome.to} yourself to be sure.
               </Notice>
             ) : outcome.email === 'failed' ? (
               <Notice tone="block" icon={<MailX strokeWidth={1.9} />}>

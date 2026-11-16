@@ -14,6 +14,7 @@
  *   - it does not touch two-step verification: someone who gets hold of a link
  *     still needs the second step.
  */
+import { randomUUID } from 'node:crypto';
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import type { DB } from '@/db';
 import { inTransaction } from '@/db/tx';
@@ -81,6 +82,8 @@ export async function requestPasswordReset(db: DB, emailInput: string, opts: { d
   (opts.defer ?? detached)(async () => {
     const result = await sendEmail({
       to: user.email,
+      // One key per link issued, so a retry cannot send the same link twice. Not derived from the token.
+      idempotencyKey: `reset-${randomUUID()}`,
       subject: 'Reset your Zephric password',
       text: [
         'Someone asked to reset the password for the Zephric account that signs in with this email address.',
@@ -94,7 +97,7 @@ export async function requestPasswordReset(db: DB, emailInput: string, opts: { d
       ].join('\n'),
     });
     // The provider's reply is not logged in full, and the link never is.
-    if (result.status !== 'sent') console.error(`[auth] a password reset email was not sent (${result.status === 'failed' ? result.error.split(':')[0] : 'email delivery is not configured'}).`);
+    if (result.status !== 'sent') console.error(`[auth] a password reset email was not ${result.status === 'unconfirmed' ? 'confirmed as sent' : 'sent'} (${result.status === 'failed' || result.status === 'unconfirmed' ? result.error.split(':')[0].split('(')[0].trim() : 'email delivery is not configured'}).`);
   });
   return 'requested';
 }

@@ -13,9 +13,10 @@ import { useWorkspace } from './workspace';
 
 type Message = ReviewData['messages'][number];
 
-const DELIVERY: Record<string, { label: string; tone: 'pass' | 'neutral' | 'block'; Icon: typeof Mail }> = {
+const DELIVERY: Record<string, { label: string; tone: 'pass' | 'neutral' | 'warn' | 'block'; Icon: typeof Mail }> = {
   sent: { label: 'Sent', tone: 'pass', Icon: Mail },
   not_sent: { label: 'Drafted, not sent', tone: 'neutral', Icon: MailWarning },
+  unconfirmed: { label: 'Not confirmed', tone: 'warn', Icon: MailWarning },
   failed: { label: 'Failed to send', tone: 'block', Icon: MailX },
 };
 
@@ -115,7 +116,11 @@ function MessageRow({ message: m }: { message: Message }) {
       </button>
       {open ? (
         <div className="border-t border-line px-3 py-2.5">
-          {m.status !== 'sent' && m.error ? <p className="mb-2 text-xs text-ink-2">{m.error} Copy the text below into your own email to send it.</p> : null}
+          {m.status === 'unconfirmed' && m.error ? (
+            <p className="mb-2 text-xs text-ink-2">{m.error}</p>
+          ) : m.status !== 'sent' && m.error ? (
+            <p className="mb-2 text-xs text-ink-2">{m.error} Copy the text below into your own email to send it.</p>
+          ) : null}
           <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-[18px] text-ink-2">{m.body}</pre>
         </div>
       ) : null}

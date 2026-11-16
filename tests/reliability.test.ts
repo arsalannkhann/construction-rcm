@@ -7,7 +7,7 @@
  * a time, which checks the logic but not the locking.
  */
 import { and, eq } from 'drizzle-orm';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { closeDb, getDb } from '@/db';
 import { auditEvents, communications, documents, findings, jobs, notifications, payAppLines, payApplications, storedObjects } from '@/db/schema';
 import { verifyAuditChain } from '@/server/audit';
@@ -403,6 +403,35 @@ describe('messages to subcontractors', () => {
     const rows = await w.db.select().from(communications).where(and(eq(communications.payApplicationId, appId), eq(communications.body, body)));
     expect(rows).toHaveLength(1);
   });
+
+  it('records an unconfirmed send as such, does not put the application on hold, and will not send it again', async () => {
+    const w2 = await createWorld();
+    const id = (await submit(w2, packageFor(w2, 0, null, (p) => (p.waiver = null)))).id;
+    process.env.RESEND_API_KEY = 're_test_key';
+    process.env.EMAIL_FROM = 'ap@northline.example';
+    const provider = vi.fn(async () => {
+      throw Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+    });
+    vi.stubGlobal('fetch', provider);
+    try {
+      const result = await sendSubcontractorMessage(w2.db, w2.accountant, id, { ...message, hold: true });
+      expect(result.status).toBe('unconfirmed');
+      // Retried once, with the record's id as the key both times.
+      expect(provider).toHaveBeenCalledTimes(2);
+      const keys = (provider.mock.calls as unknown as Array<[string, RequestInit]>).map((c) => (c[1].headers as Record<string, string>)['Idempotency-Key']);
+      const [row] = await w2.db.select().from(communications).where(eq(communications.payApplicationId, id));
+      expect(keys).toEqual([row!.id, row!.id]);
+      expect(row).toMatchObject({ status: 'unconfirmed', provider: 'resend' });
+      expect(row!.error).toMatch(/may have been sent/);
+      expect((await getApp(w2, id)).status).not.toBe('on_hold');
+      await expect(sendSubcontractorMessage(w2.db, w2.accountant, id, message)).rejects.toThrow(/may already have been sent/);
+      expect(provider).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.RESEND_API_KEY;
+      delete process.env.EMAIL_FROM;
+    }
+  }, 20_000);
 
   it('will not send wording that says an unapproved application was approved or paid', async () => {
     expect(messageWordingProblem('needs_review', 'Your application has been approved.')).toMatchObject({ level: 'block' });

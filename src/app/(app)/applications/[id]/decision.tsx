@@ -547,6 +547,7 @@ function CorrectionDialog({ open, onClose }: { open: boolean; onClose: () => voi
                 onSuccess: (r) => {
                   if (r.status === 'sent') toast.success(`Sent to ${form.to}`);
                   else if (r.status === 'failed') toast.error(`The email failed to send: ${r.detail ?? 'unknown error'}. The message is saved under Activity.`);
+                  else if (r.status === 'unconfirmed') toast.warning('Not confirmed as sent', { description: `The email provider did not confirm the message to ${form.to}. It may have been sent; check with them before sending it again. The message is saved under Activity.` });
                   else toast.message('Saved as a draft, not sent', { description: 'Email delivery is not configured. Copy the message from the Activity tab into your own email.' });
                   onClose();
                 },

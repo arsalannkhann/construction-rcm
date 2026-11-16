@@ -16,7 +16,7 @@ import { inviteMember } from './team';
 export type InviteOutcome = {
   /** The one-time link. Only a hash of its token is stored, so it cannot be shown again. */
   link: string;
-  email: 'sent' | 'not_sent' | 'failed';
+  email: 'sent' | 'not_sent' | 'failed' | 'unconfirmed';
   /** Why the email did not go out; null when it was sent. */
   detail: string | null;
 };
@@ -46,9 +46,11 @@ export async function inviteAndNotify(db: DB, ctx: Ctx, input: { email: string; 
       `The link can be used once${expiry}. If you were not expecting this invitation, you can ignore this email.`,
     ].join('\n'),
     replyTo: ctx.userEmail,
+    idempotencyKey: id,
   });
 
   if (result.status === 'sent') return { link, email: 'sent', detail: null };
   if (result.status === 'failed') return { link, email: 'failed', detail: result.error };
+  if (result.status === 'unconfirmed') return { link, email: 'unconfirmed', detail: result.error };
   return { link, email: 'not_sent', detail: result.reason };
 }
