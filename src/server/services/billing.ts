@@ -234,10 +234,21 @@ export function buildBoard(input: { projects: BoardProject[]; contracts: BoardCo
 
 /** The billing board for the organisation, or for one project. */
 export async function getBillingBoard(db: DB, ctx: Ctx, opts: { months: string[]; current: string; projectId?: string }): Promise<Board> {
+  return boardForOrg(db, ctx.orgId, opts);
+}
+
+/**
+ * The board for an organisation, with no member behind the request: the
+ * scheduler and the subcontractor portal use it (src/server/services/portal.ts),
+ * so that "due" and "missing" mean the same everywhere. `contractIds` limits it
+ * to those subcontracts. Always scoped to `orgId`.
+ */
+export async function boardForOrg(db: DB, orgId: string, opts: { months: string[]; current: string; projectId?: string; contractIds?: string[] }): Promise<Board> {
+  if (opts.contractIds && opts.contractIds.length === 0) return buildBoard({ projects: [], contracts: [], applications: [], months: opts.months, current: opts.current });
   const projectRows = await db
     .select({ id: projects.id, name: projects.name, number: projects.number, status: projects.status })
     .from(projects)
-    .where(opts.projectId ? and(eq(projects.orgId, ctx.orgId), eq(projects.id, opts.projectId)) : eq(projects.orgId, ctx.orgId))
+    .where(opts.projectId ? and(eq(projects.orgId, orgId), eq(projects.id, opts.projectId)) : eq(projects.orgId, orgId))
     .orderBy(asc(projects.status), asc(projects.name));
   if (projectRows.length === 0) return buildBoard({ projects: [], contracts: [], applications: [], months: opts.months, current: opts.current });
   const projectIds = projectRows.map((p) => p.id);
@@ -254,7 +265,7 @@ export async function getBillingBoard(db: DB, ctx: Ctx, opts: { months: string[]
     })
     .from(contracts)
     .innerJoin(subcontractors, eq(subcontractors.id, contracts.subcontractorId))
-    .where(and(eq(contracts.orgId, ctx.orgId), inArray(contracts.projectId, projectIds)))
+    .where(and(eq(contracts.orgId, orgId), inArray(contracts.projectId, projectIds), opts.contractIds ? inArray(contracts.id, opts.contractIds) : undefined))
     .orderBy(asc(subcontractors.name), asc(contracts.number));
   const contractIds = contractRows.map((c) => c.id);
 
@@ -263,7 +274,7 @@ export async function getBillingBoard(db: DB, ctx: Ctx, opts: { months: string[]
         db
           .select({ contractId: changeOrders.contractId, amount: changeOrders.amount })
           .from(changeOrders)
-          .where(and(eq(changeOrders.orgId, ctx.orgId), inArray(changeOrders.contractId, contractIds), eq(changeOrders.status, 'approved'))),
+          .where(and(eq(changeOrders.orgId, orgId), inArray(changeOrders.contractId, contractIds), eq(changeOrders.status, 'approved'))),
         db
           .select({
             id: payApplications.id,
@@ -277,7 +288,7 @@ export async function getBillingBoard(db: DB, ctx: Ctx, opts: { months: string[]
             approvedRecord: payApplications.approvedRecord,
           })
           .from(payApplications)
-          .where(and(eq(payApplications.orgId, ctx.orgId), inArray(payApplications.contractId, contractIds), ne(payApplications.status, 'void'))),
+          .where(and(eq(payApplications.orgId, orgId), inArray(payApplications.contractId, contractIds), ne(payApplications.status, 'void'))),
       ])
     : [[], []];
 

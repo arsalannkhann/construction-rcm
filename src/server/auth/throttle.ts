@@ -20,9 +20,9 @@ import { newId } from '@/server/ids';
 
 const MINUTE = 60_000;
 
-export type AttemptKind = 'password' | 'mfa' | 'reset' | 'signup';
+export type AttemptKind = 'password' | 'mfa' | 'reset' | 'signup' | 'portal';
 
-type Limit = {
+export type Limit = {
   subject: string;
   /** Attempts allowed inside the window. */
   max: number;

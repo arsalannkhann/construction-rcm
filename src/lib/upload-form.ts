@@ -14,11 +14,15 @@ export const WHOLE_LIMIT = 4 * 1024 * 1024;
 
 export class UploadError extends Error {}
 
-async function sendPart(uploadId: string, part: number, body: Blob): Promise<void> {
+/** Where a part goes: the signed-in upload endpoint, unless the caller names another (the subcontractor portal). */
+export type PartUrl = (uploadId: string, part: number) => string;
+const memberPartUrl: PartUrl = (uploadId, part) => `/api/uploads/${uploadId}/parts/${part}`;
+
+async function sendPart(url: string, body: Blob): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     let res: Response;
     try {
-      res = await fetch(`/api/uploads/${uploadId}/parts/${part}`, { method: 'POST', body, headers: { 'content-type': 'application/octet-stream' } });
+      res = await fetch(url, { method: 'POST', body, headers: { 'content-type': 'application/octet-stream' } });
     } catch {
       if (attempt < 3) continue;
       throw new UploadError('The upload did not complete. Check your connection and try again.');
@@ -34,7 +38,7 @@ async function sendPart(uploadId: string, part: number, body: Blob): Promise<voi
  * The FormData for `files` plus `fields`. Large packages are staged first;
  * `onProgress` hears the share sent so far, from 0 to 1.
  */
-export async function buildUploadForm(files: File[], fields: Record<string, string> = {}, onProgress?: (share: number) => void): Promise<FormData> {
+export async function buildUploadForm(files: File[], fields: Record<string, string> = {}, onProgress?: (share: number) => void, partUrl: PartUrl = memberPartUrl): Promise<FormData> {
   const form = new FormData();
   for (const [k, v] of Object.entries(fields)) form.append(k, v);
   const total = files.reduce((n, f) => n + f.size, 0);
@@ -47,7 +51,7 @@ export async function buildUploadForm(files: File[], fields: Record<string, stri
     const uploadId = crypto.randomUUID();
     for (let part = 0, offset = 0; offset < f.size; part++, offset += PART_BYTES) {
       const chunk = f.slice(offset, Math.min(offset + PART_BYTES, f.size));
-      await sendPart(uploadId, part, chunk);
+      await sendPart(partUrl(uploadId, part), chunk);
       sent += chunk.size;
       onProgress?.(sent / total);
     }

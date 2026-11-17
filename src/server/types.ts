@@ -30,6 +30,12 @@ export type OrgSettings = {
    * `flag` accepts it with a blocking finding, `reject` turns it away.
    */
   unknownSenderPolicy: 'flag' | 'reject';
+  /**
+   * Day of the month (1 to 28) by which subcontractors are expected to send the
+   * application for that month's period. The subcontractor portal shows it and
+   * reminds them ahead of it and once after it (src/server/services/portal.ts).
+   */
+  portalDueDay: number;
 };
 
 export const DEFAULT_ORG_SETTINGS: OrgSettings = {
@@ -41,6 +47,7 @@ export const DEFAULT_ORG_SETTINGS: OrgSettings = {
   lowConfidenceThreshold: 0.75,
   requireMfa: false,
   unknownSenderPolicy: 'flag',
+  portalDueDay: 25,
 };
 
 /** Settings saved before a field existed do not have it; always read through this. */

@@ -11,8 +11,10 @@ import { describeRetainageTerms } from '@/lib/retainage';
 import { formatDate, pluralize } from '@/lib/utils';
 import { can } from '@/server/auth/permissions';
 import { requireCtx } from '@/server/auth/session';
+import { getPortalPanel } from '@/server/services/portal';
 import { getContractDetail } from '@/server/services/records-queries';
 import { ChangeOrdersPanel } from './change-orders';
+import { PortalPanel } from './portal-panel';
 import { RetainagePanel } from './retainage-panel';
 import { SchedulePanel } from './schedule-panel';
 import { TermsDialogButton } from './terms-dialog';
@@ -22,8 +24,9 @@ export const metadata = { title: 'Subcontract' };
 export default async function ContractPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const ctx = await requireCtx();
-  const detail = await getContractDetail(await getDb(), ctx, id);
-  if (!detail) notFound();
+  const db = await getDb();
+  const [detail, portal] = await Promise.all([getContractDetail(db, ctx, id), getPortalPanel(db, ctx, id)]);
+  if (!detail || !portal) notFound();
 
   const { contract, project, subcontractor, position, baseline, applications } = detail;
   const canWrite = can(ctx.role, 'records:write');
@@ -167,6 +170,18 @@ export default async function ContractPage({ params }: { params: Promise<{ id: s
             </div>
           </Panel>
         ) : null}
+
+        <PortalPanel
+          contractId={contract.id}
+          subcontractorName={subcontractor.name}
+          data={{
+            ...portal,
+            link: portal.link
+              ? { ...portal.link, createdAt: portal.link.createdAt.toISOString(), lastUsedAt: portal.link.lastUsedAt?.toISOString() ?? null }
+              : null,
+            emails: portal.emails.map((e) => ({ ...e, createdAt: e.createdAt.toISOString() })),
+          }}
+        />
 
         <Panel className="overflow-hidden">
           <PanelHeader

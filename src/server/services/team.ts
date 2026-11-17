@@ -635,6 +635,7 @@ export const updatePolicy = locked(async function updatePolicy(db: DB, ctx: Ctx,
   if (!Number.isInteger(merged.toleranceCents) || merged.toleranceCents < 0 || merged.toleranceCents > 100_000) throw new UserError('Rounding tolerance must be between $0 and $1,000.');
   if (!(merged.lowConfidenceThreshold >= 0 && merged.lowConfidenceThreshold <= 1)) throw new UserError('The confidence threshold must be between 0 and 100%.');
   if (merged.unknownSenderPolicy !== 'flag' && merged.unknownSenderPolicy !== 'reject') throw new UserError('Choose what happens to email from an unknown sender.');
+  if (!Number.isInteger(merged.portalDueDay) || merged.portalDueDay < 1 || merged.portalDueDay > 28) throw new UserError('The billing due day must be a day of the month from 1 to 28.');
   const next: OrgSettings = {
     toleranceCents: merged.toleranceCents,
     requireConditionalWaiver: !!merged.requireConditionalWaiver,
@@ -644,6 +645,7 @@ export const updatePolicy = locked(async function updatePolicy(db: DB, ctx: Ctx,
     lowConfidenceThreshold: merged.lowConfidenceThreshold,
     requireMfa: !!merged.requireMfa,
     unknownSenderPolicy: merged.unknownSenderPolicy,
+    portalDueDay: merged.portalDueDay,
   };
   const changed = (Object.keys(next) as Array<keyof OrgSettings>).filter((k) => next[k] !== current[k]);
   if (changed.length === 0) return;
@@ -660,13 +662,14 @@ export const updatePolicy = locked(async function updatePolicy(db: DB, ctx: Ctx,
   }
 
   await db.update(organizations).set({ settings: next }).where(eq(organizations.id, ctx.orgId));
-  const review = changed.filter((k) => k !== 'requireMfa');
+  // Neither who must use a second step nor when billing is due changes what counts as a finding.
+  const review = changed.filter((k) => k !== 'requireMfa' && k !== 'portalDueDay');
   const sentences: string[] = [];
   if (review.length > 0) sentences.push(`Changed review policy: ${review.map((k) => `${k} ${String(current[k])} → ${String(next[k])}`).join('; ')}`);
+  if (changed.includes('portalDueDay')) sentences.push(`Subcontractor billing is now due on day ${next.portalDueDay} of each month (was day ${current.portalDueDay})`);
   if (changed.includes('requireMfa')) sentences.push(next.requireMfa ? 'Two-step verification is now required for every member of the organisation' : 'Two-step verification is no longer required for members of the organisation');
   await recordAudit(db, { orgId: ctx.orgId, actor: ctx, action: 'policy.updated', entityType: 'organization', entityId: ctx.orgId, summary: sentences.join('. '), data: { before: current, after: next } });
   // Review policy changes what counts as a finding, so every undecided application is re-checked.
-  // Who has to use a second step changes nothing about a finding.
   if (review.length === 0) return;
   const open = await db.select({ id: payApplications.id }).from(payApplications).where(and(eq(payApplications.orgId, ctx.orgId), inArray(payApplications.status, OPEN_STATUSES), ne(payApplications.status, 'needs_matching')));
   for (const app of open) await runReconciliation(db, ctx.orgId, app.id, { actor: ctx });
