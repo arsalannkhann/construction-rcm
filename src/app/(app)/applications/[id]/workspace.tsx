@@ -153,7 +153,7 @@ export function ReviewWorkspace({ data, perms, extras }: { data: ReviewData; per
                   </>
                 ) : null}
                 {app.periodTo ? ` · Period to ${formatDate(app.periodTo)}` : ''}
-                {` · Received ${formatRelative(app.receivedAt)} by ${app.receivedVia}`}
+                {` · Received ${formatRelative(app.receivedAt)} ${app.receivedVia === 'portal' ? 'through the subcontractor portal' : `by ${app.receivedVia}`}`}
               </p>
             </div>
             <DecisionBar />

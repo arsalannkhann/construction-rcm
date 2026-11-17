@@ -795,6 +795,87 @@ export const uploadParts = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.uploadId, t.part] }), index('upload_parts_created').on(t.createdAt)],
 );
 
+// ── Subcontractor portal ────────────────────────────────────────────────────
+
+/**
+ * A link a subcontractor uses, without an account, to upload billing for one
+ * subcontract and follow what happened to it. Whoever holds the link can do
+ * exactly that and nothing else. At most one link per subcontract is live; a
+ * replaced or turned-off link stops working at once.
+ */
+export const portalLinks = pgTable(
+  'portal_links',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    contractId: text('contract_id').notNull().references(() => contracts.id, { onDelete: 'cascade' }),
+    /** SHA-256 of the token in the link: what a request is looked up by. */
+    tokenHash: text('token_hash').notNull().unique(),
+    /** The token itself, encrypted with RCM_SECRET_KEY, so the team can copy the link again and reminders can carry it. */
+    tokenEnc: text('token_enc').notNull(),
+    /** Where reminders and the link itself are emailed. */
+    email: text('email'),
+    reminders: boolean('reminders').notNull().default(true),
+    createdBy: text('created_by').notNull().references(() => users.id),
+    createdAt: createdAt(),
+    lastUsedAt: ts('last_used_at'),
+    revokedAt: ts('revoked_at'),
+    revokedBy: text('revoked_by').references(() => users.id),
+  },
+  (t) => [index('portal_links_org_contract').on(t.orgId, t.contractId), uniqueIndex('portal_links_live').on(t.contractId).where(sql`revoked_at is null`)],
+);
+
+/** Parts of a large file sent through a portal link (the portal's counterpart of `upload_parts`). */
+export const portalUploadParts = pgTable(
+  'portal_upload_parts',
+  {
+    linkId: text('link_id')
+      .notNull()
+      .references(() => portalLinks.id, { onDelete: 'cascade' }),
+    orgId: text('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    uploadId: text('upload_id').notNull(),
+    part: integer('part').notNull(),
+    bytes: bytea('bytes').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.linkId, t.uploadId, t.part] }), index('portal_upload_parts_created').on(t.createdAt)],
+);
+
+/** Every email about a portal link: the link itself, and the reminders when a period is due. `status` is the literal delivery outcome. */
+export const portalEmails = pgTable(
+  'portal_emails',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    linkId: text('link_id')
+      .notNull()
+      .references(() => portalLinks.id, { onDelete: 'cascade' }),
+    contractId: text('contract_id').notNull().references(() => contracts.id, { onDelete: 'cascade' }),
+    /** link | due_soon | overdue */
+    kind: text('kind').notNull(),
+    /** The billing month a reminder is about ("2026-11"); null for the link itself. */
+    period: text('period'),
+    toEmail: text('to_email').notNull(),
+    subject: text('subject').notNull(),
+    body: text('body').notNull(),
+    /** sending | sent | not_sent | failed | unconfirmed, as for `communications`. */
+    status: text('status').notNull(),
+    provider: text('provider'),
+    providerRef: text('provider_ref'),
+    error: text('error'),
+    /** Null when the scheduler sent it. */
+    createdBy: text('created_by').references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('portal_emails_org_contract').on(t.orgId, t.contractId, t.createdAt),
+    // One reminder of each kind per subcontract and month, whichever link was live.
+    uniqueIndex('portal_emails_reminder_once').on(t.contractId, t.kind, t.period),
+  ],
+);
+
 /** Every message that reached the email-intake address, including the ones that were turned away. */
 export const inboundMessages = pgTable(
   'inbound_messages',

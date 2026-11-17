@@ -57,7 +57,7 @@ the result for approval, and hand the approved record to accounting or Procore.
 | Change exposure (change events) | Pending change orders were stored but not counted anywhere | **Pending changes counted as exposure and in projected cost** |
 | Cost-risk flags ("AI flags overruns") | No | **Rule-based cost and billing risks on the overview, each with its reason** |
 | Cost-to-complete, time-phased forecasts | No | No (see gaps) |
-| Subcontractors submit their own applications | Email to a project address; no portal | Same |
+| Subcontractors submit their own applications | Email to a project address; no portal | **A no-account link per subcontract: upload, see each application's status and the messages sent to them, reminders before and after the due day** |
 | Accounting sync | File exports (CSV, JSON, PDF) and Procore push | Same |
 | Direct costs, labour from timesheets | No | No (out of scope for now) |
 | Unlimited users and documents | Yes | Same |
@@ -86,10 +86,11 @@ the result for approval, and hand the approved record to accounting or Procore.
    the owner or architect certifying inside the product rather than the
    certification being recorded, and self-performed work tracked from costs
    rather than entered each period.
-2. **Subcontractor portal.** A no-account link per subcontract where the
-   subcontractor uploads their package, sees its status and the reason for a
-   hold, and gets reminded when a period is due. Pairs with the missing-
-   application flags.
+2. ~~**Subcontractor portal.**~~ Done in the third round (below). Still open:
+   subcontractor accounts that cover every subcontract they hold with one
+   sign-in, compliance documents (insurance certificates, W-9s) with expiry
+   reminders, a per-subcontract due day, and reminders by text message.
+   Reminders need an email provider on the deployment.
 3. **Budget by cost code and cost-to-complete.** Today the budget is one figure
    per project for subcontracted work. Next: budget lines by cost code mapped to
    subcontracts, with forecast-to-complete per line.
@@ -154,3 +155,28 @@ the result for approval, and hand the approved record to accounting or Procore.
 - **Risk on the overview.** Approved subcontractor billing for a month that no
   submitted application to the owner covers yet.
 
+## Built in the third round: subcontractor portal
+
+- **A link per subcontract.** A reviewer makes it on the subcontract page, with
+  the address reminders go to. The link is the only credential: 256 random
+  bits, looked up by its SHA-256 and stored encrypted, one live link per
+  subcontract. Replacing it or turning it off stops the old one at once; what
+  was sent through it stays on record. Wrong links are counted per address and
+  refused for a while after 20 in 15 minutes.
+- **What the subcontractor sees.** The subcontract, what is due this month and
+  whether last month's application is missing, the same way the billing board
+  works it out, and every application received on the subcontract however it
+  was sent: its status (received, in review, waiting on you, approved,
+  rejected), the amount requested, the amount approved once it is approved, the
+  file names and the messages the team sent them. No internal comment,
+  finding, decision note or other subcontract.
+- **Uploading.** PDF, PNG, JPEG or WebP only, large files in parts, ten packages
+  a day per subcontract, refused on a closed subcontract. A package arrives
+  already matched to its subcontract, is read like any other and shows in the
+  activity log as received through the portal.
+- **Reminders.** The organisation sets the due day (1 to 28) on the review
+  policy. A subcontract that has nothing in for the month gets one email in the
+  five days before the due day and one after it, with the link; never twice,
+  never when the month's application is in or still being read, and never
+  without an email provider. A failed send is recorded and its link's creator
+  told. Each email shows on the subcontract page.

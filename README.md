@@ -90,7 +90,10 @@ own):
    the owner and its schedule. Start application #1: it is worked out from the
    subcontractor billing approved so far, laid out as a G702 and G703, with a
    draft PDF. Approve *Capitol Concrete #5* and the draft follows.
-6. **Activity** is the audit trail, with a check that the chain is intact.
+6. **Any subcontract → Subcontractor portal**: make a link and open it in a
+   private window. That is what the subcontractor sees: their applications,
+   what is due, and an upload that arrives already matched.
+7. **Activity** is the audit trail, with a check that the chain is intact.
 
 ### Try it from an empty organisation
 
@@ -464,6 +467,38 @@ for the PDF; pages under `/projects/[id]/owner-billing`).
 - **Overview risk**: approved subcontractor billing for a month that no
   submitted application to the owner covers yet.
 
+### Subcontractor portal
+
+A link per subcontract that the subcontractor uses, without an account, to send
+billing and see what happened to it (`src/server/services/portal.ts`; the page
+is `/portal/[token]`, managed from the subcontract page).
+
+- **What the link can do.** Upload a package (PDFs and photos, large files in
+  parts as for members), which arrives exactly like an upload, already matched
+  to the subcontract and marked as received through the portal. And see every
+  application on that subcontract: received, in review, waiting on them with
+  the messages the team sent them, approved with the approved amount, or
+  rejected. Nothing else: no findings, comments, decision notes, other
+  subcontracts or anything about the main contractor's other work.
+- **The token** is 256 random bits. Requests are looked up by its SHA-256; the
+  token itself is stored encrypted with `RCM_SECRET_KEY` so the team can copy
+  the link again and reminders can carry it. Every join from the link is held
+  to the link's organisation. One live link per subcontract (a partial unique
+  index); replacing or turning it off stops the old one at once. Failed lookups
+  are counted per network address (20 in 15 minutes), packages per subcontract
+  per day are limited (10), and the page is `noindex` with no referrer.
+- **Who manages it.** Members who review applications make, copy, email,
+  replace and turn off links; others see only that a link exists.
+- **Reminders.** The daily scheduled run emails each live link whose
+  subcontract is *due* this month on the billing board (it has started billing,
+  is active, is not fully billed, and nothing has arrived for the month; a
+  package still being read counts as arrived) once in the five days before the
+  organisation's due day (Settings → Policy, default the 25th) and once after
+  it. One reminder of each kind per subcontract and month, enforced by a unique
+  index; a failed send is recorded as failed, its creator is told, and it is not
+  retried. With no email provider configured nothing is sent and the
+  subcontract page says so.
+
 ### Background work
 
 `src/server/jobs.ts`. A queue in the `jobs` table: `queued → running →
@@ -508,6 +543,8 @@ erDiagram
   contracts ||--o{ change_orders : amended_by
   contracts ||--o{ retainage_releases : releases
   contracts ||--o{ pay_applications : billed_by
+  contracts ||--o| portal_links : "subcontractor portal"
+  portal_links ||--o{ portal_emails : "link and reminders"
   pay_applications ||--o{ pay_app_lines : lines
   pay_app_lines }o--o| sov_lines : matched_to
   pay_applications ||--o{ documents : submitted_as
@@ -526,6 +563,7 @@ erDiagram
 | Contracts | `projects`, `subcontractors`, `contracts`, `sov_lines`, `change_orders`, `retainage_releases` |
 | Billing | `pay_applications`, `pay_app_lines`, `documents`, `extractions`, `lien_waivers`, `findings`, `comments` |
 | Owner billing | `prime_contracts`, `prime_lines`, `prime_change_orders`, `owner_applications` |
+| Subcontractor portal | `portal_links`, `portal_emails`, `portal_upload_parts` |
 | Outbound and inbound | `communications`, `notifications`, `transfers`, `integrations`, `inbound_messages` |
 | Platform | `jobs`, `stored_objects`, `upload_parts`, `audit_events` |
 
@@ -545,6 +583,7 @@ Organisations are separated from each other by the application, not by RLS.
 | Secrets at rest | Authenticator keys and integration tokens encrypted with AES-256-GCM under a key derived from `RCM_SECRET_KEY`; recovery codes and remembered browsers hashed with per-purpose keys from the same secret. |
 | Audit | Append-only events, each committing to the previous event's hash per organisation (`src/server/audit.ts`); Activity checks the chain. |
 | Documents | Content-addressed by SHA-256 and verified against the hash on every read. |
+| Subcontractor portal | A link reaches one subcontract of one organisation and only what was meant for the subcontractor; only the token's SHA-256 is looked up, the token is encrypted at rest, failed lookups are throttled per address, and a replaced or turned-off link stops at once. Tested as an attack (`tests/portal.test.ts`). |
 | Webhooks and scheduler | The inbound-email webhook needs `INBOUND_EMAIL_SECRET` and a per-organisation token; `/api/jobs/run` needs `CRON_SECRET` (constant-time comparison). Each refuses everything when its secret is not set. |
 
 ### Integrations
@@ -675,14 +714,14 @@ its documented API.
 
 ## What is and is not verified
 
-Status on 2026-11-17, `main`. The current phase is summarised in
+Status on 2026-11-18, `main`. The current phase is summarised in
 [docs/phase-3-report.md](docs/phase-3-report.md), the previous one in
 [docs/phase-2-report.md](docs/phase-2-report.md).
 
-**Verified by automated tests.** `pnpm test`: 543 passed, 3 skipped (the
+**Verified by automated tests.** `pnpm test`: 556 passed, 3 skipped (the
 skipped tests need a PostgreSQL server). `pnpm test:pg` on a throwaway
-PostgreSQL server: 496 passed (run before cost control, billing periods and
-owner billing were added; not re-run since). `pnpm typecheck` is clean and `pnpm build`
+PostgreSQL server: 496 passed (run before cost control, billing periods,
+owner billing and the subcontractor portal were added; not re-run since). `pnpm typecheck` is clean and `pnpm build`
 succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
 
 - Money parsing and rounding; every reconciliation check, including stepped
@@ -721,6 +760,22 @@ succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
   orders protected, the PDF's pages and filenames, every action audited, and
   the overview risk. The demo test checks that the demo's owner contract
   produces a draft with nothing blocking.
+- The subcontractor portal (`tests/portal.test.ts`), written as attacks where
+  it matters: only reviewers make links; a link opens exactly its subcontract
+  and stops the moment it is replaced or turned off; malformed tokens, other
+  organisations and other subcontracts reach nothing; neither stored column
+  holds the token; the view shows the messages sent to the subcontractor and
+  the approved amount but no comment, finding or decision note; uploads
+  arrive matched, readable files only, within the daily limit, refused on a
+  closed subcontract or a link turned off mid-way; parts joined per link and
+  invisible to other links; the API route with the link as its only
+  credential, cross-site posts refused, and wrong links counted per address
+  until even a right one is refused from there. Reminders: once before the due
+  day and once after, with the link, never twice; none when the month's
+  billing is in, still being read, reminders are off, there is no address or
+  the subcontract has not started billing; the organisation's due day; nothing
+  attempted without an email provider; a failed send recorded, its creator
+  told, and not retried.
 - The mobile API (`tests/mobile.test.ts`): bearer sign-in and sign-out (the
   token is never read from a query string), the second step, organisation
   isolation, refusal of a member who owes their organisation two-step
@@ -777,14 +832,23 @@ percentages), typing over general conditions and seeing the fee follow,
 submitting, the PDF (two pages, read back as images), a short certification
 with its reason, application #2 carrying the certified amount as the previous
 certificate and following a subcontractor approval made meanwhile, the
-overview risk moving to October, and the pages at 375 px.
+overview risk moving to October, and the pages at 375 px. On 2026-11-18, the
+subcontractor portal on the same setup: making a link on a subcontract, opening
+it in another tab (the month's due date, the subcontract's history with
+requested and approved amounts), sending a sample package through it (listed at
+once as received through the page, then read and in review; on the member side
+in the subcontract's billing history, the link's last use and the activity log),
+turning reminders off, replacing the link (the old one then shows that it
+cannot be used), the due day refused at 31 and changed to 20 (followed by the
+link and the panel), and the portal page and the panel at 375 px. Emails were
+not sent: no email provider is configured locally, and the panel says so.
 
 **Verified against real infrastructure:**
 
 | What | Result |
 |---|---|
 | Vercel + Supabase production | https://zephric.vercel.app (formerly https://construction-rcm.vercel.app, which still answers), Node 22, region sin1, all secrets set. Checked live on 2026-11-15: `/api/health` returns `ok` with PostgreSQL reached through Supabase's session pooler and TLS **verified** against the configured CA, the Data API exposing no table and no table without RLS, documents stored in the database, and the queue empty. `/api/jobs/run` refuses no token and a wrong token (401) and, with `CRON_SECRET`, runs the queue against the live database (200). Signed-out pages redirect to sign-in; the sign-up page renders. |
-| Supabase project `construction-rcm` | Schema applied (migrations 0000–0008, recorded under the repository's versions, applied by hand; 0008, the owner billing tables, on 2026-11-17, with row-level security confirmed on each new table). The Data API, probed from outside with both public keys, refuses every table. |
+| Supabase project `construction-rcm` | Schema applied (migrations 0000–0009, recorded under the repository's versions, applied by hand; 0008, the owner billing tables, on 2026-11-17, and 0009, the subcontractor portal tables, on 2026-11-18, with row-level security confirmed on each new table). The Data API, probed from outside with both public keys, refuses every table. |
 | Docker image and Compose stack | Built and run to a healthy state on 2026-11-15, before that day's authentication changes; not rebuilt since. |
 | Signed-in use of the live site | On 2026-11-15 the owner signed up on the live site, and a project, a subcontractor and a subcontract with a three-line schedule of values ($500,000.00, retainage 10% / 10%) were created through the interface and confirmed in the Supabase database. |
 | Uploads and reading on the live site | On 2026-11-15 the five sample PDFs were uploaded as one package, including a 5.9 MB file sent in 4 MiB parts; every stored object matches its original byte for byte (SHA-256). The first reading failed for every file: pdf.js's worker was not in the deployed functions (fixed in [PR #2](https://github.com/arsalannkhann/construction-rcm/pull/2); the health check now opens a test PDF so this shows as `degraded`). After the fix, the four extra files were removed from the package through the interface ([PR #3](https://github.com/arsalannkhann/construction-rcm/pull/3)) and the package was read again: the 4-page file was split into pay application, schedule of values, lien waiver and one unreadable page; it was read as application #1 for the period to 2026-09-30, matched to SC-2301-16, with $99,000.00 requested and verified and $11,000.00 retainage, all equal to the generator's figures. The only open finding was the unreadable page (`doc.unreadable_pages`), with 26 checks passed. Each removal was audited and every background job succeeded on its first attempt. |

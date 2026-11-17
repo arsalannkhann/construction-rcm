@@ -58,7 +58,7 @@ function validateFiles(files: IncomingFile[]): void {
   }
 }
 
-async function storeDocuments(db: DB, orgId: string, appId: string, files: IncomingFile[], source: 'upload' | 'email', uploadedBy: string | null, at: Date) {
+async function storeDocuments(db: DB, orgId: string, appId: string, files: IncomingFile[], source: ReceivedVia, uploadedBy: string | null, at: Date) {
   const stored: Array<{ id: string; filename: string }> = [];
   for (const file of files) {
     const object = await putObject(orgId, 'documents', file.bytes);
@@ -83,14 +83,19 @@ async function storeDocuments(db: DB, orgId: string, appId: string, files: Incom
   return stored;
 }
 
+/** How a package arrived: uploaded by a member, emailed to the intake address, or sent through a subcontractor's portal link. */
+export type ReceivedVia = 'upload' | 'email' | 'portal';
+
 export type CreateApplicationInput = {
   files: IncomingFile[];
   contractId?: string | null;
-  receivedVia?: 'upload' | 'email';
+  receivedVia?: ReceivedVia;
   senderEmail?: string | null;
   receivedAt?: Date;
   /** Skip the queue; the caller will run processApplication itself (seeding, tests). */
   defer?: boolean;
+  /** The portal link it came through (receivedVia 'portal'), kept in the audit record. */
+  portalLinkId?: string | null;
   /**
    * The sender's own name for this submission (the mobile app makes one per
    * draft). Sending the same one again returns the application it already
@@ -171,8 +176,8 @@ export const createApplication = locked(async function createApplication(db: DB,
     entityType: 'pay_application',
     entityId: id,
     payApplicationId: id,
-    summary: `Billing package received by ${via === 'email' ? `email${input.senderEmail ? ` from ${input.senderEmail}` : ''}` : 'upload'}: ${stored.map((d) => d.filename).join(', ')}`,
-    data: { files: stored.map((d) => d.filename), via, senderEmail: input.senderEmail ?? null, ...(clientRef ? { clientRef } : {}) },
+    summary: `Billing package received ${via === 'email' ? `by email${input.senderEmail ? ` from ${input.senderEmail}` : ''}` : via === 'portal' ? `through the subcontractor portal${contract ? ` for ${contract.number}` : ''}` : 'by upload'}: ${stored.map((d) => d.filename).join(', ')}`,
+    data: { files: stored.map((d) => d.filename), via, senderEmail: input.senderEmail ?? null, ...(clientRef ? { clientRef } : {}), ...(input.portalLinkId ? { portalLinkId: input.portalLinkId } : {}) },
     at,
   });
 

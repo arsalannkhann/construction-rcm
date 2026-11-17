@@ -49,13 +49,21 @@ export function PolicyForm({ initial, canEdit }: { initial: OrgSettings; canEdit
   });
   const [percent, setPercent] = useState(initialPercent);
   const [senderPolicy, setSenderPolicy] = useState<OrgSettings['unknownSenderPolicy']>(initial.unknownSenderPolicy);
+  const [dueDay, setDueDay] = useState(String(initial.portalDueDay));
   const { pending, run } = useAction();
 
   const percentChanged = percent.trim() !== initialPercent;
   const parsedPercent = parsePercent(percent);
   const toleranceOk = tolerance >= 0 && tolerance <= MAX_TOLERANCE_CENTS;
   const percentOk = !percentChanged || parsedPercent !== null;
-  const dirty = tolerance !== initial.toleranceCents || percentChanged || senderPolicy !== initial.unknownSenderPolicy || (Object.keys(toggles) as Toggle[]).some((k) => toggles[k] !== initial[k]);
+  const parsedDueDay = /^\d{1,2}$/.test(dueDay.trim()) ? Number(dueDay.trim()) : NaN;
+  const dueDayOk = parsedDueDay >= 1 && parsedDueDay <= 28;
+  const dirty =
+    tolerance !== initial.toleranceCents ||
+    percentChanged ||
+    senderPolicy !== initial.unknownSenderPolicy ||
+    dueDay.trim() !== String(initial.portalDueDay) ||
+    (Object.keys(toggles) as Toggle[]).some((k) => toggles[k] !== initial[k]);
   const disabled = !canEdit || pending;
 
   const discard = () => {
@@ -68,16 +76,18 @@ export function PolicyForm({ initial, canEdit }: { initial: OrgSettings; canEdit
     });
     setPercent(initialPercent);
     setSenderPolicy(initial.unknownSenderPolicy);
+    setDueDay(String(initial.portalDueDay));
   };
 
   const save = () => {
-    if (!canEdit || !dirty || !toleranceOk || !percentOk || pending) return;
+    if (!canEdit || !dirty || !toleranceOk || !percentOk || !dueDayOk || pending) return;
     run(
       () =>
         updatePolicyAction({
           toleranceCents: tolerance,
           ...toggles,
           unknownSenderPolicy: senderPolicy,
+          portalDueDay: parsedDueDay,
           // Left exactly as stored unless it was edited, so a save never nudges it by rounding.
           lowConfidenceThreshold: percentChanged && parsedPercent !== null ? parsedPercent / 100 : initial.lowConfidenceThreshold,
         }),
@@ -155,6 +165,18 @@ export function PolicyForm({ initial, canEdit }: { initial: OrgSettings; canEdit
         </Row>
 
         <Row
+          title="Subcontractor billing due day"
+          htmlFor="policy-due-day"
+          explanation="The day of the month each month’s application is due. Subcontractor portal links show it, and remind subcontractors with nothing in for the month in the five days before it and once after it."
+          error={dueDayOk ? null : 'Enter a day from 1 to 28.'}
+        >
+          <div className="flex items-center gap-1.5">
+            <span className="text-ink-3">Day</span>
+            <Input id="policy-due-day" inputMode="numeric" className="num w-14 text-right" value={dueDay} disabled={disabled} aria-invalid={!dueDayOk} onChange={(e) => setDueDay(e.target.value)} />
+          </div>
+        </Row>
+
+        <Row
           title="Low-confidence threshold"
           htmlFor="policy-confidence"
           explanation="Values read from a document with less confidence than this are flagged for a human check. A higher threshold flags more values."
@@ -176,7 +198,7 @@ export function PolicyForm({ initial, canEdit }: { initial: OrgSettings; canEdit
       </div>
 
       <div className="flex items-center justify-between gap-4 rounded-b-xl border-t border-line bg-canvas/60 px-4 py-3">
-        <p className="text-xs text-ink-3">Saving re-checks every undecided application against the new policy. Applications already approved, rejected or voided are not changed.</p>
+        <p className="text-xs text-ink-3">Saving a change to the checks re-checks every undecided application against the new policy. Applications already approved, rejected or voided are not changed.</p>
         {canEdit ? (
           <div className="flex shrink-0 items-center gap-2">
             {dirty ? (
@@ -184,7 +206,7 @@ export function PolicyForm({ initial, canEdit }: { initial: OrgSettings; canEdit
                 Discard changes
               </Button>
             ) : null}
-            <Button type="submit" variant="primary" loading={pending} disabled={!dirty || !toleranceOk || !percentOk}>
+            <Button type="submit" variant="primary" loading={pending} disabled={!dirty || !toleranceOk || !percentOk || !dueDayOk}>
               Save policy
             </Button>
           </div>

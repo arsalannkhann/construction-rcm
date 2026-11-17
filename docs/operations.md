@@ -45,7 +45,7 @@ run a pilot on it.
 | `RCM_STORAGE` | No | `database` (default with `DATABASE_URL`) or `disk`. Leave it unset. |
 | `ANTHROPIC_API_KEY`, `RCM_EXTRACTION_MODEL` | No | AI document reading (model default `claude-opus-5-5`). Without it, only PDFs with a text layer are read; scans are keyed by hand. Set it with `pnpm ai:key`: see [AI document reading](#ai-document-reading). |
 | `RCM_EXTRACTION_TIMEOUT_SECONDS` | No | Longest one AI read may take (default 240). A read that runs over is stopped; the document is read by the text-layer reader instead, or marked not read, and reviewers are told which. |
-| `RESEND_API_KEY`, `EMAIL_FROM` | No | Outbound email. Without them, messages are saved as drafts and clearly marked "not sent". |
+| `RESEND_API_KEY`, `EMAIL_FROM` | No | Outbound email. Without them, messages are saved as drafts and clearly marked "not sent", subcontractor portal links cannot be emailed from the app, and no billing reminders go out (the subcontract page says so). |
 | `INBOUND_EMAIL_SECRET` | No | Opens the email-intake webhook. Without it every intake request is refused. |
 | `PROCORE_CLIENT_ID`, `PROCORE_CLIENT_SECRET`, `PROCORE_ENV` | No | Procore connection. See `docs/procore-api-notes.md`. |
 
@@ -171,9 +171,10 @@ Then check that it is recorded, and only then merge:
 select version, name from supabase_migrations.schema_migrations order by version;
 ```
 
-Migrations 0000–0008 are applied to `construction-rcm` and recorded under the
+Migrations 0000–0009 are applied to `construction-rcm` and recorded under the
 same versions as the files (0007, the project budget column, and 0008, the
-owner billing tables, on 2026-11-17).
+owner billing tables, on 2026-11-17; 0009, the subcontractor portal tables, on
+2026-11-18).
 
 Never let the app apply its own migrations to a database Supabase manages: set
 `RCM_MIGRATIONS=external`. If you forget, the app refuses to start and says so.
@@ -270,7 +271,9 @@ project, because every page makes several database round trips.
 - **The schedule.** `vercel.json` calls `/api/jobs/run` daily at 03:00 UTC,
   the most often the Hobby plan allows. On Pro, change the schedule to
   `*/5 * * * *` so retries never wait for someone to open the app. The call
-  only runs with `CRON_SECRET` set.
+  only runs with `CRON_SECRET` set. The same call sends subcontractor billing
+  reminders (once per subcontract, kind and month, so running it more often
+  sends nothing twice); with the daily schedule they go out once a day.
 - **Uploads.** Vercel refuses a request body over 4.5 MB. The browser sends a
   package of more than 4 MB as 4 MB parts first (`/api/uploads/<id>/parts/<n>`,
   kept in `upload_parts` by migration 0004) and the upload then names them.

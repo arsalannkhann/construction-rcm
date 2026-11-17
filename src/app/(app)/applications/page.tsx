@@ -1,4 +1,4 @@
-import { ArrowUpFromLine, Inbox, Mail } from 'lucide-react';
+import { ArrowUpFromLine, Inbox, Link2, Mail } from 'lucide-react';
 import Link from '@/components/ui/link';
 import { getDb } from '@/db';
 import { buttonClass } from '@/components/ui/button';
@@ -169,7 +169,7 @@ export default async function ApplicationsPage({ searchParams }: { searchParams:
                     </Td>
                     <Td className="hidden whitespace-nowrap xl:table-cell">
                       <span className="flex items-center gap-1.5 text-ink-2">
-                        {r.receivedVia === 'email' ? <Mail className="size-3 text-ink-3" aria-label="Received by email" /> : null}
+                        {r.receivedVia === 'email' ? <Mail className="size-3 text-ink-3" aria-label="Received by email" /> : r.receivedVia === 'portal' ? <Link2 className="size-3 text-ink-3" aria-label="Received through the subcontractor portal" /> : null}
                         {formatRelative(r.receivedAt)}
                       </span>
                       {open && age >= 5 ? <div className="text-[11px] text-warn">{age} days open</div> : null}

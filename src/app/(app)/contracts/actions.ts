@@ -19,6 +19,7 @@ import {
   type RetainageReleaseInput,
   type ScheduleLineInput,
 } from '@/server/services/records';
+import { createPortalLink, emailPortalLink, revokePortalLink, updatePortalLink } from '@/server/services/portal';
 
 export async function createContractAction(input: ContractInput): Promise<ActionResult<{ id: string }>> {
   return run(async () => {
@@ -82,5 +83,38 @@ export async function voidRetainageReleaseAction(releaseId: string, reason: stri
     const ctx = await requireCtx();
     await voidRetainageRelease(await getDb(), ctx, releaseId, String(reason ?? ''));
     return undefined;
+  });
+}
+
+// ── Subcontractor portal ────────────────────────────────────────────────────
+
+export async function createPortalLinkAction(contractId: string, email: string): Promise<ActionResult<{ url: string }>> {
+  return run(async () => {
+    const ctx = await requireCtx();
+    const { url } = await createPortalLink(await getDb(), ctx, contractId, { email });
+    return { url };
+  });
+}
+
+export async function updatePortalLinkAction(linkId: string, patch: { email?: string; reminders?: boolean }): Promise<ActionResult> {
+  return run(async () => {
+    const ctx = await requireCtx();
+    await updatePortalLink(await getDb(), ctx, linkId, patch);
+    return undefined;
+  });
+}
+
+export async function revokePortalLinkAction(linkId: string): Promise<ActionResult> {
+  return run(async () => {
+    const ctx = await requireCtx();
+    await revokePortalLink(await getDb(), ctx, linkId);
+    return undefined;
+  });
+}
+
+export async function emailPortalLinkAction(linkId: string): Promise<ActionResult<{ status: string; detail: string | null }>> {
+  return run(async () => {
+    const ctx = await requireCtx();
+    return emailPortalLink(await getDb(), ctx, linkId);
   });
 }
