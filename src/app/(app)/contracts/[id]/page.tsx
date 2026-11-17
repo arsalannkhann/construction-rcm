@@ -58,7 +58,7 @@ export default async function ContractPage({ params }: { params: Promise<{ id: s
 
       <div className="space-y-5">
         <div className="space-y-2">
-          <Figures className="grid-cols-2 sm:grid-cols-3">
+          <Figures className="grid-cols-1 sm:grid-cols-3">
             <Figure label="Original amount" cents={position.originalAmount} note={contract.executedOn ? `Contract dated ${formatDate(contract.executedOn)}` : undefined} />
             <Figure
               label="Approved change orders"

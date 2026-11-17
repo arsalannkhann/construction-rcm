@@ -9,6 +9,7 @@ import { Field, Input, MoneyInput, Select } from '@/components/ui/form';
 import { Dialog } from '@/components/ui/overlay';
 import { useAction } from '@/lib/use-action';
 import { formatDate } from '@/lib/utils';
+import { createPrimeChangeOrderAction, updatePrimeChangeOrderAction } from '@/app/(app)/projects/[id]/owner-billing/actions';
 import { createChangeOrderAction, updateChangeOrderAction } from '../actions';
 
 type Status = 'pending' | 'approved' | 'rejected' | 'void';
@@ -28,9 +29,23 @@ const STATUS_EFFECT: Record<Status, string> = {
   rejected: 'Not part of the contract sum. Billing against it shows up as a finding.',
   void: 'Not part of the contract sum. Billing against it shows up as a finding.',
 };
+/** The same statuses on the contract with the owner. */
+const OWNER_STATUS_EFFECT: Record<Status, string> = {
+  pending: 'Not part of the contract sum yet, so not billed to the owner.',
+  approved: 'Added to the contract sum, with a line of its own on the owner schedule of values.',
+  rejected: 'Not part of the contract sum.',
+  void: 'Not part of the contract sum.',
+};
 const asStatus = (s: string): Status => (STATUSES.some(([value]) => value === s) ? (s as Status) : 'pending');
 
-export function ChangeOrdersPanel({ contractId, changeOrders, canWrite }: { contractId: string; changeOrders: ChangeOrder[]; canWrite: boolean }) {
+/**
+ * Change orders on a subcontract or, with `owner`, on the project's contract
+ * with the owner (then `contractId` is the project's id).
+ */
+export function ChangeOrdersPanel({ contractId, changeOrders, canWrite, owner = false }: { contractId: string; changeOrders: ChangeOrder[]; canWrite: boolean; owner?: boolean }) {
+  const effect = owner ? OWNER_STATUS_EFFECT : STATUS_EFFECT;
+  const createAction = owner ? createPrimeChangeOrderAction : createChangeOrderAction;
+  const updateAction = owner ? updatePrimeChangeOrderAction : updateChangeOrderAction;
   // 'new', the change order being edited, or null when the dialog is closed.
   const [target, setTarget] = useState<ChangeOrder | 'new' | null>(null);
   const [form, setForm] = useState<Values>(EMPTY);
@@ -55,15 +70,15 @@ export function ChangeOrdersPanel({ contractId, changeOrders, canWrite }: { cont
     const input = { number: form.number, title: form.title, amount, status: form.status, approvedOn: form.status === 'approved' ? form.approvedOn || null : null };
     setApprovingId(null);
     if (target === 'new') {
-      run(() => createChangeOrderAction(contractId, input), { success: `Change order ${form.number.trim()} added`, onSuccess: () => setTarget(null) });
+      run(() => createAction(contractId, input), { success: `Change order ${form.number.trim()} added`, onSuccess: () => setTarget(null) });
     } else {
-      run(() => updateChangeOrderAction(target.id, input), { success: `Change order ${form.number.trim()} saved`, onSuccess: () => setTarget(null) });
+      run(() => updateAction(target.id, input), { success: `Change order ${form.number.trim()} saved`, onSuccess: () => setTarget(null) });
     }
   };
 
   const approve = (co: ChangeOrder) => {
     setApprovingId(co.id);
-    run(() => updateChangeOrderAction(co.id, { number: co.number, title: co.title, amount: co.amount, status: 'approved' }), {
+    run(() => updateAction(co.id, { number: co.number, title: co.title, amount: co.amount, status: 'approved' }), {
       success: `Change order ${co.number} approved and added to the schedule`,
     });
   };
@@ -78,15 +93,19 @@ export function ChangeOrdersPanel({ contractId, changeOrders, canWrite }: { cont
   return (
     <Panel className="overflow-hidden">
       <PanelHeader
-        title="Change orders"
-        description="Approving a change order adds a line to the schedule of values and re-checks open applications. A pending change order that the subcontractor bills shows up as a finding on the application."
+        title={owner ? 'Owner change orders' : 'Change orders'}
+        description={
+          owner
+            ? 'Approving an owner change order adds it to the contract sum, with a line of its own on the owner schedule of values.'
+            : 'Approving a change order adds a line to the schedule of values and re-checks open applications. A pending change order that the subcontractor bills shows up as a finding on the application.'
+        }
         actions={canWrite && changeOrders.length > 0 ? addButton('secondary') : null}
       />
       {changeOrders.length === 0 ? (
         <EmptyState
           icon={<FileDiff />}
-          title="No change orders"
-          description="Record a change order when the contract value changes. Once approved, it is added to the contract sum and to the schedule of values."
+          title={owner ? 'No owner change orders' : 'No change orders'}
+          description={owner ? 'Record a change order when the owner agrees to change the contract sum. Once approved, it is billed like any other line.' : 'Record a change order when the contract value changes. Once approved, it is added to the contract sum and to the schedule of values.'}
           action={canWrite ? addButton('primary') : null}
         />
       ) : (
@@ -140,7 +159,7 @@ export function ChangeOrdersPanel({ contractId, changeOrders, canWrite }: { cont
           if (!open) setTarget(null);
         }}
         title={target === 'new' || target === null ? 'Add change order' : `Edit change order ${target.number}`}
-        description="Saving re-checks every undecided application on this contract."
+        description={owner ? 'An approved change order is added to the next application to the owner.' : 'Saving re-checks every undecided application on this contract.'}
         footer={
           <>
             <Button variant="ghost" onClick={() => setTarget(null)}>
@@ -168,7 +187,7 @@ export function ChangeOrdersPanel({ contractId, changeOrders, canWrite }: { cont
           <Field label="Description" className="col-span-2">
             <Input required value={form.title} onChange={(e) => set('title', e.target.value)} placeholder="Added receptacles, level 2" />
           </Field>
-          <Field label="Status" className={form.status === 'approved' ? undefined : 'col-span-2'} hint={form.status === 'approved' ? undefined : STATUS_EFFECT[form.status]}>
+          <Field label="Status" className={form.status === 'approved' ? undefined : 'col-span-2'} hint={form.status === 'approved' ? undefined : effect[form.status]}>
             <Select value={form.status} onChange={(e) => set('status', asStatus(e.target.value))}>
               {STATUSES.map(([value, label]) => (
                 <option key={value} value={value}>
@@ -183,7 +202,7 @@ export function ChangeOrdersPanel({ contractId, changeOrders, canWrite }: { cont
                 <Input type="date" value={form.approvedOn} onChange={(e) => set('approvedOn', e.target.value)} />
               </Field>
               <p className="col-span-2 -mt-2 text-xs text-ink-3">
-                {STATUS_EFFECT.approved} {alreadyApproved ? 'Leave the date blank to keep the one on record.' : 'Leave the date blank to use today’s date.'}
+                {effect.approved} {alreadyApproved ? 'Leave the date blank to keep the one on record.' : 'Leave the date blank to use today’s date.'}
               </p>
             </>
           ) : null}

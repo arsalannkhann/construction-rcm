@@ -52,7 +52,7 @@ the result for approval, and hand the approved record to accounting or Procore.
 | Approval routing, audit trail | Yes: roles, two-person rule, immutable approved record, full activity log | Same |
 | Status of every pay application in a billing period | Partly: an application list and a billing-by-month chart | **Billing periods page and project billing grid** |
 | Make sure no pay application is missed | Partly: application numbers out of sequence are flagged, but a subcontractor who sends nothing goes unnoticed | **Missing applications flagged per period, counted on the overview** |
-| Owner invoice pre-filled from approved sub applications | No | **Partly: a per-project, per-period roll-up of approved subcontractor billing (CSV) to build the owner invoice from** |
+| Owner invoice pre-filled from approved sub applications | No | **Yes: the main contractor's own application to the owner (G702 summary and G703 continuation sheet), worked out each period from approved subcontractor billing, with markup and hand-entered lines, frozen on submission, certification recorded, PDF** |
 | Budget and budget-vs-committed | No | **A budget per project, with committed, pending changes, projected cost and the variance** |
 | Change exposure (change events) | Pending change orders were stored but not counted anywhere | **Pending changes counted as exposure and in projected cost** |
 | Cost-risk flags ("AI flags overruns") | No | **Rule-based cost and billing risks on the overview, each with its reason** |
@@ -81,10 +81,11 @@ the result for approval, and hand the approved record to accounting or Procore.
 
 ## Gaps, in the order we would close them
 
-1. **Prime contract and the owner's pay application.** Model the head contract
-   and its schedule, and generate the main contractor's own G702/G703 from the
-   approved subcontractor billing plus self-performed work and markup. The
-   roll-up added in this round is the first half.
+1. ~~**Prime contract and the owner's pay application.**~~ Done in the second
+   round (below). Still open: emailing the application to the owner from here,
+   the owner or architect certifying inside the product rather than the
+   certification being recorded, and self-performed work tracked from costs
+   rather than entered each period.
 2. **Subcontractor portal.** A no-account link per subcontract where the
    subcontractor uploads their package, sees its status and the reason for a
    hold, and gets reminded when a period is due. Pairs with the missing-
@@ -119,3 +120,37 @@ the result for approval, and hand the approved record to accounting or Procore.
 - **Cost and billing risks on the overview.** Projects over or near their
   budget, large pending changes against a subcontract, and subcontracts that
   missed the last closed billing period.
+
+## Built in the second round: owner billing
+
+- **Contract with the owner.** Per project: contract number, architect,
+  original sum, retainage on work and on stored materials, date. Owner change
+  orders, pending or approved; approving one adds it to the contract sum with a
+  line of its own on the owner schedule.
+- **Owner schedule of values.** Each line says how it is billed every period:
+  it follows one or more subcontracts (the line's value times their approved
+  percent complete, weighted by contract sum, so a marked-up line bills in
+  step), it follows the rest of the contract (fee, insurance and bonds, at the
+  percent complete of the other lines), or it is entered each period (general
+  conditions, self-performed work). "Start from subcontracts" builds a first
+  schedule in one click. Subcontracts not on the schedule are flagged.
+- **Applications to the owner.** One per period. A draft is worked out from the
+  latest subcontractor application approved up to the end of its period, every
+  time it is opened, so it is always current; only approved billing counts.
+  Columns E and F can be typed over on any line, with a note, and the worked-out
+  figure stays visible. Checks before submitting: the schedule adds up to the
+  contract sum, no line billed beyond its value (both blocking), lines typed
+  above the approved progress, subcontracts not on the schedule, and
+  subcontractor applications for the period still in review.
+- **Submit, certify, reopen.** Submitting freezes the figures with a
+  fingerprint (an approver submits on the figures they saw, or is asked to look
+  again). The owner's certified amount is recorded, with a reason when it is
+  short, and counts as the previous certificate on the next application.
+  Reopening is allowed on the latest submitted application, with a reason.
+- **PDF.** A summary page laid out like a G702 (lines 1 to 9, change order
+  summary, signature and certification boxes) and landscape continuation sheets
+  (columns A to I, repeated headings, grand total), marked DRAFT until
+  submitted. Every download is in the activity log.
+- **Risk on the overview.** Approved subcontractor billing for a month that no
+  submitted application to the owner covers yet.
+

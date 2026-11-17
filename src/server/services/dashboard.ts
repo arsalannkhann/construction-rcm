@@ -5,7 +5,7 @@
  */
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { DB } from '@/db';
-import { changeOrders, contracts, findings, memberships, organizations, payApplications, projects, subcontractors, users } from '@/db/schema';
+import { changeOrders, contracts, findings, memberships, organizations, ownerApplications, payApplications, primeContracts, projects, subcontractors, users } from '@/db/schema';
 import type { Ctx } from '@/server/auth/permissions';
 import type { AppStatus, FindingCategory } from '@/server/types';
 import { FINDING_CATEGORIES, resolveSettings } from '@/server/types';
@@ -245,6 +245,32 @@ export async function getDashboard(db: DB, ctx: Ctx, now: Date = new Date()) {
         title: `No application from ${row.subcontractorName} for ${formatMonth(lastPeriod)}`,
         detail: `${row.number} on ${section.project.name} had been billing and still has work left to bill.`,
         href: `/billing?period=${lastPeriod}`,
+      });
+    }
+  }
+  // Approved subcontractor billing that has not gone to the owner yet: the latest month with
+  // approved billing on the project (up to the last period that has ended), against how far
+  // the submitted applications to the owner run.
+  const primes = await db.select({ id: primeContracts.id, projectId: primeContracts.projectId }).from(primeContracts).where(eq(primeContracts.orgId, ctx.orgId));
+  if (primes.length) {
+    const billedTo = await db
+      .select({ primeContractId: ownerApplications.primeContractId, periodTo: sql<string>`max(${ownerApplications.periodTo})::text` })
+      .from(ownerApplications)
+      .where(and(eq(ownerApplications.orgId, ctx.orgId), inArray(ownerApplications.status, ['submitted', 'certified'])))
+      .groupBy(ownerApplications.primeContractId);
+    for (const prime of primes) {
+      const project = projectRows.find((p) => p.id === prime.projectId);
+      const done = approved.filter((a) => a.projectId === prime.projectId && a.periodTo !== null && (a.approvedAmount ?? 0) > 0 && monthOf(a.periodTo) <= lastPeriod);
+      const month = done.reduce<string | null>((m, a) => (m === null || monthOf(a.periodTo!) > m ? monthOf(a.periodTo!) : m), null);
+      const last = billedTo.find((b) => b.primeContractId === prime.id)?.periodTo ?? null;
+      if (!project || month === null || (last !== null && monthKey(String(last)) >= month)) continue;
+      const amount = done.filter((a) => monthOf(a.periodTo!) === month).reduce((t, a) => t + (a.approvedAmount ?? 0), 0);
+      risks.push({
+        key: `owner:${prime.projectId}`,
+        tone: 'warn',
+        title: `${formatMonth(month)} not billed to the owner on ${project.name}`,
+        detail: `${formatMoney(amount)} of subcontractor billing was approved for ${formatMonth(month)}; ${last ? `the last application to the owner runs to ${String(last).slice(0, 10)}` : 'no application has gone to the owner yet'}.`,
+        href: `/projects/${prime.projectId}/owner-billing`,
       });
     }
   }

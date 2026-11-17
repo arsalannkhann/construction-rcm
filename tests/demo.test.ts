@@ -7,10 +7,11 @@
 import { and, eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { getDb, type DB } from '@/db';
-import { auditEvents, findings, organizations, payApplications, transfers, users } from '@/db/schema';
+import { auditEvents, findings, organizations, payApplications, projects, transfers, users } from '@/db/schema';
 import { verifyAuditChain } from '@/server/audit';
 import { createDemoWorkspace, deleteDemoWorkspace, listDemoSamples, renderDemoSample } from '@/server/services/demo';
 import { createApplication, processApplication } from '@/server/services/intake';
+import { getOwnerApplication, getOwnerBilling, startOwnerApplication } from '@/server/services/owner-billing';
 import { signUp } from '@/server/services/team';
 import type { Ctx } from '@/server/auth/permissions';
 
@@ -114,6 +115,29 @@ describe('demo workspace', () => {
     expect(bad.app.status).toBe('needs_review');
     expect(bad.app.stated?.contractNumber).toBe('SC-2312-22');
     expect(bad.codes).toEqual(expect.arrayContaining(['prior.previous_certificates', 'ret.amount', 'pay.current_due', 'lw.amount']));
+  });
+
+  it('has an owner contract on Riverside that bills cleanly from the approved subcontractor billing', async () => {
+    const [riverside] = await db.select().from(projects).where(and(eq(projects.orgId, demoOrgId), eq(projects.number, '2301')));
+    const billing = (await getOwnerBilling(db, ctx, riverside!.id))!;
+    expect(billing.prime).toMatchObject({ number: 'OC-2301', contractSumToDate: 831_340_000 });
+    expect(billing.lines.map((l) => [l.itemNo, l.basis, l.contractIds.length])).toEqual([
+      ['1', 'manual', 0],
+      ['2', 'subcontracts', 1],
+      ['3', 'subcontracts', 1],
+      ['4', 'subcontracts', 1],
+      ['5', 'overall', 0],
+      ['6', 'overall', 0],
+    ]);
+    expect(billing.applications).toEqual([]);
+    // Every subcontract on the project is on the owner schedule, so the draft has nothing blocking.
+    const appId = await startOwnerApplication(db, ctx, riverside!.id, '2026-10-31');
+    const { computed } = (await getOwnerApplication(db, ctx, appId))!;
+    expect(computed.checks.filter((c) => c.severity === 'blocking')).toEqual([]);
+    expect(computed.checks.some((c) => c.code === 'source.unlinked' || c.code === 'line.unlinked')).toBe(false);
+    expect(computed.header.contractSumToDate).toBe(831_340_000);
+    expect(computed.header.currentPaymentDue).toBeGreaterThan(0);
+    expect(computed.lines.filter((l) => l.basis === 'subcontracts').every((l) => l.total > 0 && l.total <= l.scheduledValue)).toBe(true);
   });
 
   it('can be deleted without touching the real organisation', async () => {

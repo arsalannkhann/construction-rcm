@@ -442,4 +442,4 @@ export async function listAwaitingTransfer(db: DB, ctx: Ctx) {
 }
 
 /** The CSV helpers, for other reports built from approved records. */
-export { row as csvRow, amount as csvAmount };
+export { row as csvRow, amount as csvAmount, ansi as pdfText, wrapText as pdfWrap };

@@ -171,8 +171,9 @@ Then check that it is recorded, and only then merge:
 select version, name from supabase_migrations.schema_migrations order by version;
 ```
 
-Migrations 0000–0007 are applied to `construction-rcm` and recorded under the
-same versions as the files (0007, the project budget column, on 2026-11-17).
+Migrations 0000–0008 are applied to `construction-rcm` and recorded under the
+same versions as the files (0007, the project budget column, and 0008, the
+owner billing tables, on 2026-11-17).
 
 Never let the app apply its own migrations to a database Supabase manages: set
 `RCM_MIGRATIONS=external`. If you forget, the app refuses to start and says so.

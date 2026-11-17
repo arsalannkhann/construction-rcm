@@ -514,3 +514,103 @@ export const APP_STATUS_LABEL: Record<AppStatus, string> = {
 
 /** Statuses in which the working values can still change. */
 export const OPEN_STATUSES: AppStatus[] = ['needs_matching', 'needs_review', 'pending_approval', 'on_hold'];
+
+// ── Owner billing ───────────────────────────────────────────────────────────
+
+/**
+ * How a line of the owner's schedule of values is billed each period.
+ * - `subcontracts`: at the percent complete of the subcontracts linked to it, from their approved applications.
+ * - `overall`: at the percent complete of the rest of the contract (fee, insurance, bonds).
+ * - `manual`: figures someone enters (self-performed work, general conditions).
+ */
+export const PRIME_LINE_BASES = ['subcontracts', 'overall', 'manual'] as const;
+export type PrimeLineBasis = (typeof PRIME_LINE_BASES)[number];
+
+export const PRIME_LINE_BASIS_LABEL: Record<PrimeLineBasis, string> = {
+  subcontracts: 'Follows linked subcontracts',
+  overall: 'Follows the rest of the contract',
+  manual: 'Entered each period',
+};
+
+export const OWNER_APP_STATUSES = ['draft', 'submitted', 'certified'] as const;
+export type OwnerAppStatus = (typeof OWNER_APP_STATUSES)[number];
+
+export const OWNER_APP_STATUS_LABEL: Record<OwnerAppStatus, string> = {
+  draft: 'Draft',
+  submitted: 'Submitted to owner',
+  certified: 'Certified',
+};
+
+/** Figures someone typed over the worked-out ones on one line of an owner application. */
+export type OwnerEntry = { thisPeriod: number; stored: number; note: string | null; by: string; at: string };
+
+/** One line of an owner application, laid out like a G703 continuation sheet (columns C to I). */
+export type OwnerLine = {
+  primeLineId: string;
+  itemNo: string;
+  description: string;
+  /** Set on a line that exists because of an approved owner change order. */
+  changeOrderNumber: string | null;
+  basis: PrimeLineBasis;
+  scheduledValue: number;
+  /** Work completed on earlier applications (column D). */
+  previous: number;
+  /** Work completed this period (column E). */
+  thisPeriod: number;
+  /** Materials presently stored and not yet in D or E (column F). */
+  stored: number;
+  /** D + E + F (column G). */
+  total: number;
+  percent: number | null;
+  /** C − G (column H). */
+  balance: number;
+  /** Retainage on this line (column I). */
+  retainage: number;
+  /** What the approved subcontractor billing, or the rest of the contract, points to. Null for lines entered by hand. */
+  suggested: { workToDate: number; thisPeriod: number; stored: number } | null;
+  /** In words, where the suggested figures come from. */
+  basisNote: string | null;
+  /** Present when someone typed over the worked-out figures. */
+  entered: OwnerEntry | null;
+};
+
+/** G702 lines 1 to 9 for an owner application. */
+export type OwnerHeader = Record<ClaimedField, number>;
+
+export type OwnerCheck = { code: string; severity: Severity; title: string; detail: string; primeLineId?: string };
+
+/** A subcontract on the project and the approved progress an owner application draws on. */
+export type OwnerSource = {
+  contractId: string;
+  contractNumber: string;
+  subcontractorName: string;
+  /** Contract sum to date as of `asOf`, or today's when nothing is approved yet. */
+  contractSum: number;
+  workToDate: number;
+  stored: number;
+  /** The approved application the figures come from; null when nothing is approved up to this period. */
+  asOf: { applicationId: string; applicationNumber: number; periodTo: string } | null;
+  /** Applications for this period that are still being reviewed, so are not counted. */
+  openThisPeriod: number;
+  /** The prime lines that follow this subcontract. */
+  primeLineIds: string[];
+  status: string;
+};
+
+/** Immutable snapshot of an owner application, written when it is submitted. */
+export type OwnerApplicationRecord = {
+  schemaVersion: 1;
+  submittedAt: string;
+  submittedBy: { id: string; name: string; role: Role };
+  organization: { id: string; name: string };
+  project: { id: string; name: string; number: string | null; address: string | null; city: string | null; state: string | null; ownerName: string | null };
+  primeContract: { id: string; number: string | null; architectName: string | null; executedOn: string | null; originalAmount: number; retainageWorkBps: number; retainageStoredBps: number };
+  application: { id: string; number: number; periodTo: string };
+  header: OwnerHeader;
+  lines: OwnerLine[];
+  changeOrders: { number: string; title: string; amount: number; approvedOn: string | null }[];
+  /** The checks that were showing when it was submitted (none of them blocking). */
+  checks: OwnerCheck[];
+  sources: OwnerSource[];
+  fingerprint: string;
+};

@@ -35,6 +35,8 @@ import type {
   LineSnapshot,
   MatchCandidate,
   OrgSettings,
+  OwnerApplicationRecord,
+  OwnerEntry,
   RetainageTerms,
   StatedParties,
   VerifiedHeader,
@@ -295,6 +297,104 @@ export const sovLines = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('sov_lines_contract').on(t.contractId)],
+);
+
+// ── Owner billing: the prime contract and the main contractor's own applications ──
+
+/** The main contractor's contract with the project owner. At most one per project. */
+export const primeContracts = pgTable(
+  'prime_contracts',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    number: text('number'),
+    architectName: text('architect_name'),
+    originalAmount: cents('original_amount').notNull(),
+    retainageWorkBps: integer('retainage_work_bps').notNull().default(1000),
+    retainageStoredBps: integer('retainage_stored_bps').notNull().default(1000),
+    executedOn: date('executed_on'),
+    createdBy: text('created_by').references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('prime_contracts_project').on(t.projectId), index('prime_contracts_org').on(t.orgId)],
+);
+
+export const primeChangeOrders = pgTable(
+  'prime_change_orders',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    primeContractId: text('prime_contract_id').notNull().references(() => primeContracts.id, { onDelete: 'cascade' }),
+    number: text('number').notNull(),
+    title: text('title').notNull(),
+    amount: cents('amount').notNull(),
+    status: text('status').notNull().default('pending'), // pending | approved | rejected | void
+    approvedOn: date('approved_on'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('prime_change_orders_contract').on(t.primeContractId)],
+);
+
+/** A line of the schedule of values the owner is billed against. */
+export const primeLines = pgTable(
+  'prime_lines',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    primeContractId: text('prime_contract_id').notNull().references(() => primeContracts.id, { onDelete: 'cascade' }),
+    itemNo: text('item_no').notNull(),
+    description: text('description').notNull(),
+    scheduledValue: cents('scheduled_value').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    /** How the line is billed each period: subcontracts | overall | manual (see PRIME_LINE_BASIS_LABEL). */
+    basis: text('basis').notNull().default('manual'),
+    /** The subcontracts whose approved progress this line follows, when the basis is `subcontracts`. */
+    contractIds: jsonb('contract_ids').$type<string[]>().notNull().default([]),
+    /** Set when this line exists because of an approved owner change order. */
+    changeOrderId: text('change_order_id').references(() => primeChangeOrders.id, { onDelete: 'cascade' }),
+    createdAt: createdAt(),
+  },
+  (t) => [index('prime_lines_contract').on(t.primeContractId)],
+);
+
+/**
+ * The main contractor's application for payment to the owner. While it is a
+ * draft its figures are worked out afresh from the approved subcontractor
+ * billing each time it is read, except for the lines someone typed over
+ * (`entries`). Submitting freezes everything into `record`.
+ */
+export const ownerApplications = pgTable(
+  'owner_applications',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    primeContractId: text('prime_contract_id').notNull().references(() => primeContracts.id, { onDelete: 'cascade' }),
+    applicationNumber: integer('application_number').notNull(),
+    periodTo: date('period_to').notNull(),
+    status: text('status').notNull().default('draft'), // draft | submitted | certified
+    /** Figures typed over the worked-out ones, by prime line id. */
+    entries: jsonb('entries').$type<Record<string, OwnerEntry>>().notNull().default({}),
+    /** Incremented by every change, so an edit made on stale figures is refused. */
+    version: integer('version').notNull().default(0),
+    preparedBy: text('prepared_by').references(() => users.id),
+    submittedAt: ts('submitted_at'),
+    submittedBy: text('submitted_by').references(() => users.id),
+    /** Immutable snapshot written at submission; the PDF is rendered from it. */
+    record: jsonb('record').$type<OwnerApplicationRecord>(),
+    /** Line 8 (current payment due) as submitted. */
+    amountDue: cents('amount_due'),
+    /** What the owner or architect certified for payment, when it has been recorded. */
+    certifiedAmount: cents('certified_amount'),
+    certifiedOn: date('certified_on'),
+    certificationNote: text('certification_note'),
+    certifiedBy: text('certified_by').references(() => users.id),
+    certifiedAt: ts('certified_at'),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('owner_applications_number').on(t.primeContractId, t.applicationNumber), index('owner_applications_org_project').on(t.orgId, t.projectId)],
 );
 
 // ── Pay applications ────────────────────────────────────────────────────────

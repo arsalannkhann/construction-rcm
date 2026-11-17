@@ -15,7 +15,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { and, eq, inArray, like, lt, ne, or } from 'drizzle-orm';
 import type { DB } from '@/db';
-import { changeOrders, contracts, findings, memberships, notifications, organizations, payApplications, projects, sessions, sovLines, subcontractors, users } from '@/db/schema';
+import { changeOrders, contracts, findings, memberships, notifications, organizations, payApplications, primeContracts, primeLines, projects, sessions, sovLines, subcontractors, users } from '@/db/schema';
 import { recordAudit } from '@/server/audit';
 import { hashPassword } from '@/server/auth/password';
 import { assertCan, UserError, type Ctx } from '@/server/auth/permissions';
@@ -388,6 +388,30 @@ export async function createDemoWorkspace(db: DB, userId: string, now: Date = ne
       if (co.status === 'approved') await db.insert(sovLines).values({ id: newId('sov'), orgId, contractId, itemNo: co.number, description: co.title, scheduledValue: D(co.amount), sortOrder: order++, changeOrderId: coId, createdAt: start });
     }
     await recordAudit(db, { orgId, actor: owner, action: 'contract.created', entityType: 'contract', entityId: contractId, summary: `Created subcontract ${plan.number} with ${plan.sub.name} on ${PROJECTS[plan.project].name}`, at: start });
+  }
+
+  // The contract with the owner on the first project, so owner billing has something to work from.
+  // Its schedule follows the three subcontracts, plus general conditions, insurance and the fee.
+  // No application to the owner is made: starting the first one is left to whoever explores.
+  {
+    const project = 0 as const;
+    const plans = PLANS.filter((p) => p.project === project).sort((a, b) => a.number.localeCompare(b.number));
+    const subValue = (plan: Plan) => D(plan.lines.reduce((a, l) => a + l[2], 0) + (plan.changeOrders ?? []).filter((c) => c.status === 'approved').reduce((a, c) => a + c.amount, 0));
+    const subTotal = plans.reduce((a, p) => a + subValue(p), 0);
+    const share = (bps: number) => Math.round((subTotal * bps) / 10_000 / 100_000) * 100_000; // to the nearest $1,000
+    const rows: Array<{ description: string; value: number; basis: 'subcontracts' | 'overall' | 'manual'; contractIds: string[] }> = [
+      { description: 'General conditions', value: share(600), basis: 'manual', contractIds: [] },
+      ...plans.map((plan) => ({ description: `${plan.title} (${plan.sub.name})`, value: subValue(plan), basis: 'subcontracts' as const, contractIds: [contractIds.get(plan)!] })),
+      { description: 'Insurance and bonds', value: share(150), basis: 'overall', contractIds: [] },
+      { description: 'Contractor’s fee', value: share(450), basis: 'overall', contractIds: [] },
+    ];
+    const primeId = newId('pc');
+    const p = PROJECTS[project];
+    await db.insert(primeContracts).values({ id: primeId, orgId, projectId: projectIds[project]!, number: `OC-${p.number}`, architectName: 'Moreno Kline Architects', originalAmount: rows.reduce((a, r) => a + r.value, 0), retainageWorkBps: 1000, retainageStoredBps: 1000, executedOn: '2026-01-20', createdBy: userId, createdAt: start });
+    for (const [i, r] of rows.entries()) {
+      await db.insert(primeLines).values({ id: newId('pl'), orgId, primeContractId: primeId, itemNo: String(i + 1), description: r.description, scheduledValue: r.value, sortOrder: i, basis: r.basis, contractIds: r.contractIds, createdAt: start });
+    }
+    await recordAudit(db, { orgId, actor: owner, action: 'owner_billing.contract_created', entityType: 'project', entityId: projectIds[project]!, summary: `Set up the owner contract on ${p.name} with ${p.owner}`, at: start });
   }
 
   // Lay the whole history out as timed steps, then run them in chronological order
