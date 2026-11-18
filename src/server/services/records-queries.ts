@@ -2,9 +2,10 @@
 import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { sum } from '@/lib/money';
 import type { DB } from '@/db';
-import { changeOrders, contracts, memberships, payApplications, projects, retainageReleases, sovLines, subcontractors, users } from '@/db/schema';
+import { budgetLines, changeOrders, contracts, memberships, payApplications, projects, retainageReleases, sovLines, subcontractors, users } from '@/db/schema';
 import type { Ctx } from '@/server/auth/permissions';
 import { normaliseName } from '@/server/recon/text';
+import { budgetTotals, costForecast, effectiveBudget, projectBudgetFigures } from './budget-totals';
 import { costPosition } from './cost';
 import { OPEN_STATUSES } from '@/server/types';
 
@@ -56,7 +57,7 @@ export type ContractPosition = {
   latestApproved: { id: string; applicationNumber: number | null; periodTo: string | null } | null;
 };
 
-async function loadPositions(db: DB, ctx: Ctx, rows: Array<{ id: string; originalAmount: number }>): Promise<Map<string, ContractPosition>> {
+export async function loadPositions(db: DB, ctx: Ctx, rows: Array<{ id: string; originalAmount: number }>): Promise<Map<string, ContractPosition>> {
   const positions = new Map<string, ContractPosition>();
   if (rows.length === 0) return positions;
   const ids = rows.map((r) => r.id);
@@ -148,19 +149,24 @@ export async function listProjects(db: DB, ctx: Ctx) {
     .from(payApplications)
     .where(and(eq(payApplications.orgId, ctx.orgId), inArray(payApplications.status, OPEN_STATUSES)))
     .groupBy(payApplications.projectId);
+  const budgets = await budgetTotals(db, ctx.orgId);
 
   return rows.map((p) => {
     const mine = contractRows.filter((c) => c.projectId === p.id);
     const contractIds = new Set(mine.map((c) => c.id));
     const changes = (status: string) => sum(cos.filter((c) => c.status === status && contractIds.has(c.contractId)).map((c) => c.total));
     const committed = sum(mine.map((c) => c.originalAmount)) + changes('approved');
+    const budget = effectiveBudget(p, budgets);
     return {
       ...p,
+      /** The total of its budget lines, if it has any; otherwise the project's single budget. */
+      budget,
       contracts: mine.length,
       /** Original contract amounts plus approved change orders. */
       committed,
-      /** Budget, committed, pending change orders and what is left. */
-      cost: costPosition(p.budget, committed, changes('pending')),
+      /** Budget (the total of its budget lines, if it has any), committed, pending change orders and what is left. */
+      cost: costPosition(budget, committed, changes('pending')),
+      budgetLines: budgets.get(p.id)?.lines ?? 0,
       /** Payments approved so far across the project's subcontracts. */
       approvedToDate: sum(approved.filter((a) => a.contractId && contractIds.has(a.contractId)).map((a) => a.total)),
       /** Applications that are matched to this project and not yet decided. */
@@ -183,6 +189,7 @@ export async function getProjectDetail(db: DB, ctx: Ctx, id: string) {
       title: contracts.title,
       status: contracts.status,
       originalAmount: contracts.originalAmount,
+      budgetLineId: contracts.budgetLineId,
       subcontractorId: subcontractors.id,
       subcontractorName: subcontractors.name,
     })
@@ -230,6 +237,13 @@ export async function getProjectDetail(db: DB, ctx: Ctx, id: string) {
     .limit(10);
 
   const committed = sum(subcontracts.map((c) => c.contractSum));
+  const pending = sum(subcontracts.map((c) => c.pendingChangeOrders));
+  const budget = await projectBudgetFigures(
+    db,
+    ctx.orgId,
+    id,
+    contractRows.map((c) => ({ contractId: c.id, budgetLineId: c.budgetLineId, contractSum: positions.get(c.id)!.contractSum, pendingChanges: positions.get(c.id)!.pendingChangeOrders, billedToDate: positions.get(c.id)!.completedStored })),
+  );
   return {
     project,
     totals: {
@@ -239,7 +253,9 @@ export async function getProjectDetail(db: DB, ctx: Ctx, id: string) {
       retainageHeld: sum(subcontracts.map((c) => c.retainageHeld)),
       balanceToFinish: sum(subcontracts.map((c) => c.balanceToFinish)),
     },
-    cost: costPosition(project.budget, committed, sum(subcontracts.map((c) => c.pendingChangeOrders))),
+    cost: budget ? costPosition(budget.result.totals.budget, committed, pending, costForecast(budget.lines.length, budget.result.totals)) : costPosition(project.budget, committed, pending),
+    /** Subcontracts on no budget line, when the project has budget lines. */
+    unassigned: budget?.result.unassigned?.contractIds.length ?? 0,
     contracts: subcontracts,
     applications,
   };
@@ -371,10 +387,18 @@ export async function getContractDetail(db: DB, ctx: Ctx, id: string) {
   });
   const releasePending = sum(releases.filter((r) => r.status === 'approved' && !r.countedIn).map((r) => r.amount));
 
+  // The budget line this subcontract counts against, and whether the project has budget lines at all.
+  const projectLines = await db
+    .select({ id: budgetLines.id, costCode: budgetLines.costCode, description: budgetLines.description })
+    .from(budgetLines)
+    .where(and(eq(budgetLines.orgId, ctx.orgId), eq(budgetLines.projectId, project.id)));
+  const budgetLine = projectLines.find((l) => l.id === contract.budgetLineId) ?? null;
+
   return {
     contract,
     project,
     subcontractor,
+    budget: projectLines.length ? { line: budgetLine } : null,
     position,
     releases,
     releasePending,

@@ -55,6 +55,14 @@ export default async function ContractPage({ params }: { params: Promise<{ id: s
               {project.name}
               {project.number ? ` (${project.number})` : ''}
             </Link>
+            {detail.budget ? (
+              <>
+                {' · '}
+                <Link href={`/projects/${project.id}/budget`} className={detail.budget.line ? 'text-ink underline decoration-line-strong underline-offset-2 hover:decoration-ink' : 'text-warn underline underline-offset-2'}>
+                  {detail.budget.line ? `Budget line ${detail.budget.line.costCode} ${detail.budget.line.description}` : 'On no budget line'}
+                </Link>
+              </>
+            ) : null}
           </>
         }
       />

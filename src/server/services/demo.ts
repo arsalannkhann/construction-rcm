@@ -15,7 +15,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { and, eq, inArray, like, lt, ne, or } from 'drizzle-orm';
 import type { DB } from '@/db';
-import { changeOrders, contracts, findings, memberships, notifications, organizations, payApplications, primeContracts, primeLines, projects, sessions, sovLines, subcontractors, users } from '@/db/schema';
+import { budgetChanges, budgetLines, changeOrders, contracts, findings, memberships, notifications, organizations, payApplications, primeContracts, primeLines, projects, sessions, sovLines, subcontractors, users } from '@/db/schema';
 import { recordAudit } from '@/server/audit';
 import { hashPassword } from '@/server/auth/password';
 import { assertCan, UserError, type Ctx } from '@/server/auth/permissions';
@@ -24,6 +24,8 @@ import { newId, randomToken } from '@/server/ids';
 import { renderPackage, renderTextlessPdf, type SamplePackage } from '@/server/samples/pdf';
 import { buildPackage, defects, recompute, stateAfter, type BillingContract, type BillingState, type Parties } from '@/server/samples/scenario';
 import type { Role } from '@/server/types';
+import { formatMoney } from '@/lib/money';
+import { tradeCode } from './budget-calc';
 import { createBatchExport, createExport } from './exports';
 import { createApplication, processApplication } from './intake';
 import { acceptFinding, approveApplication, assignReviewer, rejectApplication, sendSubcontractorMessage, submitForApproval } from './review';
@@ -414,10 +416,62 @@ export async function createDemoWorkspace(db: DB, userId: string, now: Date = ne
     await recordAudit(db, { orgId, actor: owner, action: 'owner_billing.contract_created', entityType: 'project', entityId: projectIds[project]!, summary: `Set up the owner contract on ${p.name} with ${p.owner}`, at: start });
   }
 
+  // Budget changes and the forecast are recorded later, in date order with the rest of the history.
+  const budgetSteps: Array<{ at: Date; run: () => Promise<void> }> = [];
+  // A budget by cost code on the first project: a line per trade set a little above what each
+  // subcontract was let for, the rest as contingency, locked; the approved change order on the
+  // electrical work funded from contingency by a budget change, and one forecast entered. The other
+  // projects keep a single budget figure, so "split by cost code" can be tried on them.
+  {
+    const project = 0 as const;
+    const projectId = projectIds[project]!;
+    const plans = PLANS.filter((p) => p.project === project);
+    const total = demoBudget(project);
+    const letFor = (plan: Plan) => D(plan.lines.reduce((a, l) => a + l[2], 0));
+    const rows = plans
+      .map((plan) => ({ plan, code: tradeCode(plan.sub.trade, plan.title) ?? { code: plan.number, description: plan.title }, amount: Math.round((letFor(plan) * 1.02) / 100_000) * 100_000 }))
+      .sort((a, b) => a.code.code.localeCompare(b.code.code));
+    const funded = plans.flatMap((plan) => (plan.changeOrders ?? []).filter((c) => c.status === 'approved').map((c) => ({ plan, co: c })));
+    const contingency = total - rows.reduce((a, r) => a + r.amount, 0);
+    const lineIds = new Map<Plan, string>();
+    for (const [i, r] of rows.entries()) {
+      const id = newId('bl');
+      lineIds.set(r.plan, id);
+      await db.insert(budgetLines).values({ id, orgId, projectId, costCode: r.code.code, description: r.code.description, originalAmount: r.amount, sortOrder: i, createdBy: userId, createdAt: start });
+      await db.update(contracts).set({ budgetLineId: id }).where(eq(contracts.id, contractIds.get(r.plan)!));
+    }
+    const contingencyId = newId('bl');
+    await db.insert(budgetLines).values({ id: contingencyId, orgId, projectId, costCode: '99 00 00', description: 'Contingency', originalAmount: contingency, sortOrder: rows.length, createdBy: userId, createdAt: start });
+    await db.update(projects).set({ budget: null, budgetLockedAt: start, budgetLockedBy: userId }).where(eq(projects.id, projectId));
+    await recordAudit(db, { orgId, actor: owner, action: 'budget.locked', entityType: 'project', entityId: projectId, summary: `Locked the budget on ${PROJECTS[project].name}: ${rows.length + 1} lines, original budget ${formatMoney(total)}`, at: start });
+    for (const f of funded) {
+      // The day after the change order was approved.
+      const at = new Date(new Date(`${periods[Math.max(0, f.co.pct.findIndex((x) => x > 0) - 1)]!}T15:00:00Z`).getTime() + DAY);
+      const line = rows.find((r) => r.plan === f.plan)!.code;
+      budgetSteps.push({
+        at,
+        run: async () => {
+          await db.insert(budgetChanges).values({ id: newId('bc'), orgId, projectId, fromLineId: contingencyId, toLineId: lineIds.get(f.plan)!, amount: D(f.co.amount), reason: `${f.co.number} ${f.co.title}`, createdBy: controller.userId, createdAt: at });
+          await recordAudit(db, { orgId, actor: controller, action: 'budget.change_recorded', entityType: 'project', entityId: projectId, summary: `Budget change on ${PROJECTS[project].name}: moved ${formatMoney(D(f.co.amount))} from 99 00 00 Contingency to ${line.code} ${line.description} (“${f.co.number} ${f.co.title}”)`, at });
+        },
+      });
+    }
+    const forecastOn = rows.find((r) => r.code.code === '23 00 00') ?? rows[rows.length - 1]!;
+    const forecastAt = new Date(`${periods[3]!}T16:00:00Z`);
+    const note = 'Controls upgrade the owner asked us to price; not bought out yet';
+    budgetSteps.push({
+      at: forecastAt,
+      run: async () => {
+        await db.update(budgetLines).set({ forecastMethod: 'entered', forecastAmount: D(18_500), forecastNote: note, forecastBy: controller.userId, forecastAt }).where(eq(budgetLines.id, lineIds.get(forecastOn.plan)!));
+        await recordAudit(db, { orgId, actor: controller, action: 'budget.forecast_set', entityType: 'project', entityId: projectId, summary: `Set the forecast for ${forecastOn.code.code} ${forecastOn.code.description} on ${PROJECTS[project].name}: ${formatMoney(D(18_500))} still to commit (“${note}”)`, at: forecastAt });
+      },
+    });
+  }
+
   // Lay the whole history out as timed steps, then run them in chronological order
   // so the audit trail reads the way it would have happened.
   type Step = { at: Date; run: () => Promise<void> };
-  const steps: Step[] = [];
+  const steps: Step[] = [...budgetSteps];
   const states = new Map<Plan, BillingState | null>(PLANS.map((p) => [p, null]));
   const appIds = new Map<string, string>();
   const submitPackage = async (plan: Plan, pkg: SamplePackage, at: Date, key: string, by: Ctx, via: 'upload' | 'email' = 'upload') => {

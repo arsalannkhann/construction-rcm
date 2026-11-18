@@ -23,12 +23,12 @@ export type ExportKind = 'csv' | 'json' | 'pdf';
 
 // ── CSV ─────────────────────────────────────────────────────────────────────
 
-/** Quote as needed, and neutralise spreadsheet formula injection in text cells. */
+/** Quote as needed, and neutralise spreadsheet formula injection in text cells. A plain negative amount stays a number. */
 function cell(value: string | number | null | undefined): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'number') return String(value);
   let s = value;
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  if (/^[=+\-@\t\r]/.test(s) && !/^-\d+(\.\d+)?$/.test(s)) s = `'${s}`;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 const row = (cells: Array<string | number | null | undefined>) => cells.map(cell).join(',');

@@ -12,6 +12,7 @@ import { FINDING_CATEGORIES, resolveSettings } from '@/server/types';
 import { formatMoney, percentOf } from '@/lib/money';
 import { formatMonth } from '@/lib/utils';
 import { getBillingBoard, monthOf, shiftMonth } from './billing';
+import { budgetsByProject, costForecast } from './budget-totals';
 import { budgetStanding, costPosition, LARGE_PENDING_PERCENT } from './cost';
 
 const OPEN: AppStatus[] = ['needs_matching', 'needs_review', 'pending_approval', 'on_hold'];
@@ -147,9 +148,22 @@ export async function getDashboard(db: DB, ctx: Ctx, now: Date = new Date()) {
     .sort((a, b) => b.blocking + b.warnings - (a.blocking + a.warnings));
 
   // ── Projects ──
+  const budgets = await budgetsByProject(
+    db,
+    ctx.orgId,
+    contractRows.map((c) => ({
+      projectId: c.projectId,
+      contractId: c.id,
+      budgetLineId: c.budgetLineId,
+      contractSum: c.originalAmount + (coTotal.get(c.id) ?? 0),
+      pendingChanges: pendingCos.get(c.id) ?? 0,
+      billedToDate: latest.get(c.id)?.approvedRecord?.approved.totalCompletedStored ?? 0,
+    })),
+  );
   const projectSummaries = projectRows.map((p) => {
     const cs = contractRows.filter((c) => c.projectId === p.id);
     const committed = cs.reduce((t, c) => t + c.originalAmount + (coTotal.get(c.id) ?? 0), 0);
+    const budget = budgets.get(p.id);
     const positions = cs.map((c) => latest.get(c.id)?.approvedRecord?.approved).filter((x): x is NonNullable<typeof x> => !!x);
     const completed = positions.reduce((t, a) => t + a.totalCompletedStored, 0);
     const earned = positions.reduce((t, a) => t + a.totalEarnedLessRetainage, 0);
@@ -159,7 +173,7 @@ export async function getDashboard(db: DB, ctx: Ctx, now: Date = new Date()) {
       number: p.number,
       state: p.state,
       status: p.status,
-      cost: costPosition(p.budget, committed, cs.reduce((t, c) => t + (pendingCos.get(c.id) ?? 0), 0)),
+      cost: costPosition(budget ? budget.result.totals.budget : p.budget, committed, cs.reduce((t, c) => t + (pendingCos.get(c.id) ?? 0), 0), budget ? costForecast(budget.lines.length, budget.result.totals) : null),
       contracts: cs.length,
       committed,
       completed,
@@ -221,6 +235,46 @@ export async function getDashboard(db: DB, ctx: Ctx, now: Date = new Date()) {
       risks.push({ key: `budget:${p.id}`, tone: 'block', title: `${p.name} is projected over budget`, detail: `Committed and pending changes come to ${formatMoney(p.cost.projected)} against a budget of ${formatMoney(p.cost.budget)}: ${formatMoney(-(p.cost.remaining ?? 0))} over.`, href: `/projects/${p.id}` });
     else if (standing === 'near')
       risks.push({ key: `budget:${p.id}`, tone: 'warn', title: `${p.name} is close to its budget`, detail: `Committed and pending changes are ${p.cost.percentOfBudget}% of the budget, ${formatMoney(p.cost.remaining)} left.`, href: `/projects/${p.id}` });
+  }
+  // Budget lines: lines projected over their own budget, subcontracts on no line, and a forecast overrun
+  // the project-level figure does not show yet. Each says which figures it rests on.
+  for (const p of projectSummaries) {
+    const budget = budgets.get(p.id);
+    if (p.status !== 'active' || !budget) continue;
+    const over = budget.result.lines
+      .map((f, i) => ({ f, line: budget.lines[i]! }))
+      .filter(({ f }) => f.projected > f.budget)
+      .sort((a, b) => b.f.projected - b.f.budget - (a.f.projected - a.f.budget));
+    if (over.length) {
+      const named = over.slice(0, 3).map(({ f, line }) => `${line.costCode} ${line.description} by ${formatMoney(f.projected - f.budget)}`);
+      risks.push({
+        key: `lines:${p.id}`,
+        tone: 'warn',
+        title: over.length === 1 ? `A budget line on ${p.name} is projected over` : `${over.length} budget lines on ${p.name} are projected over`,
+        detail: `Committed and pending changes exceed ${over.length === 1 ? 'the line’s budget' : 'each line’s budget'}: ${named.join(', ')}${over.length > 3 ? `, and ${over.length - 3} more` : ''}.`,
+        href: `/projects/${p.id}/budget`,
+      });
+    }
+    const loose = budget.result.unassigned;
+    if (loose && loose.committed + loose.pending > 0) {
+      const n = loose.contractIds.length;
+      risks.push({
+        key: `unassigned:${p.id}`,
+        tone: 'warn',
+        title: `${n} subcontract${n === 1 ? '' : 's'} on ${p.name} ${n === 1 ? 'is' : 'are'} on no budget line`,
+        detail: `${formatMoney(loose.committed)} committed counts against the project’s budget without a line to check it against.`,
+        href: `/projects/${p.id}/budget`,
+      });
+    }
+    const forecast = p.cost.forecast;
+    if (forecast && forecast.variance < 0 && budgetStanding(p.cost) !== 'over')
+      risks.push({
+        key: `forecast:${p.id}`,
+        tone: 'warn',
+        title: `${p.name} is forecast to finish over budget`,
+        detail: `Forecast: the estimate at completion is ${formatMoney(forecast.atCompletion)} against a budget of ${formatMoney(p.cost.budget)}, ${formatMoney(-forecast.variance)} over, counting what is still to be committed on each line.`,
+        href: `/projects/${p.id}/budget`,
+      });
   }
   const projectName = new Map(projectRows.map((p) => [p.id, p]));
   for (const c of contractRows) {

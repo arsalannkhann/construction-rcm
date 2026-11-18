@@ -262,7 +262,7 @@ describe('project and contract figures', () => {
 
     const project = (await getProjectDetail(w.db, w.viewer, w.projectId))!;
     expect(project.totals).toMatchObject({ committed: D(512000), balanceToFinish: D(309500) });
-    expect(project.cost).toEqual({ budget: null, committed: D(512000), pendingChanges: D(40000), projected: D(552000), remaining: null, percentOfBudget: null });
+    expect(project.cost).toEqual({ budget: null, committed: D(512000), pendingChanges: D(40000), projected: D(552000), remaining: null, percentOfBudget: null, forecast: null });
     expect((await listProjects(w.db, w.viewer))[0]).toMatchObject({ committed: D(512000), cost: { pendingChanges: D(40000), projected: D(552000) } });
   });
 
