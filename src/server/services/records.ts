@@ -10,7 +10,7 @@ import { formatBps, formatMoney, parseMoney } from '@/lib/money';
 import { US_STATES } from '@/lib/utils';
 import type { DB } from '@/db';
 import { locked } from '@/db/tx';
-import { changeOrders, contracts, payAppLines, payApplications, projects, retainageReleases, sovLines, subcontractors } from '@/db/schema';
+import { budgetLines, changeOrders, contracts, payAppLines, payApplications, projects, retainageReleases, sovLines, subcontractors } from '@/db/schema';
 import { recordAudit } from '@/server/audit';
 import { assertCan, UserError, type Ctx } from '@/server/auth/permissions';
 import { newId } from '@/server/ids';
@@ -59,6 +59,10 @@ export const updateProject = locked(async function updateProject(db: DB, ctx: Ct
   const [project] = await db.select().from(projects).where(and(eq(projects.orgId, ctx.orgId), eq(projects.id, id)));
   if (!project) throw new UserError('Project not found.');
   const checked = validateProject(input);
+  if (checked.budget !== undefined && checked.budget !== null) {
+    const [line] = await db.select({ id: budgetLines.id }).from(budgetLines).where(and(eq(budgetLines.orgId, ctx.orgId), eq(budgetLines.projectId, id))).limit(1);
+    if (line) throw new UserError('This project’s budget is the total of its budget lines. Change it on the budget page.');
+  }
   // Callers that do not know about the budget (imports, older forms) leave it as it is.
   const values = { ...checked, budget: checked.budget === undefined ? project.budget : checked.budget };
   await db.update(projects).set({ ...values, status: input.status ?? project.status }).where(eq(projects.id, id));

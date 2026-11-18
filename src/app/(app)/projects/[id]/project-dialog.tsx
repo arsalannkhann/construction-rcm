@@ -15,7 +15,7 @@ type Status = 'active' | 'closed';
 const valuesOf = (p: Project): ProjectValues => ({ name: p.name, number: p.number ?? '', address: p.address ?? '', city: p.city ?? '', state: p.state ?? '', ownerName: p.ownerName ?? '', budget: p.budget });
 const statusOf = (p: Project): Status => (p.status === 'closed' ? 'closed' : 'active');
 
-export function ProjectDialogButton({ project, label = 'Edit', variant }: { project: Project; label?: string; variant?: 'primary' | 'secondary' | 'ghost' }) {
+export function ProjectDialogButton({ project, label = 'Edit', variant, budgetLines = null }: { project: Project; label?: string; variant?: 'primary' | 'secondary' | 'ghost'; budgetLines?: { count: number; total: number } | null }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<ProjectValues>(() => valuesOf(project));
   const [status, setStatus] = useState<Status>(() => statusOf(project));
@@ -23,7 +23,7 @@ export function ProjectDialogButton({ project, label = 'Edit', variant }: { proj
 
   const submit = () => {
     if (!form.name.trim()) return;
-    run(() => updateProjectAction(project.id, { ...form, status }), { success: 'Project saved', onSuccess: () => setOpen(false) });
+    run(() => updateProjectAction(project.id, { ...form, budget: budgetLines ? undefined : form.budget, status }), { success: 'Project saved', onSuccess: () => setOpen(false) });
   };
 
   return (
@@ -67,6 +67,7 @@ export function ProjectDialogButton({ project, label = 'Edit', variant }: { proj
           <ProjectFields
             value={form}
             onChange={setForm}
+            budgetLines={budgetLines}
             stateHint="Determines which statutory lien-waiver form is expected (Texas, California and Florida are recognised). Changing it re-checks the project’s undecided applications."
           />
           <Field label="Status" className="col-span-2" hint="A closed project stays on file with its subcontracts and billing history.">

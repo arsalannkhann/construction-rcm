@@ -26,7 +26,7 @@ describe('months', () => {
 
 describe('cost position', () => {
   it('compares committed plus pending changes with the budget', () => {
-    expect(costPosition(D(1_000_000), D(800_000), D(50_000))).toEqual({ budget: D(1_000_000), committed: D(800_000), pendingChanges: D(50_000), projected: D(850_000), remaining: D(150_000), percentOfBudget: 85 });
+    expect(costPosition(D(1_000_000), D(800_000), D(50_000))).toEqual({ budget: D(1_000_000), committed: D(800_000), pendingChanges: D(50_000), projected: D(850_000), remaining: D(150_000), percentOfBudget: 85, forecast: null });
     expect(budgetStanding(costPosition(D(1_000_000), D(800_000), D(50_000)))).toBe('within');
     expect(budgetStanding(costPosition(D(1_000_000), D(900_000), D(60_000)))).toBe('near');
     expect(budgetStanding(costPosition(D(1_000_000), D(980_000), D(40_000)))).toBe('over');

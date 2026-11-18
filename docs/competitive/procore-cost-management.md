@@ -53,10 +53,10 @@ the result for approval, and hand the approved record to accounting or Procore.
 | Status of every pay application in a billing period | Partly: an application list and a billing-by-month chart | **Billing periods page and project billing grid** |
 | Make sure no pay application is missed | Partly: application numbers out of sequence are flagged, but a subcontractor who sends nothing goes unnoticed | **Missing applications flagged per period, counted on the overview** |
 | Owner invoice pre-filled from approved sub applications | No | **Yes: the main contractor's own application to the owner (G702 summary and G703 continuation sheet), worked out each period from approved subcontractor billing, with markup and hand-entered lines, frozen on submission, certification recorded, PDF** |
-| Budget and budget-vs-committed | No | **A budget per project, with committed, pending changes, projected cost and the variance** |
+| Budget and budget-vs-committed | No | **A budget per project, with committed, pending changes, projected cost and the variance; split by cost code, each line with its subcontracts, budget changes between lines and a lock on the original budget** |
 | Change exposure (change events) | Pending change orders were stored but not counted anywhere | **Pending changes counted as exposure and in projected cost** |
 | Cost-risk flags ("AI flags overruns") | No | **Rule-based cost and billing risks on the overview, each with its reason** |
-| Cost-to-complete, time-phased forecasts | No | No (see gaps) |
+| Cost-to-complete, time-phased forecasts | No | **Cost to complete per budget line: billed to date, a forecast of what is still to be committed (by a method chosen per line), the estimate at completion and the projected over or under. Not time-phased yet (see gaps)** |
 | Subcontractors submit their own applications | Email to a project address; no portal | **A no-account link per subcontract: upload, see each application's status and the messages sent to them, reminders before and after the due day** |
 | Accounting sync | File exports (CSV, JSON, PDF) and Procore push | Same |
 | Direct costs, labour from timesheets | No | No (out of scope for now) |
@@ -91,9 +91,12 @@ the result for approval, and hand the approved record to accounting or Procore.
    sign-in, compliance documents (insurance certificates, W-9s) with expiry
    reminders, a per-subcontract due day, and reminders by text message.
    Reminders need an email provider on the deployment.
-3. **Budget by cost code and cost-to-complete.** Today the budget is one figure
-   per project for subcontracted work. Next: budget lines by cost code mapped to
-   subcontracts, with forecast-to-complete per line.
+3. ~~**Budget by cost code and cost-to-complete.**~~ Done in the fourth round
+   (below). Still open: splitting one subcontract across several cost codes
+   (today a subcontract counts against one line), a cost code list kept for the
+   whole organisation rather than suggested from other projects, linking a
+   budget change to the owner change order that funds it, and direct costs
+   (self-performed work, purchases) on the lines.
 4. **Forecasting.** Project the remaining billing per subcontract from its
    billing pace and the remaining balance, rolled up into a cash-flow view.
    Must be labelled as a projection; every figure on the overview today is
@@ -180,3 +183,28 @@ the result for approval, and hand the approved record to accounting or Procore.
   never when the month's application is in or still being read, and never
   without an email provider. A failed send is recorded and its link's creator
   told. Each email shows on the subcontract page.
+
+## Built in the fourth round: budget by cost code
+
+- **Budget lines.** Each project's budget for subcontracted work can be split
+  into lines by cost code, each with its original budget. Subcontracts are
+  assigned to a line; any that are not are shown apart, so the lines and that
+  row always add up to the project. The first lines take over a project's
+  single budget figure, with whatever they do not use going to a contingency
+  line, so the total does not change underneath anyone. "Start from the
+  subcontracts" makes one line per trade from the subcontracts already there.
+- **Budget changes and the lock.** Money moves between lines (from contingency,
+  say), or is added to or taken from the budget, by a budget change with a
+  reason; a change is voided, never deleted, and no line can go below zero.
+  Locking the budget freezes each line's original amount; unlocking takes an
+  approver.
+- **Cost to complete.** Per line: committed, pending change orders and billed
+  to date (completed and stored, from approved applications), all from records;
+  then, as a forecast, what is still to be committed by the method chosen for
+  the line (the rest of the budget, an amount entered with a note, or nothing
+  more), the estimate at completion, the cost to complete and the projected
+  over or under. The page keeps the two kinds of figure in separate columns.
+- **Overview risks.** Lines projected over their own budget, subcontracts on
+  no line, and a project forecast to finish over budget when the project-level
+  figure does not already show it.
+- **Export.** The budget as CSV, one row per line with every figure.

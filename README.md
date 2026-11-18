@@ -93,7 +93,12 @@ own):
 6. **Any subcontract → Subcontractor portal**: make a link and open it in a
    private window. That is what the subcontractor sees: their applications,
    what is due, and an upload that arrives already matched.
-7. **Activity** is the audit trail, with a check that the chain is intact.
+7. **Riverside Medical Office Building → Budget by cost code** splits the
+   project's budget into lines, each with its subcontract, committed, billed to
+   date and the forecast cost to complete. The budget is locked; two change
+   orders were funded from contingency by budget changes, and HVAC carries an
+   entered forecast for work not bought out yet.
+8. **Activity** is the audit trail, with a check that the chain is intact.
 
 ### Try it from an empty organisation
 
@@ -403,10 +408,12 @@ against it instead of being flagged for withholding too little.
 ### Cost control and billing periods
 
 `src/server/services/cost.ts` and `src/server/services/billing.ts`, computed
-from records on every request; nothing is forecast.
+from records on every request. The one forecast is what is still to be
+committed on each budget line (below), by a method chosen for that line.
 
 - **Budget and commitments.** A project can carry a budget for its
-  subcontracted work. The project page sets it against what is committed
+  subcontracted work: one figure, or lines by cost code (see
+  [Budget by cost code](#budget-by-cost-code)). The project page sets it against what is committed
   (subcontracts plus approved change orders), the change orders still pending,
   and the projected cost (committed plus pending), and says what is left or by
   how much it is over. Projects and the overview show the standing.
@@ -421,12 +428,57 @@ from records on every request; nothing is forecast.
   stored materials, retainage, payment due): the basis of the owner's invoice.
   Needs the export permission; each download is in the audit trail.
 - **Cost and billing risks** on the overview: projects over or within 5% of
-  budget, pending change orders of 10% or more of a subcontract, and
-  subcontracts that missed the last closed period. Each is a rule with its
+  budget, budget lines projected over their own budget, subcontracts on no
+  budget line, a forecast over budget when the project is not already over,
+  pending change orders of 10% or more of a subcontract, and subcontracts that
+  missed the last closed period. Each is a rule with its
   numbers and a link, not a model's judgement.
 
 How this compares with Procore's cost management, and what to build next:
 [docs/competitive/procore-cost-management.md](docs/competitive/procore-cost-management.md).
+
+### Budget by cost code
+
+A project's budget for subcontracted work, split into lines by cost code
+(`src/server/services/budget-calc.ts` for the arithmetic, `budget.ts` for the
+workflow; the page is `/projects/[id]/budget`).
+
+- **Lines.** Each line has a cost code, a description and an original budget.
+  Codes used on the organisation's other projects and common trade codes are
+  suggested. The first lines take over a project's single budget figure:
+  whatever they do not use goes to a *99 00 00 Contingency* line, so the total
+  stays the same, and from then on the project's budget is the total of its
+  lines. *Start from the subcontracts* makes one line per trade from the
+  subcontracts already on the project, each at what is committed on it, with
+  the rest of the single budget in contingency; if that budget is less than
+  what is committed, the lines share it in proportion, to the cent.
+- **Each subcontract counts against at most one line.** Per line: the budget
+  (original, plus budget changes in, less changes out), committed
+  (subcontracts plus approved change orders), pending change orders and billed
+  to date (completed and stored on the latest approved application). Any
+  subcontract on no line is a row of its own, so the lines and that row add up
+  to the project's figures. When assigning, each subcontract is offered the
+  line that matches its trade.
+- **Budget changes** move money between lines, or add to or take from the
+  budget, each with a reason. No change may leave a line below zero; a change
+  is voided, never deleted, and voiding is checked the same way.
+- **Locking** freezes the original budgets: new lines start at $0 and a line
+  with an original budget cannot be removed, so money then moves only by budget
+  changes. Members who keep the records lock it; unlocking takes an owner,
+  admin or controller. A line with budget changes on record is never removed.
+- **The forecast.** What is still to be committed on a line is the only
+  forecast, by a method chosen per line: *the rest of the budget* (the
+  default: whatever the line's budget does not yet cover), *an amount we
+  enter*, with a note, or *nothing more*. The estimate at completion is
+  committed plus pending plus still to commit; the cost to complete is that
+  less billed to date; over or under is the budget less the estimate. The page
+  keeps the figures from records and the forecast in separate column groups.
+- **CSV** of every line and the total, needing the export permission; each
+  download is in the audit trail, as is every change to the budget.
+- **Elsewhere**: the project page shows the forecast and links to the budget,
+  the project's edit form shows the lines' total instead of a budget field,
+  each subcontract page names its line, and the overview lists the line risks
+  above.
 
 ### Owner billing
 
@@ -534,6 +586,9 @@ erDiagram
   organizations ||--o{ projects : runs
   organizations ||--o{ subcontractors : works_with
   projects ||--o{ contracts : has
+  projects ||--o{ budget_lines : "budget by cost code"
+  budget_lines |o--o{ contracts : "counts against"
+  projects ||--o{ budget_changes : "money moved between lines"
   projects ||--o| prime_contracts : "contract with the owner"
   prime_contracts ||--o{ prime_lines : "owner schedule"
   prime_contracts ||--o{ prime_change_orders : amended_by
@@ -561,6 +616,7 @@ erDiagram
 |---|---|
 | Identity and access | `organizations`, `users`, `memberships`, `invitations`, `sessions`, `login_challenges`, `password_resets`, `auth_attempts` |
 | Contracts | `projects`, `subcontractors`, `contracts`, `sov_lines`, `change_orders`, `retainage_releases` |
+| Budget | `budget_lines`, `budget_changes` |
 | Billing | `pay_applications`, `pay_app_lines`, `documents`, `extractions`, `lien_waivers`, `findings`, `comments` |
 | Owner billing | `prime_contracts`, `prime_lines`, `prime_change_orders`, `owner_applications` |
 | Subcontractor portal | `portal_links`, `portal_emails`, `portal_upload_parts` |
@@ -718,10 +774,11 @@ Status on 2026-11-18, `main`. The current phase is summarised in
 [docs/phase-3-report.md](docs/phase-3-report.md), the previous one in
 [docs/phase-2-report.md](docs/phase-2-report.md).
 
-**Verified by automated tests.** `pnpm test`: 556 passed, 3 skipped (the
+**Verified by automated tests.** `pnpm test`: 575 passed, 3 skipped (the
 skipped tests need a PostgreSQL server). `pnpm test:pg` on a throwaway
 PostgreSQL server: 496 passed (run before cost control, billing periods,
-owner billing and the subcontractor portal were added; not re-run since). `pnpm typecheck` is clean and `pnpm build`
+owner billing, the subcontractor portal and budgets by cost code were added;
+not re-run since). `pnpm typecheck` is clean and `pnpm build`
 succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
 
 - Money parsing and rounding; every reconciliation check, including stepped
@@ -776,6 +833,19 @@ succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
   the subcontract has not started billing; the organisation's due day; nothing
   attempted without an email provider; a failed send recorded, its creator
   told, and not retried.
+- Budgets by cost code (`tests/budget.test.ts`): the line arithmetic and each
+  forecast method by hand-computed expectations, void changes ignored, the
+  unassigned row making the lines add up; who may change, lock, unlock and
+  download, and organisation isolation of every read and write (a line,
+  change or subcontract from another organisation is not found); the single
+  budget taken over with contingency for the rest; a duplicate cost code
+  refused; assignment limited to the project's subcontracts; budget changes
+  that would take a line below zero refused, including by voiding; the lock
+  (new lines at $0, original budgets and their lines kept) and unlock; lines
+  with budget changes kept; the project page, projects list and overview
+  using the lines; the overview's line, unassigned and forecast risks; the
+  CSV; starting from the subcontracts, including a budget below what is
+  committed shared in proportion; and every change audited.
 - The mobile API (`tests/mobile.test.ts`): bearer sign-in and sign-out (the
   token is never read from a query string), the second step, organisation
   isolation, refusal of a member who owes their organisation two-step
@@ -842,13 +912,29 @@ turning reminders off, replacing the link (the old one then shows that it
 cannot be used), the due day refused at 31 and changed to 20 (followed by the
 link and the panel), and the portal page and the panel at 375 px. Emails were
 not sent: no email provider is configured locally, and the panel says so.
+Later on 2026-11-18, budgets by cost code on the same setup: starting from the
+subcontracts on a project with a single $7,078,000.00 budget (three lines at
+what each subcontract commits and $21,500.00 to contingency, every figure
+checked by hand against the project page), a forecast of nothing more on
+contingency, a budget change from contingency to Metals (refused at first for
+more than contingency held), locking (a new line limited to $0), a removal
+refused for a line with budget changes and allowed for an empty one, taking a
+subcontract off its line (the unassigned row and the warning) and putting it
+back from the suggested line, voiding the change, unlocking, the CSV (figures
+equal to the page, negative amounts as numbers, a byte-order mark), the
+project page, its edit form, the subcontract page, the overview risk, the
+projects list, the recreated demo workspace's budget, and the page at
+375 px. Three defects found this way were fixed before release: the projects
+list showed no budget for a project with lines, line removal had no
+confirmation, and panel headers squeezed their text beside their buttons on
+narrow screens.
 
 **Verified against real infrastructure:**
 
 | What | Result |
 |---|---|
 | Vercel + Supabase production | https://zephric.vercel.app (formerly https://construction-rcm.vercel.app, which still answers), Node 22, region sin1, all secrets set. Checked live on 2026-11-15: `/api/health` returns `ok` with PostgreSQL reached through Supabase's session pooler and TLS **verified** against the configured CA, the Data API exposing no table and no table without RLS, documents stored in the database, and the queue empty. `/api/jobs/run` refuses no token and a wrong token (401) and, with `CRON_SECRET`, runs the queue against the live database (200). Signed-out pages redirect to sign-in; the sign-up page renders. |
-| Supabase project `construction-rcm` | Schema applied (migrations 0000–0009, recorded under the repository's versions, applied by hand; 0008, the owner billing tables, on 2026-11-17, and 0009, the subcontractor portal tables, on 2026-11-18, with row-level security confirmed on each new table). The Data API, probed from outside with both public keys, refuses every table. |
+| Supabase project `construction-rcm` | Schema applied (migrations 0000–0010, recorded under the repository's versions, applied by hand; 0008, the owner billing tables, on 2026-11-17, and 0009, the subcontractor portal tables, and 0010, the budget lines and changes, on 2026-11-18, with row-level security confirmed on each new table). The Data API, probed from outside with both public keys, refuses every table. |
 | Docker image and Compose stack | Built and run to a healthy state on 2026-11-15, before that day's authentication changes; not rebuilt since. |
 | Signed-in use of the live site | On 2026-11-15 the owner signed up on the live site, and a project, a subcontractor and a subcontract with a three-line schedule of values ($500,000.00, retainage 10% / 10%) were created through the interface and confirmed in the Supabase database. |
 | Uploads and reading on the live site | On 2026-11-15 the five sample PDFs were uploaded as one package, including a 5.9 MB file sent in 4 MiB parts; every stored object matches its original byte for byte (SHA-256). The first reading failed for every file: pdf.js's worker was not in the deployed functions (fixed in [PR #2](https://github.com/arsalannkhann/construction-rcm/pull/2); the health check now opens a test PDF so this shows as `degraded`). After the fix, the four extra files were removed from the package through the interface ([PR #3](https://github.com/arsalannkhann/construction-rcm/pull/3)) and the package was read again: the 4-page file was split into pay application, schedule of values, lien waiver and one unreadable page; it was read as application #1 for the period to 2026-09-30, matched to SC-2301-16, with $99,000.00 requested and verified and $11,000.00 retainage, all equal to the generator's figures. The only open finding was the unreadable page (`doc.unreadable_pages`), with 26 checks passed. Each removal was audited and every background job succeeded on its first attempt. |
@@ -885,10 +971,11 @@ were not available:**
 - **Members of more than one organisation** cannot be recovered by an
   organisation's admins; they reset their own password by email, or the
   operator helps (`pnpm reset-password`).
-- **No subcontractor logins.** Roles are the general contractor's own staff;
-  a subcontractor cannot be given access limited to their own applications.
-  They send packages by email, or a member captures for them in the mobile
-  app (docs/mobile.md, "Limitations").
+- **No subcontractor logins.** Roles are the general contractor's own staff.
+  A subcontractor gets a no-account link limited to one subcontract (the
+  [subcontractor portal](#subcontractor-portal)), sends packages by email, or
+  has a member capture them in the mobile app (docs/mobile.md,
+  "Limitations").
 - **Tenant isolation is enforced in application code**, with tests. Row-level
   security only shuts out Supabase's public API roles; it does not separate
   organisations from each other.
@@ -908,10 +995,12 @@ were not available:**
 - **Payments are not tracked**, so "unconditional waiver for the previous
   payment" is a policy check, not a check against a payment.
 - **CSV export is generic**, not an import file for a specific accounting system.
-- **Budgets are one figure per project**, for subcontracted work, with no cost
-  codes, forecast to complete or cash-flow projection; billing periods are
-  calendar months. The roll-up gives the figures for an owner invoice but
-  does not produce the main contractor's own G702/G703.
+- **Budgets cover subcontracted work only.** A project's budget can be split
+  by cost code with a forecast cost to complete, but a subcontract counts
+  against one line (it cannot be split across codes), there is no
+  organisation-wide cost code list, no direct costs (self-performed work,
+  purchases) and no cash-flow projection; billing periods are calendar
+  months.
 - **Lien waiver knowledge covers three states**, and only form recognition.
   Other states get completeness and consistency checks only.
 - Times are shown in the viewer's locale; billing dates are calendar dates

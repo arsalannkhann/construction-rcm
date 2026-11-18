@@ -1,4 +1,4 @@
-import { CalendarRange, FileText, Inbox, Landmark, Plus } from 'lucide-react';
+import { CalendarRange, FileText, Inbox, Landmark, ListTree, Plus } from 'lucide-react';
 import Link from '@/components/ui/link';
 import { notFound } from 'next/navigation';
 import { getDb } from '@/db';
@@ -26,7 +26,9 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   const detail = await getProjectDetail(db, ctx, id);
   if (!detail) notFound();
 
-  const { project, totals, cost, contracts, applications } = detail;
+  const { project, totals, cost, contracts, applications, unassigned } = detail;
+  const budgetLines = cost.forecast && cost.budget !== null ? { count: cost.forecast.lines, total: cost.budget } : null;
+  const projectFields = { id: project.id, name: project.name, number: project.number, address: project.address, city: project.city, state: project.state, ownerName: project.ownerName, budget: project.budget, status: project.status };
   const current = monthOf(new Date());
   const board = await getBillingBoard(db, ctx, { months: monthsEnding(current, 6), current, projectId: project.id });
   const billing = board.sections[0];
@@ -58,9 +60,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         description={facts.length > 0 ? facts.join(' · ') : undefined}
         actions={
           canWrite ? (
-            <ProjectDialogButton
-              project={{ id: project.id, name: project.name, number: project.number, address: project.address, city: project.city, state: project.state, ownerName: project.ownerName, budget: project.budget, status: project.status }}
-            />
+            <ProjectDialogButton project={projectFields} budgetLines={budgetLines} />
           ) : null
         }
       />
@@ -70,10 +70,18 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           <PanelHeader
             title="Budget and commitments"
             description="What is set aside for subcontracted work, what is committed, and what pending change orders could add."
-            actions={<BudgetStandingBadge cost={cost} />}
+            actions={
+              <div className="flex flex-wrap items-center gap-2">
+                <BudgetStandingBadge cost={cost} />
+                <Link href={`/projects/${project.id}/budget`} className={buttonClass({ variant: 'ghost', size: 'sm' })}>
+                  <ListTree className="size-3.5" />
+                  {cost.forecast ? 'Budget by cost code' : canWrite ? 'Split by cost code' : 'Budget by cost code'}
+                </Link>
+              </div>
+            }
           />
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 px-4 pt-4 sm:grid-cols-3 lg:grid-cols-5">
-            <CostFigure label="Budget" value={cost.budget === null ? null : formatMoney(cost.budget)} note={cost.budget === null ? 'Not set' : 'for subcontracted work'} />
+            <CostFigure label="Budget" value={cost.budget === null ? null : formatMoney(cost.budget)} note={cost.budget === null ? 'Not set' : cost.forecast ? `${pluralize(cost.forecast.lines, 'budget line')}` : 'for subcontracted work'} />
             <CostFigure label="Committed" value={formatMoney(cost.committed)} note={`${pluralize(contracts.length, 'subcontract')}, with approved change orders`} />
             <CostFigure label="Pending changes" value={formatMoney(cost.pendingChanges)} note="change orders not yet approved" />
             <CostFigure label="Projected" value={formatMoney(cost.projected)} note="committed plus pending changes" />
@@ -84,16 +92,31 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               tone={cost.remaining !== null && cost.remaining < 0 ? 'block' : undefined}
             />
           </dl>
+          {cost.forecast ? (
+            <div className="mx-4 mt-4 rounded-lg bg-canvas px-3 py-2.5">
+              <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-3">Forecast, from each budget line’s method</p>
+              <dl className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
+                <CostFigure label="Still to commit" value={formatMoney(cost.forecast.stillToCommit)} />
+                <CostFigure label="At completion" value={formatMoney(cost.forecast.atCompletion)} />
+                <CostFigure label="To complete" value={formatMoney(cost.forecast.toComplete)} note="at completion less completed and stored" />
+                <CostFigure label={cost.forecast.variance < 0 ? 'Forecast over' : 'Forecast under'} value={formatMoney(Math.abs(cost.forecast.variance))} tone={cost.forecast.variance < 0 ? 'block' : undefined} />
+              </dl>
+              {unassigned > 0 ? (
+                <p className="mt-2 text-xs text-warn">
+                  {pluralize(unassigned, 'subcontract')} on no budget line.{' '}
+                  <Link href={`/projects/${project.id}/budget`} className="font-medium underline">
+                    Assign {unassigned === 1 ? 'it' : 'them'}
+                  </Link>
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           <div className="space-y-2 px-4 pb-4 pt-4">
             <CostBar cost={cost} />
             <div className="flex flex-wrap items-center justify-between gap-2">
               <CostLegend cost={cost} />
               {cost.budget === null && canWrite ? (
-                <ProjectDialogButton
-                  label="Set a budget"
-                  variant="ghost"
-                  project={{ id: project.id, name: project.name, number: project.number, address: project.address, city: project.city, state: project.state, ownerName: project.ownerName, budget: project.budget, status: project.status }}
-                />
+                <ProjectDialogButton label="Set a budget" variant="ghost" project={projectFields} />
               ) : null}
             </div>
           </div>

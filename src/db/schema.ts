@@ -185,8 +185,15 @@ export const projects = pgTable(
     /** Two-letter US state; drives jurisdiction-specific waiver pre-screening. */
     state: text('state'),
     ownerName: text('owner_name'),
-    /** What the main contractor has set aside for this project's subcontracted work. Optional; compared with committed and pending changes. */
+    /**
+     * What the main contractor has set aside for this project's subcontracted work, as one figure. Optional;
+     * compared with committed and pending changes. Once the project has budget lines this is cleared and the
+     * budget is the total of its lines.
+     */
     budget: cents('budget'),
+    /** Set while the budget lines are locked: their original amounts are frozen and money moves by budget changes. */
+    budgetLockedAt: ts('budget_locked_at'),
+    budgetLockedBy: text('budget_locked_by').references(() => users.id),
     status: text('status').notNull().default('active'), // active | closed
     externalSource: text('external_source'),
     externalId: text('external_id'),
@@ -237,11 +244,69 @@ export const contracts = pgTable(
      * was set up here. Used as the "previous" basis until an application is approved.
      */
     baseline: jsonb('baseline').$type<ContractBaseline>(),
+    /** The line of the project's budget this subcontract's cost counts against. A line on the same project. */
+    budgetLineId: text('budget_line_id').references(() => budgetLines.id, { onDelete: 'set null' }),
     externalSource: text('external_source'),
     externalId: text('external_id'),
     createdAt: createdAt(),
   },
   (t) => [index('contracts_org_project').on(t.orgId, t.projectId)],
+);
+
+// ── Budget by cost code ─────────────────────────────────────────────────────
+
+/**
+ * A line of a project's budget for subcontracted work, by cost code. Its
+ * budget is the original amount plus the budget changes into it, less those
+ * out of it. Subcontracts are assigned to a line; what is still to be
+ * committed on it is a forecast, made by the method chosen for the line.
+ */
+export const budgetLines = pgTable(
+  'budget_lines',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    costCode: text('cost_code').notNull(),
+    description: text('description').notNull(),
+    /** The budget as first set. Frozen while the project's budget is locked. */
+    originalAmount: cents('original_amount').notNull(),
+    /** How the cost still to be committed is forecast: remaining | entered | none (see FORECAST_METHOD_LABEL). */
+    forecastMethod: text('forecast_method').notNull().default('remaining'),
+    /** For `entered`: the cost still expected beyond what is committed and pending. */
+    forecastAmount: cents('forecast_amount'),
+    forecastNote: text('forecast_note'),
+    forecastBy: text('forecast_by').references(() => users.id),
+    forecastAt: ts('forecast_at'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdBy: text('created_by').references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index('budget_lines_org_project').on(t.orgId, t.projectId), uniqueIndex('budget_lines_code').on(t.projectId, t.costCode)],
+);
+
+/**
+ * Money moved between budget lines (from contingency, say), added to the
+ * budget (no `from`) or taken out of it (no `to`). Voided rather than deleted.
+ */
+export const budgetChanges = pgTable(
+  'budget_changes',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    fromLineId: text('from_line_id').references(() => budgetLines.id),
+    toLineId: text('to_line_id').references(() => budgetLines.id),
+    /** Always above zero; the direction is from → to. */
+    amount: cents('amount').notNull(),
+    reason: text('reason').notNull(),
+    status: text('status').notNull().default('approved'), // approved | void
+    createdBy: text('created_by').references(() => users.id),
+    voidedBy: text('voided_by').references(() => users.id),
+    voidedAt: ts('voided_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('budget_changes_org_project').on(t.orgId, t.projectId)],
 );
 
 export const changeOrders = pgTable(

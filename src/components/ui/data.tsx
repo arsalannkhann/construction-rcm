@@ -36,8 +36,9 @@ export function Panel({ children, className, ...rest }: React.HTMLAttributes<HTM
 
 export function PanelHeader({ title, description, actions, className }: { title: React.ReactNode; description?: React.ReactNode; actions?: React.ReactNode; className?: string }) {
   return (
-    <div className={cn('flex items-start justify-between gap-4 border-b border-line px-4 py-3', className)}>
-      <div className="min-w-0">
+    <div className={cn('flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-line px-4 py-3', className)}>
+      {/* At least 12rem for the title and description; the actions wrap below them on a narrow screen. */}
+      <div className="min-w-0 flex-1 basis-48">
         <h2 className="text-[13px] font-semibold text-ink">{title}</h2>
         {description ? <p className="mt-0.5 text-xs text-ink-3">{description}</p> : null}
       </div>
