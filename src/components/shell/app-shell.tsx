@@ -1,33 +1,64 @@
 'use client';
 
-import { ArrowUpFromLine, Bell, Building2, CalendarRange, Check, ChevronsUpDown, FlaskConical, Globe, History, Inbox, LayoutDashboard, Loader2, LogOut, Plus, Send, Settings, Users } from 'lucide-react';
+import { ArrowUpFromLine, Bell, Building2, CalendarRange, Check, ChevronsUpDown, Compass, FlaskConical, Globe, History, Inbox, LayoutDashboard, LifeBuoy, ListChecks, Loader2, LogOut, Map as MapIcon, MessageSquare, Plus, Route, Send, Settings, SlidersHorizontal, Users } from 'lucide-react';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, useSyncExternalStore, useTransition } from 'react';
 import { toast } from 'sonner';
 import { switchOrgAction } from '@/app/(auth)/actions';
 import { markNotificationsReadAction } from '@/app/(app)/shell-actions';
+import { openExampleAction } from '@/app/onboarding-actions';
 import { BrandMark } from '@/components/brand';
+import { TourProvider, useTour } from '@/components/tour/tour';
 import { Avatar } from '@/components/ui/data';
 import { Menu, MenuItem, MenuLabel, MenuSeparator, Popover, Tooltip } from '@/components/ui/overlay';
 import { LAST_PAGE_KEY } from '@/lib/session-markers';
 import { signOut } from '@/lib/sign-out';
 import { cn, formatRelative } from '@/lib/utils';
 import { ROLE_LABEL } from '@/server/auth/permissions';
-import type { Role } from '@/server/types';
+import type { Role, TourId } from '@/server/types';
 
 type Org = { id: string; name: string; isDemo: boolean };
 type Notice = { id: string; title: string; body: string | null; href: string | null; read: boolean; createdAt: string };
 
-const NAV = [
-  { href: '/overview', label: 'Overview', icon: LayoutDashboard },
-  { href: '/applications', label: 'Pay applications', icon: Inbox },
-  { href: '/billing', label: 'Billing periods', icon: CalendarRange },
-  { href: '/projects', label: 'Projects', icon: Building2 },
-  { href: '/subcontractors', label: 'Subcontractors', icon: Users },
-  { href: '/transfers', label: 'Transfers', icon: Send },
-  { href: '/activity', label: 'Activity', icon: History },
+type NavItem = { href: string; label: string; icon: typeof Inbox; tour?: string; badge?: 'attention'; exportOnly?: boolean };
+
+/**
+ * The sidebar, grouped by the work rather than by the software: what is
+ * billed, what it is billed against, and the record of what happened. The
+ * words are the trade's own. Setup, help and settings sit at the bottom, out
+ * of the way of the daily work.
+ */
+const NAV: Array<{ label: string | null; items: NavItem[] }> = [
+  { label: null, items: [{ href: '/overview', label: 'Overview', icon: LayoutDashboard, tour: 'nav-overview' }] },
+  {
+    label: 'Billing',
+    items: [
+      { href: '/applications', label: 'Pay applications', icon: Inbox, tour: 'nav-applications', badge: 'attention' },
+      { href: '/billing', label: 'Billing periods', icon: CalendarRange, tour: 'nav-billing' },
+    ],
+  },
+  {
+    label: 'Projects',
+    items: [
+      { href: '/projects', label: 'Projects', icon: Building2, tour: 'nav-projects' },
+      { href: '/subcontractors', label: 'Subcontractors', icon: Users },
+    ],
+  },
+  {
+    label: 'Records',
+    items: [
+      { href: '/transfers', label: 'Exports', icon: Send, tour: 'nav-exports', exportOnly: true },
+      { href: '/activity', label: 'Activity', icon: History, tour: 'nav-activity' },
+    ],
+  },
 ];
+
+export type ShellOnboarding = {
+  /** Whether the setup guide is offered in the sidebar: not once it is finished or put away. */
+  guide: boolean;
+  tour: { id: TourId; step: number; paused?: boolean } | null;
+};
 
 export function AppShell({
   user,
@@ -37,6 +68,9 @@ export function AppShell({
   unread,
   notifications,
   canUpload,
+  canExport,
+  hasApplications,
+  onboarding,
   children,
 }: {
   user: { name: string; email: string; role: Role };
@@ -46,6 +80,10 @@ export function AppShell({
   unread: number;
   notifications: Notice[];
   canUpload: boolean;
+  canExport: boolean;
+  /** The organisation has at least one billing package, so there is something for the review tour to point at. */
+  hasApplications: boolean;
+  onboarding: ShellOnboarding;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -76,12 +114,13 @@ export function AppShell({
     void signOut();
   };
 
-  const item = (href: string, label: string, Icon: typeof Inbox, badge?: number) => {
+  const item = (href: string, label: string, Icon: typeof Inbox, badge?: number, tour?: string) => {
     const on = active(href);
     const link = (
       <Link
         key={href}
         href={href}
+        data-tour={tour}
         className={cn(
           'focus-ring group flex h-8 items-center gap-2.5 rounded-md text-[13px] transition-colors',
           rail ? 'w-8 justify-center' : 'px-2',
@@ -106,7 +145,10 @@ export function AppShell({
     );
   };
 
+  const ownOrg = organizations.find((o) => !o.isDemo) ?? null;
+
   return (
+    <TourProvider initial={onboarding.tour} env={{ isDemo: org.isDemo, hasOwnOrg: ownOrg !== null, canUpload }}>
     <div className="flex h-screen overflow-hidden">
       <aside className={cn('flex shrink-0 flex-col border-r border-line bg-canvas transition-[width] duration-150', rail ? 'w-[52px] items-center px-0 py-3' : 'w-[232px] px-3 py-3')}>
         <div className={cn('flex items-center', rail ? 'flex-col gap-2' : 'gap-1')}>
@@ -128,7 +170,7 @@ export function AppShell({
                 <>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px] font-semibold leading-4 text-ink">{org.name}</span>
-                    <span className="block text-[11px] leading-4 text-ink-3">{org.isDemo ? 'Demo workspace' : ROLE_LABEL[user.role]}</span>
+                    <span className="block text-[11px] leading-4 text-ink-3">{org.isDemo ? 'Example workspace' : ROLE_LABEL[user.role]}</span>
                   </span>
                   <ChevronsUpDown className="size-3.5 shrink-0 text-ink-3" />
                 </>
@@ -140,12 +182,12 @@ export function AppShell({
           {organizations.map((o) => (
             <MenuItem key={o.id} onSelect={() => (o.id === org.id ? undefined : switchTo(o.id))} icon={o.id === org.id ? <Check /> : o.isDemo ? <FlaskConical /> : <span />}>
               <span className="truncate">{o.name}</span>
-              {o.isDemo ? <span className="ml-auto pl-3 text-[11px] text-ink-3">Demo</span> : null}
+              {o.isDemo ? <span className="ml-auto pl-3 text-[11px] text-ink-3">Example</span> : null}
             </MenuItem>
           ))}
           <MenuSeparator />
           <MenuItem onSelect={() => router.push('/settings/organization#demo')} icon={<FlaskConical />}>
-            {organizations.some((o) => o.isDemo) ? 'About the demo workspace' : 'Explore a demo workspace'}
+            {organizations.some((o) => o.isDemo) ? 'About the example workspace' : 'Explore an example workspace'}
           </MenuItem>
         </Menu>
         </div>
@@ -153,23 +195,34 @@ export function AppShell({
         {canUpload ? (
           rail ? (
             <Tooltip content="Upload a billing package" side="right">
-              <Link href="/applications/new" className="focus-ring mt-3 flex size-8 items-center justify-center rounded-md bg-ink text-white hover:bg-ink/88" aria-label="Upload a billing package">
+              <Link href="/applications/new" data-tour="nav-upload" className="focus-ring mt-3 flex size-8 items-center justify-center rounded-md bg-ink text-white hover:bg-ink/88" aria-label="Upload a billing package">
                 <Plus className="size-4" />
               </Link>
             </Tooltip>
           ) : (
-            <Link href="/applications/new" className="focus-ring mt-3 flex h-8 items-center justify-center gap-1.5 rounded-md bg-ink text-[13px] font-medium text-white hover:bg-ink/88">
+            <Link href="/applications/new" data-tour="nav-upload" className="focus-ring mt-3 flex h-8 items-center justify-center gap-1.5 rounded-md bg-ink text-[13px] font-medium text-white hover:bg-ink/88">
               <ArrowUpFromLine className="size-3.5" />
               Upload package
             </Link>
           )
         ) : null}
 
-        <nav className={cn('mt-4 flex flex-1 flex-col gap-0.5', rail && 'items-center')} aria-label="Main">
-          {NAV.map((n) => item(n.href, n.label, n.icon, n.href === '/applications' ? attention : undefined))}
+        <nav className={cn('mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto', rail && 'items-center')} aria-label="Main">
+          {NAV.map((group, g) => {
+            const items = group.items.filter((n) => !n.exportOnly || canExport);
+            if (items.length === 0) return null;
+            return (
+              <div key={group.label ?? 'top'} className={cn('flex flex-col gap-0.5', rail && 'items-center', g > 0 && (rail ? 'mt-2 border-t border-line pt-2' : 'mt-3.5'))} role="group" aria-label={group.label ?? undefined}>
+                {group.label && !rail ? <p className="px-2 pb-1 text-[10.5px] font-medium uppercase tracking-[0.09em] text-ink-4">{group.label}</p> : null}
+                {items.map((n) => item(n.href, n.label, n.icon, n.badge === 'attention' ? attention : undefined, n.tour))}
+              </div>
+            );
+          })}
         </nav>
 
-        <div className={cn('flex flex-col gap-0.5', rail && 'items-center')}>
+        <div className={cn('flex shrink-0 flex-col gap-0.5 pt-2', rail && 'items-center')}>
+          {onboarding.guide && !org.isDemo ? item('/get-started', 'Get started', ListChecks) : null}
+          <HelpMenu rail={rail} isDemo={org.isDemo} ownOrg={ownOrg} hasDemo={organizations.some((o) => o.isDemo)} hasApplications={hasApplications} onSwitch={switchTo} />
           <NotificationsButton rail={rail} unread={unread} notifications={notifications} />
           {item('/settings', 'Settings', Settings)}
           <Menu
@@ -206,7 +259,7 @@ export function AppShell({
           <div className="flex shrink-0 items-center justify-center gap-2 border-b border-accent-line bg-accent-soft px-4 py-1.5 text-xs text-accent-ink">
             <FlaskConical className="size-3.5" />
             <span>
-              <span className="font-medium">Demo workspace.</span> Fictitious companies and amounts, kept separate from your organisation’s records.
+              <span className="font-medium">Example workspace.</span> Fictitious companies and amounts, kept separate from your organisation’s records.
             </span>
             {organizations.find((o) => !o.isDemo) ? (
               <button className="font-medium underline underline-offset-2 hover:no-underline" onClick={() => switchTo(organizations.find((o) => !o.isDemo)!.id)}>
@@ -228,6 +281,86 @@ export function AppShell({
         </div>
       ) : null}
     </div>
+    </TourProvider>
+  );
+}
+
+/**
+ * Help: the setup guide, the tours and the example workspace, always in the
+ * same place. A tour is only offered where it has something to point at: the
+ * review tour needs a billing package, so an organisation without one is
+ * offered the example instead.
+ */
+function HelpMenu({ rail, isDemo, ownOrg, hasDemo, hasApplications, onSwitch }: { rail: boolean; isDemo: boolean; ownOrg: Org | null; hasDemo: boolean; hasApplications: boolean; onSwitch: (id: string) => void }) {
+  const router = useRouter();
+  const { start } = useTour();
+  const [, begin] = useTransition();
+
+  const openExample = () => {
+    const building = hasDemo ? undefined : toast.loading('Preparing the example workspace…', { description: 'About forty billing packages are being generated, read and checked. Up to a minute.' });
+    begin(async () => {
+      const result = await openExampleAction();
+      if (building !== undefined) toast.dismiss(building);
+      if (!result.ok) toast.error(result.error);
+      else window.location.assign(result.data.next);
+    });
+  };
+
+  return (
+    <Menu
+      align="start"
+      side="top"
+      trigger={
+        <button
+          data-tour="nav-help"
+          className={cn('focus-ring group flex h-8 items-center gap-2.5 rounded-md text-[13px] text-ink-2 hover:bg-ink/[0.045] hover:text-ink', rail ? 'w-8 justify-center' : 'w-full px-2')}
+          aria-label="Help and tours"
+        >
+          <LifeBuoy className="size-4 text-ink-3 group-hover:text-ink-2" strokeWidth={1.9} />
+          {rail ? null : <span className="flex-1 text-left">Help</span>}
+        </button>
+      }
+    >
+      <MenuLabel>Learn Zephric</MenuLabel>
+      {hasApplications ? (
+        <MenuItem onSelect={() => start('review')} icon={<Route />}>
+          Tour: how billing is reviewed
+        </MenuItem>
+      ) : (
+        <MenuItem onSelect={openExample} icon={<Route />}>
+          See a review in the example
+        </MenuItem>
+      )}
+      <MenuItem onSelect={() => start('workspace')} icon={<MapIcon />}>
+        Tour: where things are
+      </MenuItem>
+      {isDemo ? null : (
+        <MenuItem onSelect={() => router.push('/get-started')} icon={<ListChecks />}>
+          Setup guide
+        </MenuItem>
+      )}
+      <MenuSeparator />
+      {isDemo ? (
+        ownOrg ? (
+          <MenuItem onSelect={() => onSwitch(ownOrg.id)} icon={<Building2 />}>
+            Back to {ownOrg.name}
+          </MenuItem>
+        ) : null
+      ) : (
+        <MenuItem onSelect={openExample} icon={<Compass />}>
+          {hasDemo ? 'Open the example workspace' : 'Explore the example workspace'}
+        </MenuItem>
+      )}
+      {isDemo ? null : (
+        <MenuItem onSelect={() => router.push('/start')} icon={<SlidersHorizontal />}>
+          What I see first
+        </MenuItem>
+      )}
+      <MenuSeparator />
+      <MenuItem onSelect={() => window.open('/#partner', '_blank', 'noopener')} icon={<MessageSquare />}>
+        Contact the Zephric team
+      </MenuItem>
+    </Menu>
   );
 }
 
@@ -238,7 +371,7 @@ function pageLabel(path: string): string | null {
   if (/^\/projects\/[^/]+/.test(path)) return 'the project you were viewing';
   if (/^\/contracts\/[^/]+/.test(path)) return 'the subcontract you were viewing';
   if (/^\/subcontractors\/[^/]+/.test(path)) return 'the subcontractor you were viewing';
-  const top: Record<string, string> = { '/applications': 'pay applications', '/projects': 'projects', '/subcontractors': 'subcontractors', '/transfers': 'transfers', '/activity': 'activity', '/settings': 'settings' };
+  const top: Record<string, string> = { '/applications': 'pay applications', '/projects': 'projects', '/subcontractors': 'subcontractors', '/billing': 'billing periods', '/transfers': 'exports', '/activity': 'activity', '/settings': 'settings', '/get-started': 'the setup guide' };
   const key = Object.keys(top).find((k) => path === k || path.startsWith(`${k}/`));
   return key ? top[key] : null;
 }

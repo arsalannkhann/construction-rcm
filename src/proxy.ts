@@ -13,6 +13,6 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // App pages only: not the API, the public website, the subcontractor portal, sign-in pages or static files.
-  matcher: ['/((?!api/|_next/|landing/|portal/|login|signup|forgot-password|reset-password|invite|favicon\\.ico|icon\\.png|apple-icon\\.png).+)'],
+  // App pages only: not the API, the public website and its sample workflow, the subcontractor portal, sign-in pages or static files.
+  matcher: ['/((?!api/|_next/|landing/|portal/|sample|pdfjs/|login|signup|forgot-password|reset-password|invite|favicon\\.ico|icon\\.png|apple-icon\\.png).+)'],
 };

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Field, FormError, Input } from '@/components/ui/form';
 import { PASSWORD_HINT, passwordProblem } from '@/server/auth/password-rules';
 import { completeResetAction } from '../../actions';
+import { PasswordInput } from '@/components/ui/password-input';
 
 export function ResetForm({ token, email }: { token: string; email: string }) {
   const [password, setPassword] = useState('');
@@ -35,10 +36,10 @@ export function ResetForm({ token, email }: { token: string; email: string }) {
       {/* Lets a password manager file the new password under the right account. */}
       <input type="text" name="username" autoComplete="username" value={email} readOnly hidden />
       <Field label="New password" error={problem} hint={PASSWORD_HINT}>
-        <Input type="password" name="new-password" autoComplete="new-password" required autoFocus value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={!!problem} className="h-10 text-[14px]" />
+        <PasswordInput name="new-password" autoComplete="new-password" required autoFocus value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={!!problem} className="h-10 text-[14px]" />
       </Field>
       <Field label="Confirm new password" error={mismatch ? 'This does not match the new password.' : null}>
-        <Input type="password" name="confirm-password" autoComplete="new-password" required value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-invalid={mismatch} className="h-10 text-[14px]" />
+        <PasswordInput name="confirm-password" autoComplete="new-password" required value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-invalid={mismatch} className="h-10 text-[14px]" />
       </Field>
       <Button type="submit" variant="primary" size="lg" loading={pending} disabled={!ready} className="w-full">
         Set new password

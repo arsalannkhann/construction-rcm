@@ -157,8 +157,8 @@ export function UploadForm({ contracts, preselected, aiConfigured, samples }: { 
 
       {samples.length > 0 ? (
         <Panel className="p-4">
-          <h2 className="text-[13px] font-semibold">Sample packages for this demo workspace</h2>
-          <p className="mt-0.5 text-xs text-ink-3">Realistic PDFs for the demo subcontracts. Download one, then upload it above to watch it being read and checked.</p>
+          <h2 className="text-[13px] font-semibold">Sample packages for this example workspace</h2>
+          <p className="mt-0.5 text-xs text-ink-3">Realistic PDFs for the example subcontracts. Download one, then upload it above to watch it being read and checked.</p>
           <ul className="mt-3 space-y-2">
             {samples.map((s) => (
               <li key={s.key} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2.5">

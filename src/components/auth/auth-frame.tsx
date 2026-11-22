@@ -1,6 +1,9 @@
 import { Check, KeyRound, Lock, OctagonAlert, Users } from 'lucide-react';
 import Link from 'next/link';
 import { Brand } from '@/components/brand';
+import type { SampleSnapshot } from '@/content/sample-types';
+import snapshot from '@/content/sample-workflow.json';
+import { formatMoney } from '@/lib/money';
 
 /**
  * The frame every sign-in screen shares: the form on the left, a quiet brand
@@ -9,6 +12,14 @@ import { Brand } from '@/components/brand';
  * marketing copy or anything that moves for long.
  */
 export function AuthFrame({ children, wide }: { children: React.ReactNode; wide?: boolean }) {
+  // The panel's three rows are the sample package's own results (src/content/sample-types.ts), not invented ones.
+  const sample = snapshot as SampleSnapshot;
+  const finding = sample.findings[0];
+  const rows = [
+    { ok: true, title: 'Contract sum', detail: `Matches the subcontract and its approved change orders · ${formatMoney(sample.contract.contractSumToDate)}` },
+    { ok: true, title: 'Schedule of values', detail: `${sample.lines.length} lines read, each one agrees with the schedule` },
+    { ok: false, title: finding?.category ?? 'Prior billing', detail: `${finding?.difference ?? ''} against what was approved · blocks approval` },
+  ];
   return (
     <div className="flex min-h-dvh bg-surface">
       <div className="flex min-w-0 flex-1 flex-col">
@@ -25,6 +36,9 @@ export function AuthFrame({ children, wide }: { children: React.ReactNode; wide?
           <Link href="/" className="hover:text-ink-2">
             Zephric website
           </Link>
+          <Link href="/sample" className="hover:text-ink-2">
+            Sample workflow
+          </Link>
           <span className="hidden sm:inline">Billing intake, verification and approval for general contractors.</span>
         </footer>
       </div>
@@ -40,12 +54,9 @@ export function AuthFrame({ children, wide }: { children: React.ReactNode; wide?
             <p className="max-w-[420px] text-[30px] font-semibold leading-[1.15] tracking-[-0.025em] text-white xl:text-[34px]">
               Every figure recomputed. Every decision on the record.
             </p>
-            <ul className="mt-10 max-w-[420px] space-y-2.5">
-              {[
-                { ok: true, title: 'Contract sum', detail: 'Matches contract + approved change orders' },
-                { ok: true, title: 'Previous certificates', detail: 'Match the last approved application' },
-                { ok: false, title: 'Retainage withheld', detail: 'Short of the subcontract’s rate · blocks approval' },
-              ].map((row, i) => (
+            <p className="mt-4 max-w-[400px] text-[14px] leading-[1.6] text-white/55">What Zephric found on its sample billing package, before anyone looked at it:</p>
+            <ul className="mt-5 max-w-[420px] space-y-2.5">
+              {rows.map((row, i) => (
                 <li
                   key={row.title}
                   className="flex animate-rise items-start gap-3 rounded-xl border border-navy-line bg-navy-2/80 px-4 py-3 backdrop-blur"
