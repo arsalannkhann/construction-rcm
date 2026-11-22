@@ -171,17 +171,17 @@ Then check that it is recorded, and only then merge:
 select version, name from supabase_migrations.schema_migrations order by version;
 ```
 
-Migrations 0000–0010 are applied to `construction-rcm` and recorded under the
+Migrations 0000–0011 are applied to `construction-rcm` and recorded under the
 same versions as the files (0007, the project budget column, and 0008, the
 owner billing tables, on 2026-11-17; 0009, the subcontractor portal tables, and
-0010, the budget lines and changes, on 2026-11-18).
+0010, the budget lines and changes, on 2026-11-18; 0011, the
+`memberships.onboarding` column, on 2026-11-23).
 
-**0011 (`memberships.onboarding`) is not applied yet.** It adds one nullable
-column and gives every existing membership an empty onboarding record, so
-members who were already there are not shown the welcome step. Apply it, with
-its `schema_migrations` row, in one transaction before merging the release
-that contains it: a build that knows a migration the database does not have
-refuses to start.
+0011 adds one nullable column and gave every membership that existed then an
+empty onboarding record, so members who were already there are not shown the
+welcome step. It was applied before its release was merged; a membership made
+by the older code in between has no record, and its member is welcomed once
+the release is live.
 
 Never let the app apply its own migrations to a database Supabase manages: set
 `RCM_MIGRATIONS=external`. If you forget, the app refuses to start and says so.
