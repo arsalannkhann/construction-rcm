@@ -8,11 +8,13 @@ import { cn } from '@/lib/utils';
 import { useSignedIn } from './session-hint';
 
 const LINKS = [
-  { href: '#product', label: 'Product' },
+  { href: '/sample', label: 'Sample workflow' },
   { href: '#workflow', label: 'How it works' },
   { href: '#teams', label: 'Who it’s for' },
-  { href: '#faq', label: 'FAQ' },
+  { href: '#status', label: 'Where it stands' },
 ];
+/** In the phone menu only: the header has no room for it at laptop widths, and the page ends with it. */
+const MORE = [{ href: '#faq', label: 'FAQ' }];
 
 /**
  * The public website's header. The logo always leads to the homepage. A
@@ -40,7 +42,7 @@ export function SiteNav() {
         menuButton.current?.focus();
       }
     };
-    const onResize = () => window.innerWidth >= 900 && setOpen(false);
+    const onResize = () => window.innerWidth >= 1000 && setOpen(false);
     document.body.style.overflow = 'hidden';
     window.addEventListener('keydown', onKey);
     window.addEventListener('resize', onResize);
@@ -65,28 +67,28 @@ export function SiteNav() {
           <Brand className="h-[26px]" priority />
         </Link>
 
-        <ul className="ml-4 hidden items-center gap-1 min-[900px]:flex">
+        <ul className="ml-4 hidden items-center gap-0.5 min-[1000px]:flex">
           {LINKS.map((l) => (
             <li key={l.href}>
-              <a href={l.href} className="focus-ring rounded-md px-3 py-2 text-[14px] text-ink-2 transition-colors hover:text-ink">
+              <Link href={l.href} prefetch={false} className="focus-ring whitespace-nowrap rounded-md px-3 py-2 text-[14px] text-ink-2 transition-colors hover:text-ink">
                 {l.label}
-              </a>
+              </Link>
             </li>
           ))}
         </ul>
 
-        <div className="ml-auto hidden items-center gap-2 min-[900px]:flex">
+        <div className="ml-auto hidden items-center gap-2 min-[1000px]:flex">
           {signedIn ? (
-            <Link href="/overview" className="focus-ring group inline-flex h-9 items-center gap-1.5 rounded-full bg-ink px-4 text-[14px] font-medium text-white transition-colors hover:bg-ink/85">
+            <Link href="/overview" className="focus-ring group inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-full bg-ink px-4 text-[14px] font-medium text-white transition-colors hover:bg-ink/85">
               Continue to dashboard
               <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
             </Link>
           ) : (
             <>
-              <Link href="/login" className="focus-ring rounded-md px-3 py-2 text-[14px] font-medium text-ink-2 transition-colors hover:text-ink">
+              <Link href="/login" className="focus-ring whitespace-nowrap rounded-md px-3 py-2 text-[14px] font-medium text-ink-2 transition-colors hover:text-ink">
                 Sign in
               </Link>
-              <a href="#partner" className="focus-ring inline-flex h-9 items-center rounded-full bg-ink px-4 text-[14px] font-medium text-white transition-colors hover:bg-ink/85">
+              <a href="#partner" className="focus-ring inline-flex h-9 items-center whitespace-nowrap rounded-full bg-ink px-4 text-[14px] font-medium text-white transition-colors hover:bg-ink/85">
                 Become a design partner
               </a>
             </>
@@ -96,7 +98,7 @@ export function SiteNav() {
         <button
           ref={menuButton}
           type="button"
-          className="focus-ring -mr-2 ml-auto flex size-10 items-center justify-center rounded-lg text-ink min-[900px]:hidden"
+          className="focus-ring -mr-2 ml-auto flex size-10 items-center justify-center rounded-lg text-ink min-[1000px]:hidden"
           aria-expanded={open}
           aria-controls="site-menu"
           aria-label={open ? 'Close menu' : 'Open menu'}
@@ -109,15 +111,15 @@ export function SiteNav() {
       <div
         id="site-menu"
         hidden={!open}
-        className="h-[calc(100dvh-4rem)] overflow-y-auto border-t border-line/70 bg-canvas px-5 pb-10 pt-4 min-[900px]:hidden"
+        className="h-[calc(100dvh-4rem)] overflow-y-auto border-t border-line/70 bg-canvas px-5 pb-10 pt-4 min-[1000px]:hidden"
       >
         <ul className="divide-y divide-line/80">
-          {LINKS.map((l, i) => (
+          {[...LINKS, ...MORE].map((l, i) => (
             <li key={l.href} className="animate-rise" style={{ animationDelay: `${i * 35}ms` }}>
-              <a href={l.href} onClick={close} className="flex items-center justify-between py-4 text-[17px] font-medium text-ink">
+              <Link href={l.href} prefetch={false} onClick={close} className="flex items-center justify-between py-4 text-[17px] font-medium text-ink">
                 {l.label}
                 <ArrowRight className="size-4 text-ink-4" />
-              </a>
+              </Link>
             </li>
           ))}
         </ul>
@@ -128,7 +130,10 @@ export function SiteNav() {
             </Link>
           ) : (
             <>
-              <a href="#partner" onClick={close} className="flex h-12 items-center justify-center rounded-full bg-ink text-[15px] font-medium text-white">
+              <Link href="/sample" onClick={close} className="flex h-12 items-center justify-center gap-2 rounded-full bg-ink text-[15px] font-medium text-white">
+                Explore a sample workflow <ArrowRight className="size-4" />
+              </Link>
+              <a href="#partner" onClick={close} className="flex h-12 items-center justify-center rounded-full border border-line-strong bg-surface text-[15px] font-medium text-ink">
                 Become a design partner
               </a>
               <Link href="/login" onClick={close} className="flex h-12 items-center justify-center rounded-full border border-line-strong bg-surface text-[15px] font-medium text-ink">

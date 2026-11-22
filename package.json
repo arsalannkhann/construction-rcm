@@ -14,6 +14,7 @@
     "seed:demo": "tsx scripts/seed-demo.ts",
     "reset-password": "tsx scripts/reset-password.ts",
     "samples": "tsx scripts/generate-samples.ts",
+    "sample:build": "tsx scripts/build-sample.ts",
     "eval:extraction": "tsx scripts/eval-extraction.ts",
     "ai:key": "tsx scripts/set-anthropic-key.ts",
     "postinstall": "node scripts/copy-pdf-worker.mjs",

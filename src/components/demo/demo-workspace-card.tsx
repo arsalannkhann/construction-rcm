@@ -6,10 +6,11 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/overlay';
 import { cn } from '@/lib/utils';
-import { deleteDemoWorkspaceAction, openDemoWorkspaceAction } from './actions';
+import { openExampleAction } from '@/app/onboarding-actions';
+import { deleteDemoWorkspaceAction } from './actions';
 
 /**
- * Create, open or delete the demo workspace.
+ * Create, open or delete the example workspace (called the demo workspace in the code).
  * `hasDemo`: the user already has one. `inDemo`: they are looking at it now.
  */
 export function DemoWorkspaceCard({ hasDemo, inDemo, variant = 'panel' }: { hasDemo: boolean; inDemo: boolean; variant?: 'panel' | 'inline' }) {
@@ -18,9 +19,10 @@ export function DemoWorkspaceCard({ hasDemo, inDemo, variant = 'panel' }: { hasD
 
   const open = () =>
     start(async () => {
-      const result = await openDemoWorkspaceAction();
+      // Opens it with its tour on offer, the same way the welcome step and Help do.
+      const result = await openExampleAction();
       if (!result.ok) toast.error(result.error);
-      else window.location.assign('/overview');
+      else window.location.assign(result.data.next);
     });
   const remove = () =>
     start(async () => {
@@ -36,20 +38,20 @@ export function DemoWorkspaceCard({ hasDemo, inDemo, variant = 'panel' }: { hasD
           <FlaskConical className="size-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <h2 className="text-[13px] font-semibold">Demo workspace</h2>
+          <h2 className="text-[13px] font-semibold">Example workspace</h2>
           <p className="mt-0.5 text-xs leading-[18px] text-ink-2">
             {inDemo
-              ? 'You are in the demo workspace: three fictitious projects, eight subcontracts and five months of billing. It is a separate organisation, so nothing here touches your own records. Deleting it removes all of it.'
+              ? 'You are in the example workspace: three fictitious projects, eight subcontracts and five months of billing. It is a separate organisation, so nothing here touches your own records. Deleting it removes all of it.'
               : 'A separate organisation with three fictitious projects, eight subcontracts and five months of billing, including applications with real discrepancies to review. Every record in it was produced by generating a PDF and running it through the product, not typed in. It never mixes with your own data.'}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {inDemo ? (
               <Button variant="danger-outline" onClick={() => setConfirming(true)}>
-                Delete the demo workspace
+                Delete the example workspace
               </Button>
             ) : (
               <Button variant={hasDemo ? 'secondary' : 'primary'} loading={pending} onClick={open}>
-                {hasDemo ? 'Open the demo workspace' : 'Create the demo workspace'}
+                {hasDemo ? 'Open the example workspace' : 'Create the example workspace'}
               </Button>
             )}
             {!hasDemo && !inDemo ? <span className="text-xs text-ink-3">{pending ? 'Generating and processing about forty billing packages. This takes up to a minute.' : 'Takes up to a minute to build.'}</span> : null}
@@ -60,15 +62,15 @@ export function DemoWorkspaceCard({ hasDemo, inDemo, variant = 'panel' }: { hasD
         open={confirming}
         onOpenChange={setConfirming}
         size="sm"
-        title="Delete the demo workspace?"
-        description="All demo projects, applications, documents and history are removed. Your own organisation is not affected. You can create a fresh demo workspace again later."
+        title="Delete the example workspace?"
+        description="All example projects, applications, documents and history are removed. Your own organisation is not affected. You can create a fresh example workspace again later."
         footer={
           <>
             <Button variant="ghost" onClick={() => setConfirming(false)}>
               Cancel
             </Button>
             <Button variant="danger" loading={pending} onClick={remove}>
-              Delete demo workspace
+              Delete example workspace
             </Button>
           </>
         }

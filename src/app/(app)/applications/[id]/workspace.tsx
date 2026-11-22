@@ -160,7 +160,7 @@ export function ReviewWorkspace({ data, perms, extras }: { data: ReviewData; per
           </div>
 
           {data.contract ? (
-            <dl className="mt-3 flex flex-wrap items-end gap-x-8 gap-y-2 pl-9">
+            <dl data-tour="app-figures" className="mt-3 flex flex-wrap items-end gap-x-8 gap-y-2 pl-9">
               <Figure label="Requested">
                 <Money cents={app.claimedAmount} className="text-[15px] font-medium" blank="Not read" />
               </Figure>
@@ -195,7 +195,7 @@ export function ReviewWorkspace({ data, perms, extras }: { data: ReviewData; per
 
         <div className="flex min-h-0 flex-1">
           {viewerOpen ? (
-            <section className="min-w-0 basis-[46%] border-r border-line" aria-label="Documents">
+            <section data-tour="app-document" className="min-w-0 basis-[46%] border-r border-line" aria-label="Documents">
               <DocumentViewer documents={data.documents} target={target} onNavigate={(spot) => show(spot)} canRemove={editable} rereadFor={editable ? data.app.id : null} />
             </section>
           ) : null}
@@ -203,7 +203,7 @@ export function ReviewWorkspace({ data, perms, extras }: { data: ReviewData; per
           <section className="flex min-w-0 flex-1 flex-col" aria-label="Review">
             {data.contract ? (
               <>
-                <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-3" role="tablist">
+                <div data-tour="app-tabs" className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-3" role="tablist">
                   <Tooltip content={viewerOpen ? 'Hide documents' : 'Show documents'} side="bottom">
                     <button className="focus-ring mr-1 rounded-md p-1.5 text-ink-3 hover:bg-sunken hover:text-ink" onClick={() => setViewerOpen((v) => !v)} aria-label={viewerOpen ? 'Hide documents' : 'Show documents'}>
                       {viewerOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}

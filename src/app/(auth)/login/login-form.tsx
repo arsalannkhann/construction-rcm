@@ -6,6 +6,7 @@ import { useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, FormError, Input } from '@/components/ui/form';
 import { loginAction } from '../actions';
+import { PasswordInput } from '@/components/ui/password-input';
 
 /** `next` is a page on this site to open after signing in (already checked by the page). */
 export function LoginForm({ next = null }: { next?: string | null }) {
@@ -40,7 +41,7 @@ export function LoginForm({ next = null }: { next?: string | null }) {
       </Field>
       <div>
         <Field label="Password">
-          <Input type="password" name="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="h-10 text-[14px]" />
+          <PasswordInput name="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="h-10 text-[14px]" />
         </Field>
         <div className="mt-1.5 text-right">
           <Link href="/forgot-password" className="text-xs font-medium text-accent hover:underline">

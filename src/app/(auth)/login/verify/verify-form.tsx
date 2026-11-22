@@ -1,7 +1,7 @@
 'use client';
 
 import Link from '@/components/ui/link';
-import { useState, useTransition } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, FormError, Input } from '@/components/ui/form';
 import { verifyLoginAction } from '../../actions';
@@ -16,6 +16,16 @@ export function VerifyForm({ attemptsLeft: initialAttempts, next = null }: { att
   const [inviteGone, setInviteGone] = useState(false);
   const [attemptsLeft, setAttemptsLeft] = useState(initialAttempts);
   const [pending, start] = useTransition();
+  const form = useRef<HTMLFormElement>(null);
+  const sent = useRef('');
+
+  // Six digits is the whole code: send it without making the person reach for the button. Each code is sent once.
+  useEffect(() => {
+    const digits = code.replace(/\s/g, '');
+    if (!/^\d{6}$/.test(digits) || pending || sent.current === digits) return;
+    sent.current = digits;
+    form.current?.requestSubmit();
+  }, [code, pending]);
 
   if (inviteGone) {
     return (
@@ -41,6 +51,7 @@ export function VerifyForm({ attemptsLeft: initialAttempts, next = null }: { att
 
   return (
     <form
+      ref={form}
       className="space-y-4"
       onSubmit={(e) => {
         e.preventDefault();
@@ -78,11 +89,12 @@ export function VerifyForm({ attemptsLeft: initialAttempts, next = null }: { att
           value={code}
           onChange={(e) => setCode(e.target.value)}
           placeholder="123456"
-          className="num h-9 tracking-widest"
+          aria-label="Six-digit code or recovery code"
+          className="num h-12 text-center text-[20px] tracking-[0.3em] placeholder:text-ink-4"
         />
       </Field>
       <Button type="submit" variant="primary" size="lg" loading={pending} disabled={!looksValid(code)} className="w-full">
-        Verify and sign in
+        {pending ? 'Checking…' : 'Verify and sign in'}
       </Button>
     </form>
   );

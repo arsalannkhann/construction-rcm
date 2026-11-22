@@ -1,9 +1,11 @@
+import { redirect } from 'next/navigation';
 import { getDb } from '@/db';
 import { AppShell } from '@/components/shell/app-shell';
 import { can } from '@/server/auth/permissions';
 import { requireCtx } from '@/server/auth/session';
 import { kickIfIdle } from '@/server/jobs';
 import { listNotifications, unreadCount } from '@/server/services/notify';
+import { getOnboardingState, needsWelcome } from '@/server/services/onboarding';
 import { queueCounts } from '@/server/services/queries';
 import { listMyOrganizations } from '@/server/services/team';
 
@@ -14,6 +16,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const ctx = await requireCtx();
   kickIfIdle();
   const db = await getDb();
+  const onboarding = await getOnboardingState(db, ctx);
+  // A new member of a new organisation starts at the welcome step, once. Anyone already here is left alone.
+  if (needsWelcome(ctx, onboarding)) redirect('/start');
   // Independent reads, all scoped to the signed-in member's organisation: run them together.
   const [organizations, unread, notifications, counts] = await Promise.all([
     listMyOrganizations(db, ctx.userId),
@@ -32,6 +37,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       unread={unread}
       notifications={notifications.map((n) => ({ id: n.id, title: n.title, body: n.body, href: n.href, read: !!n.readAt, createdAt: n.createdAt.toISOString() }))}
       canUpload={can(ctx.role, 'application:upload')}
+      canExport={can(ctx.role, 'export:run')}
+      hasApplications={Object.values(counts).some((n) => n > 0)}
+      onboarding={{ guide: !onboarding.member?.guideHiddenAt && !onboarding.member?.setupDoneAt, tour: onboarding.member?.activeTour ?? null }}
     >
       {children}
     </AppShell>

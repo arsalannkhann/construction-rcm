@@ -646,6 +646,8 @@ export const updatePolicy = locked(async function updatePolicy(db: DB, ctx: Ctx,
     requireMfa: !!merged.requireMfa,
     unknownSenderPolicy: merged.unknownSenderPolicy,
     portalDueDay: merged.portalDueDay,
+    // Not policy, and not changed here: the company profile from the welcome step is carried over as it is.
+    ...(current.profile ? { profile: current.profile } : {}),
   };
   const changed = (Object.keys(next) as Array<keyof OrgSettings>).filter((k) => next[k] !== current[k]);
   if (changed.length === 0) return;

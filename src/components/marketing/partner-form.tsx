@@ -14,7 +14,7 @@ const field =
   'block w-full rounded-lg border border-line-strong bg-surface px-3.5 text-[15px] text-ink placeholder:text-ink-4 transition-[border-color,box-shadow] focus:border-accent focus:outline-none focus:ring-4 focus:ring-accent/12 aria-[invalid=true]:border-block';
 const label = 'mb-1.5 block text-[13px] font-medium text-ink-2';
 
-/** The design partner inquiry. Posts to the same endpoint, with the same rules, as before (src/server/services/inquiries.ts). */
+/** The design partner and demonstration inquiry. One form, one endpoint (src/server/services/inquiries.ts); which of the two was asked for leads the message. */
 export function PartnerForm() {
   const [state, setState] = useState<State>({ kind: 'idle' });
   const status = useRef<HTMLElement | null>(null);
@@ -24,13 +24,15 @@ export function PartnerForm() {
     const form = e.currentTarget;
     if (!form.reportValidity()) return;
     const data = new FormData(form);
+    // What they are asking for travels at the top of the message, so no inquiry needs a second field to be read.
+    const wants = data.get('intent') === 'demo' ? 'Asked for: a demonstration' : 'Asked for: a design-partner conversation';
     const body = {
       name: String(data.get('name') ?? ''),
       email: String(data.get('email') ?? ''),
       company: String(data.get('company') ?? ''),
       country: String(data.get('country') ?? ''),
       role: String(data.get('role') ?? ''),
-      challenge: String(data.get('challenge') ?? ''),
+      challenge: `${wants}\n\n${String(data.get('challenge') ?? '')}`,
       consent: data.get('consent') === 'on',
       website: String(data.get('website') ?? ''),
     };
@@ -88,6 +90,23 @@ export function PartnerForm() {
   const sending = state.kind === 'sending';
   return (
     <form onSubmit={onSubmit} className="relative rounded-2xl border border-line bg-surface p-6 shadow-float sm:p-8" aria-describedby="partner-status">
+      <fieldset className="mb-5">
+        <legend className={label}>What would you like?</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {[
+            { value: 'partner', title: 'Become a design partner', sub: 'A supervised pilot on your own documents.' },
+            { value: 'demo', title: 'See a demonstration', sub: 'A walkthrough with one of the founders.' },
+          ].map((o, i) => (
+            <label key={o.value} className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-line-strong px-3.5 py-3 transition-[border-color,box-shadow] has-[:checked]:border-ink has-[:checked]:shadow-[0_0_0_1px_var(--color-ink)] has-[:focus-visible]:ring-4 has-[:focus-visible]:ring-accent/12">
+              <input type="radio" name="intent" value={o.value} defaultChecked={i === 0} className="mt-1 size-3.5 shrink-0 accent-[var(--color-ink)]" />
+              <span>
+                <span className="block text-[14.5px] font-medium text-ink">{o.title}</span>
+                <span className="block text-[13px] leading-[1.45] text-ink-3">{o.sub}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label htmlFor="pf-name" className={label}>Name</label>
@@ -126,7 +145,7 @@ export function PartnerForm() {
             name="challenge"
             required
             minLength={10}
-            maxLength={3000}
+            maxLength={2900}
             rows={4}
             placeholder="Re-keying pay applications, chasing corrections, retainage tracking…"
             className={cn(field, 'resize-y py-3 leading-relaxed')}
