@@ -11,11 +11,11 @@
  * needs judgement (a blocking finding, a warning to acknowledge, a line to
  * correct) is handed to the desktop, where the whole application can be seen.
  */
-import { and, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { PDFDocument } from 'pdf-lib';
 import { z } from 'zod';
 import type { DB } from '@/db';
-import { payApplications } from '@/db/schema';
+import { documents, payApplications } from '@/db/schema';
 import { assertCan, can, ROLE_LABEL, UserError, type Ctx } from '@/server/auth/permissions';
 import { APP_STATUS_LABEL, OPEN_STATUSES, type AppStatus, type Role, type StatedParties } from '@/server/types';
 import { CLIENT_REF, createApplication, findByClientRef, MAX_FILE_BYTES, MAX_FILES, sniffMime, type IncomingFile } from './intake';
@@ -48,10 +48,16 @@ export async function mobileMe(db: DB, session: SessionInfo) {
 // ── Applications ────────────────────────────────────────────────────────────
 
 /** One application in a list. Amounts in cents, as stored. */
-export function mobileRow(a: ApplicationRow) {
+export function mobileRow(a: ApplicationRow, title: string | null = null) {
   const stated = a.stated as StatedParties | null;
   return {
     id: a.id,
+    /** What the person called it: the name typed on the phone, or the first file's name. */
+    title,
+    description: a.description ?? null,
+    tags: a.tags ?? [],
+    /** The amount the sender typed, in cents; `claimed`/`verified`/`approved` are Zephric's. */
+    stated: a.statedAmount ?? null,
     status: a.status as AppStatus,
     statusLabel: APP_STATUS_LABEL[a.status as AppStatus] ?? a.status,
     number: a.applicationNumber,
@@ -71,6 +77,23 @@ export function mobileRow(a: ApplicationRow) {
 }
 export type MobileRow = ReturnType<typeof mobileRow>;
 
+/**
+ * Rows with their titles. The title is the first document's file name without
+ * its extension: for a phone capture that is the name the person typed, so
+ * they can find "Concrete" again before Zephric has matched it to anyone.
+ */
+async function titledRows(db: DB, apps: ApplicationRow[]): Promise<MobileRow[]> {
+  if (apps.length === 0) return [];
+  const docs = await db
+    .select({ appId: documents.payApplicationId, filename: documents.filename })
+    .from(documents)
+    .where(inArray(documents.payApplicationId, apps.map((a) => a.id)))
+    .orderBy(asc(documents.createdAt), asc(documents.filename));
+  const first = new Map<string, string>();
+  for (const d of docs) if (d.appId && !first.has(d.appId)) first.set(d.appId, d.filename.replace(/\.[a-z0-9]{1,5}$/i, '').trim());
+  return apps.map((a) => mobileRow(a, first.get(a.id) || null));
+}
+
 export const MOBILE_VIEWS = ['attention', 'open', 'decided', 'mine', 'all'] as const;
 export type MobileView = (typeof MOBILE_VIEWS)[number];
 
@@ -89,16 +112,17 @@ export async function mobileApplications(db: DB, ctx: Ctx, view: MobileView) {
     case 'attention': {
       const order = attentionStatuses(ctx);
       if (order.length === 0) return [];
-      return (await listApplications(db, ctx, { statuses: order, limit: 100 })).map(mobileRow).sort(byUrgency(order));
+      return (await titledRows(db, await listApplications(db, ctx, { statuses: order, limit: 100 }))).sort(byUrgency(order));
     }
     case 'open':
-      return (await listApplications(db, ctx, { statuses: ['processing', ...OPEN_STATUSES], limit: 100 })).map(mobileRow);
+      return titledRows(db, await listApplications(db, ctx, { statuses: ['processing', ...OPEN_STATUSES], limit: 100 }));
     case 'decided':
-      return (await listApplications(db, ctx, { statuses: ['approved', 'rejected'], limit: 50 })).map(mobileRow);
+      return titledRows(db, await listApplications(db, ctx, { statuses: ['approved', 'rejected'], limit: 50 }));
     case 'mine':
-      return (await listApplications(db, ctx, { submittedBy: ctx.userId, limit: 50 })).map(mobileRow);
+      // Enough history to search through on the phone.
+      return titledRows(db, await listApplications(db, ctx, { submittedBy: ctx.userId, limit: 300 }));
     case 'all':
-      return (await listApplications(db, ctx, { limit: 100 })).map(mobileRow);
+      return titledRows(db, await listApplications(db, ctx, { limit: 100 }));
   }
 }
 
@@ -121,7 +145,7 @@ export async function mobileHome(db: DB, ctx: Ctx) {
     unread,
     attention: attention.slice(0, 8),
     attentionTotal: attention.length,
-    recentSubmissions: mine.map(mobileRow),
+    recentSubmissions: await titledRows(db, mine),
     permissions: p,
   };
 }
@@ -174,6 +198,11 @@ export async function mobileApplicationDetail(db: DB, ctx: Ctx, id: string) {
     receivedAt: app.receivedAt,
     receivedVia: app.receivedVia,
     processingError: app.processingError,
+    /** What the sender called it (the first document's name), said about it, tagged it and typed as the amount. */
+    title: r.documents[0]?.filename.replace(/\.[a-z0-9]{1,5}$/i, '').trim() || null,
+    description: app.description ?? null,
+    tags: app.tags ?? [],
+    stated: app.statedAmount ?? null,
     project: r.project ? { id: r.project.id, name: r.project.name } : app.stated?.projectName ? { id: null, name: app.stated.projectName } : null,
     subcontractor: r.subcontractor?.name ?? app.stated?.contractorName ?? null,
     contract: r.contract ? { id: r.contract.id, number: r.contract.number, title: r.contract.title } : null,
@@ -238,6 +267,46 @@ export async function approveFromPhone(db: DB, ctx: Ctx, id: string, input: z.in
 
 // ── Capture ─────────────────────────────────────────────────────────────────
 
+export const MAX_TAGS = 12;
+
+/**
+ * Tags as stored: spaces collapsed, at most 40 characters, no empties, and no
+ * repeats that differ only in case (the first spelling wins), so "Concrete"
+ * and "concrete " are one tag.
+ */
+export function normaliseTags(tags: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of tags ?? []) {
+    const tag = raw.replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).trim();
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+  }
+  return out.slice(0, MAX_TAGS);
+}
+
+/** The organisation's tags, most used first, for the phone to offer as one-tap choices. */
+export async function mobileTags(db: DB, ctx: Ctx): Promise<Array<{ tag: string; count: number }>> {
+  const rows = await db
+    .select({ tags: payApplications.tags })
+    .from(payApplications)
+    .where(and(eq(payApplications.orgId, ctx.orgId), isNotNull(payApplications.tags)))
+    .orderBy(desc(payApplications.receivedAt))
+    .limit(2000);
+  const counts = new Map<string, { tag: string; count: number }>();
+  for (const r of rows) {
+    for (const tag of r.tags ?? []) {
+      const key = tag.toLowerCase();
+      const hit = counts.get(key);
+      if (hit) hit.count += 1;
+      else counts.set(key, { tag, count: 1 });
+    }
+  }
+  return [...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)).slice(0, 50);
+}
+
 export const submitSchema = z.object({
   clientRef: z.string().regex(CLIENT_REF),
   contractId: z.string().trim().min(1).max(64).nullable().optional(),
@@ -245,22 +314,48 @@ export const submitSchema = z.object({
   /** Join the photos into one PDF, in the order sent: the pages of one paper document. */
   combinePhotos: z.boolean().optional().default(true),
   photosName: z.string().trim().max(120).optional(),
+  /** The sender's own words about it, so they can find it again. */
+  description: z.string().trim().max(1000).optional(),
+  tags: z.array(z.string().max(60)).max(MAX_TAGS).optional(),
+  /** The amount the sender typed, in cents. Their figure, not a verified one. */
+  amountCents: z.number().int().min(0).max(100_000_000_000).nullable().optional(),
 });
 export type SubmitInput = z.input<typeof submitSchema>;
 
+/** The name the person typed, safe as a file name, or '' when they typed none. */
+function cleanName(name: string | undefined): string {
+  return (name ?? '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/\.pdf$/i, '');
+}
+
 function pdfName(name: string | undefined): string {
-  const base = (name ?? '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/\.pdf$/i, '');
-  return `${base || 'Phone capture'}.pdf`;
+  return `${cleanName(name) || 'Phone capture'}.pdf`;
+}
+
+/**
+ * Photos left as they are still carry the name the person typed ("Concrete.jpg",
+ * or "Concrete – page 2.jpg"), not the phone's "Page 1.jpg": that name is how
+ * they find the upload again.
+ */
+function namePhotos(files: IncomingFile[], photos: IncomingFile[], name: string | undefined): IncomingFile[] {
+  const base = cleanName(name);
+  if (!base || photos.length === 0) return files;
+  return files.map((f) => {
+    const i = photos.indexOf(f);
+    if (i < 0) return f;
+    const ext = sniffMime(f) === 'image/png' ? 'png' : 'jpg';
+    return { ...f, filename: photos.length === 1 ? `${base}.${ext}` : `${base} – page ${i + 1}.${ext}` };
+  });
 }
 
 /**
  * The photos (JPEG or PNG, by their bytes) joined into one PDF, a page each,
  * ahead of the other files. The photos themselves are not altered. Left as
- * they are when there are fewer than two, or the PDF would be over the size limit.
+ * separate photos (named after the capture) when there are fewer than two, or
+ * the PDF would be over the size limit.
  */
 export async function combinePhotos(files: IncomingFile[], name?: string): Promise<IncomingFile[]> {
   const photos = files.filter((f) => ['image/jpeg', 'image/png'].includes(sniffMime(f)));
-  if (photos.length < 2) return files;
+  if (photos.length < 2) return namePhotos(files, photos, name);
   const pdf = await PDFDocument.create();
   for (const photo of photos) {
     const image = sniffMime(photo) === 'image/png' ? await pdf.embedPng(photo.bytes) : await pdf.embedJpg(photo.bytes);
@@ -272,7 +367,7 @@ export async function combinePhotos(files: IncomingFile[], name?: string): Promi
   pdf.setTitle(pdfName(name).replace(/\.pdf$/, ''));
   pdf.setProducer('Zephric mobile capture');
   const bytes = await pdf.save();
-  if (bytes.byteLength > MAX_FILE_BYTES) return files;
+  if (bytes.byteLength > MAX_FILE_BYTES) return namePhotos(files, photos, name);
   return [{ filename: pdfName(name), mimeType: 'application/pdf', bytes }, ...files.filter((f) => !photos.includes(f))];
 }
 
@@ -298,6 +393,16 @@ export async function submitFromPhone(db: DB, ctx: Ctx, input: z.output<typeof s
   }
   if (input.combinePhotos) files = await combinePhotos(files, input.photosName);
   const { id, duplicate } = await createApplication(db, ctx, { files, contractId: input.contractId ?? null, clientRef: input.clientRef });
+  if (!duplicate) {
+    const description = input.description?.trim() || null;
+    const tags = normaliseTags(input.tags);
+    if (description || tags.length > 0 || input.amountCents != null) {
+      await db
+        .update(payApplications)
+        .set({ description, tags: tags.length > 0 ? tags : null, statedAmount: input.amountCents ?? null })
+        .where(and(eq(payApplications.orgId, ctx.orgId), eq(payApplications.id, id)));
+    }
+  }
   await discardStaged(db, ctx, input.staged.map((f) => f.uploadId));
   return { id, duplicate: !!duplicate };
 }

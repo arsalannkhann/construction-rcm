@@ -78,6 +78,13 @@
       "when": 1794962509973,
       "tag": "0010_budget_lines",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795329031114,
+      "tag": "0011_upload_notes",
+      "breakpoints": true
     }
   ]
 }

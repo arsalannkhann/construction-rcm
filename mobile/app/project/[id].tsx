@@ -2,7 +2,9 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { View } from 'react-native';
 import { date, money } from '@/lib/format';
 import { useProject } from '@/lib/queries';
-import { Card, Divider, LoadingCard, Pill, Row, Screen, Section, statusTone, T } from '@/ui/kit';
+import { statusStamp } from '@/lib/uploads';
+import { Stamp } from '@/ui/bill-slip';
+import { Card, Divider, LoadingCard, Row, Screen, Section, T } from '@/ui/kit';
 import { ErrorState, OfflineBanner } from '@/ui/parts';
 
 export default function ProjectScreen() {
@@ -26,19 +28,19 @@ export default function ProjectScreen() {
                 </T>
               </View>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: 14 }}>
-                <Figure label="Committed" value={money(d.totals.committed)} />
-                <Figure label="Approved to date" value={money(d.totals.approvedToDate)} />
-                <Figure label="Retainage held" value={money(d.totals.retainageHeld)} />
-                <Figure label="Balance to finish" value={money(d.totals.balanceToFinish)} />
+                <Figure label="Total of contracts" value={money(d.totals.committed)} />
+                <Figure label="Approved so far" value={money(d.totals.approvedToDate)} />
+                <Figure label="Held back" value={money(d.totals.retainageHeld)} />
+                <Figure label="Left to bill" value={money(d.totals.balanceToFinish)} />
               </View>
             </Card>
 
-            <Section title={`Subcontracts · ${d.contracts.length}`}>
+            <Section title={`Subcontractors · ${d.contracts.length}`}>
               <Card padded={false}>
                 {d.contracts.length === 0 ? (
                   <View style={{ padding: 16 }}>
                     <T v="caption" tone="ink3">
-                      No subcontracts on this project yet.
+                      No subcontractors on this project yet
                     </T>
                   </View>
                 ) : (
@@ -51,8 +53,11 @@ export default function ProjectScreen() {
                         onPress={c.latestApplication ? () => router.push(`/application/${c.latestApplication!.id}`) : undefined}
                         meta={
                           c.latestApplication ? (
-                            <View style={{ marginTop: 6 }}>
-                              <Pill label={`#${c.latestApplication.applicationNumber ?? '–'} · ${c.latestApplication.statusLabel}`} tone={statusTone(c.latestApplication.status)} />
+                            <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                              <Stamp size="sm" label={statusStamp(c.latestApplication.status, c.latestApplication.statusLabel).stamp} tone={statusStamp(c.latestApplication.status, c.latestApplication.statusLabel).tone} />
+                              <T v="caption" tone="ink3">
+                                Latest bill{c.latestApplication.applicationNumber !== null ? ` #${c.latestApplication.applicationNumber}` : ''}
+                              </T>
                             </View>
                           ) : null
                         }
@@ -72,17 +77,17 @@ export default function ProjectScreen() {
             </Section>
 
             {d.applications.length > 0 ? (
-              <Section title="Recent applications">
+              <Section title="Latest bills">
                 <Card padded={false}>
                   {d.applications.map((a, i) => (
                     <View key={a.id}>
                       {i > 0 ? <Divider inset={16} /> : null}
                       <Row
-                        title={`${a.subcontractor ?? 'Unmatched'}${a.number !== null ? ` #${a.number}` : ''}`}
-                        subtitle={a.periodTo ? `Period to ${date(a.periodTo)}` : `Received ${date(a.receivedAt)}`}
+                        title={`${a.subcontractor ?? 'Not matched yet'}${a.number !== null ? ` #${a.number}` : ''}`}
+                        subtitle={a.periodTo ? `For ${date(a.periodTo)}` : `Sent ${date(a.receivedAt)}`}
                         meta={
-                          <View style={{ marginTop: 6 }}>
-                            <Pill label={a.statusLabel} tone={statusTone(a.status)} />
+                          <View style={{ marginTop: 8 }}>
+                            <Stamp size="sm" label={statusStamp(a.status, a.statusLabel).stamp} tone={statusStamp(a.status, a.statusLabel).tone} />
                           </View>
                         }
                         right={<T v="amount">{money(a.approved ?? a.claimed)}</T>}

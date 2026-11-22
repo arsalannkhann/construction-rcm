@@ -9,10 +9,10 @@ import { AppRow, ErrorState, RowList } from '@/ui/parts';
 import { TabScreen } from '@/ui/tab-screen';
 
 const EMPTY: Record<BillingView, { title: string; body: string }> = {
-  attention: { title: 'Nothing needs you', body: 'Applications waiting on your review or approval appear here.' },
-  open: { title: 'No open applications', body: 'Everything received has been decided.' },
-  decided: { title: 'Nothing decided yet', body: 'Approved and rejected applications appear here.' },
-  mine: { title: 'You have not submitted anything', body: 'Captures you send from this phone or upload on the web appear here.' },
+  attention: { title: 'Nothing for you right now', body: 'Bills you need to check or approve show up here' },
+  open: { title: 'No bills in progress', body: 'Everything that came in has been approved or turned down' },
+  decided: { title: 'Nothing finished yet', body: 'Approved and turned-down bills show up here' },
+  mine: { title: 'You have not sent anything yet', body: 'Bills you send from this phone or the website show up here' },
 };
 
 export default function Billing() {
@@ -29,19 +29,19 @@ export default function Billing() {
   const canUpload = perms?.upload ?? session.profile.canUpload;
 
   const options: Array<{ value: BillingView; label: string }> = [
-    ...(canDecide ? [{ value: 'attention' as const, label: 'Needs you' }] : []),
-    { value: 'open', label: 'Open' },
-    { value: 'decided', label: 'Decided' },
-    ...(canUpload ? [{ value: 'mine' as const, label: 'Submitted by me' }] : []),
+    ...(canDecide ? [{ value: 'attention' as const, label: 'For you' }] : []),
+    { value: 'open', label: 'In progress' },
+    { value: 'decided', label: 'Finished' },
+    ...(canUpload ? [{ value: 'mine' as const, label: 'Sent by me' }] : []),
   ];
 
   return (
     <TabScreen
-      title="Billing"
+      title="Bills"
       subtitle={session.profile.orgName}
       refreshing={list.isRefetching}
       onRefresh={() => void list.refetch()}
-      action={canUpload ? <Button label="Capture" icon={Camera} size="sm" onPress={() => router.push('/capture')} /> : null}
+      action={canUpload ? <Button label="Send a bill" icon={Camera} size="sm" onPress={() => router.push('/capture')} /> : null}
     >
       <Segmented value={view} options={options} onChange={setView} />
       {list.error ? <ErrorState error={list.error} onRetry={() => void list.refetch()} /> : null}

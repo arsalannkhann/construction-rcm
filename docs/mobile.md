@@ -25,11 +25,11 @@ database, no business rules and no arithmetic of its own.
 
 | Tab | What is on it |
 |---|---|
-| Overview | What needs you: applications waiting for your approval (if your role approves), for review or matching (if your role reviews), counts by state, captures that are waiting to send or failed, and your recent submissions. A Capture button when your role can upload. |
+| Home | The company name and date; **Send a bill** (the one accent-coloured control); your latest bill as a stamped paper slip; **Find a bill** (opens My uploads); for reviewers and approvers, what is waiting for them; and one line of what the company's bills are doing. |
 | Projects | Each project with committed and approved-to-date figures; a project shows its subcontracts, their latest application and recent applications. |
-| Billing | Applications by view: needs attention, open, decided, submitted by me. Opens an application. |
-| Activity | Your notifications, unread first, with mark-all-read. |
-| Profile | Who you are, your organisations (switch between them), biometric unlock, two-step verification status, light/dark/system appearance, a link to the website, sign out. |
+| Bills | Bills by view: for you, in progress, finished, sent by me. Opens a bill. |
+| Updates | Your notifications, unread first, with mark-all-read. |
+| Me | Who you are, your organisations (switch between them), biometric unlock, two-step verification status, light/dark/system appearance, a link to the website, sign out. |
 
 An **application** shows the requested and verified amounts, the
 reconciliation figures (contract sum to date, retainage, balance to finish),
@@ -46,6 +46,29 @@ email attachments saved to Files and other document providers the phone has).
 Photos can be rotated, reordered and removed, and previewed full screen. The
 subcontract is optional: "Let Zephric match it" leaves matching to the server,
 exactly as an emailed package would be matched.
+
+**My uploads** (Home → Find a bill) is one list of everything the person has
+sent or is still sending: drafts on the phone and bills on the server, newest
+first, each titled with the name they gave it. The search box matches the
+name, description, tags, the typed amount and Zephric's amounts (with or
+without `$` and commas), company, project and date; every word must match, in
+any order. Under it, one-tap filters for this week, this month and the
+company's tags (most used first) narrow the list without scrolling. The rules
+are in `mobile/src/lib/uploads.ts`, tested in `tests/mobile-uploads.test.ts`.
+
+**Description, tags and amount.** When sending, a person can add a
+description, tags (tapping the company's existing ones, or typing a new one)
+and the amount on the receipt. They are stored on the application
+(`description`, `tags`, `stated_amount`, migration 0011), kept apart from what
+Zephric reads and verifies, and returned in lists and the bill detail.
+`GET /api/mobile/tags` offers the company's tags, most used first. A single
+photo keeps the typed name ("Concrete.jpg") instead of "Page 1.jpg".
+
+**Look.** Graphite neutrals with one burnt safety-orange accent (`#C2410C`,
+`mobile/src/theme.ts`); every status is shown as a rubber stamp
+(`mobile/src/ui/bill-slip.tsx`); the words are plain, for people who are not
+used to billing software ("bill", "problem", "held back", not "application",
+"finding", "retainage").
 
 ## How it shares data with the website
 

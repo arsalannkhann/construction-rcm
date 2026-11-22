@@ -10,7 +10,8 @@ import { useSignedIn } from '@/lib/auth';
 import { createDraft, useDrafts, type Draft } from '@/lib/drafts';
 import { ago, plural } from '@/lib/format';
 import { usePalette } from '@/theme';
-import { Button, Card, Divider, Empty, Pill, Row, Screen, Section, T } from '@/ui/kit';
+import { Button, Card, Divider, Empty, Row, Screen, Section, T } from '@/ui/kit';
+import { Stamp } from '@/ui/bill-slip';
 import { OfflineBanner } from '@/ui/parts';
 
 export default function CaptureHome() {
@@ -24,7 +25,7 @@ export default function CaptureHome() {
   const start = () => {
     if (!owner) return;
     if (!session.profile.canUpload) {
-      Alert.alert('Your role cannot submit documents', 'Ask an admin in your organisation for upload access.');
+      Alert.alert('You cannot send bills yet', 'Ask an admin in your company to let you send bills.');
       return;
     }
     const d = createDraft(owner);
@@ -36,17 +37,17 @@ export default function CaptureHome() {
       <OfflineBanner />
       <Card style={{ gap: 12 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <Camera size={20} color={p.accentText} />
-          <T v="heading">Submit billing documents</T>
+          <Camera size={20} color={p.ink2} strokeWidth={1.75} />
+          <T v="heading">Send a bill or receipt</T>
         </View>
         <T v="caption" tone="ink2">
-          Photograph each page of a pay application or lien waiver, or attach PDFs from your phone. Everything is kept on this phone until Zephric confirms it has it.
+          Take a photo of each page, or attach a PDF. It stays safe on this phone until Zephric has it.
         </T>
-        <Button label="New capture" icon={Plus} onPress={start} size="lg" disabled={!owner} />
+        <Button label="Send a bill" icon={Plus} onPress={start} size="lg" disabled={!owner} />
       </Card>
 
       {open.length > 0 ? (
-        <Section title="Drafts and sending">
+        <Section title="Not sent yet">
           <Card padded={false}>
             {open.map((d, i) => (
               <View key={d.id}>
@@ -73,8 +74,8 @@ export default function CaptureHome() {
 
       {drafts.length === 0 ? (
         <Card>
-          <Empty icon={FilePen} title="No captures yet">
-            Drafts you start appear here, even without a connection.
+          <Empty icon={FilePen} title="Nothing here yet">
+            Bills you start show up here, even without internet
           </Empty>
         </Card>
       ) : null}
@@ -84,17 +85,17 @@ export default function CaptureHome() {
 
 function DraftRow({ d }: { d: Draft }) {
   const p = usePalette();
-  const name = d.title.trim() || d.contract?.label || 'Untitled capture';
+  const name = d.title.trim() || d.contract?.label || 'Untitled bill';
   const icon =
-    d.status === 'submitted' ? <CircleCheck size={20} color={p.pass} /> : d.status === 'failed' ? <TriangleAlert size={20} color={p.block} /> : d.status === 'queued' || d.status === 'sending' ? <UploadCloud size={20} color={p.accentText} /> : <FilePen size={20} color={p.ink3} />;
-  const pill =
-    d.status === 'submitted' ? <Pill label="Received by Zephric" tone="pass" /> : d.status === 'failed' ? <Pill label="Not sent" tone="block" /> : d.status === 'sending' ? <Pill label={`Sending ${Math.round(d.progress * 100)}%`} tone="accent" /> : d.status === 'queued' ? <Pill label="Waiting to send" tone="accent" /> : <Pill label="Draft" />;
+    d.status === 'submitted' ? <CircleCheck size={20} color={p.ink3} strokeWidth={1.75} /> : d.status === 'failed' ? <TriangleAlert size={20} color={p.ink3} strokeWidth={1.75} /> : d.status === 'queued' || d.status === 'sending' ? <UploadCloud size={20} color={p.ink3} strokeWidth={1.75} /> : <FilePen size={20} color={p.ink3} strokeWidth={1.75} />;
+  const stamp =
+    d.status === 'submitted' ? <Stamp size="sm" label="Received" tone="progress" /> : d.status === 'failed' ? <Stamp size="sm" label="Not sent" tone="problem" /> : d.status === 'sending' ? <Stamp size="sm" label="Sending" tone="progress" /> : d.status === 'queued' ? <Stamp size="sm" label="Waiting" tone="progress" /> : <Stamp size="sm" label="Not sent" tone="neutral" />;
   return (
     <Row
       left={icon}
       title={name}
       subtitle={`${plural(d.files.length, 'file')} · ${d.status === 'submitted' ? `sent ${ago(d.submittedAt)}` : `edited ${ago(d.updatedAt)}`}`}
-      meta={<View style={{ marginTop: 6 }}>{pill}</View>}
+      meta={<View style={{ marginTop: 8 }}>{stamp}</View>}
       onPress={() => (d.status === 'submitted' && d.applicationId ? router.push(`/application/${d.applicationId}`) : router.push(`/capture/${d.id}`))}
     />
   );

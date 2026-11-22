@@ -74,6 +74,17 @@ export function useApplications(view: BillingView) {
   return useQuery({ queryKey: [org, 'applications', view], queryFn: () => api<{ items: Row[] }>(`/api/mobile/applications?view=${view}`).then((r) => r.items), enabled: useEnabled() });
 }
 
+/** The company's tags, most used first, offered as one-tap choices when sending. */
+export function useTags() {
+  const org = useOrgKey();
+  return useQuery({
+    queryKey: [org, 'tags'],
+    queryFn: () => api<{ items: Array<{ tag: string; count: number }> }>('/api/mobile/tags').then((r) => r.items),
+    enabled: useEnabled(),
+    staleTime: 5 * 60_000,
+  });
+}
+
 export function useApplication(id: string | undefined) {
   const org = useOrgKey();
   return useQuery({

@@ -69,6 +69,9 @@ async function sendOne(start: Draft): Promise<void> {
       staged: d.files.map((f) => ({ uploadId: f.upload!.uploadId, name: f.name, type: f.type, size: f.size })),
       combinePhotos: true,
       photosName: d.title.trim() || (d.contract ? `${d.contract.label.split(' · ')[0]} pay application` : 'Phone capture'),
+      description: d.description?.trim() || undefined,
+      tags: d.tags?.length ? d.tags : undefined,
+      amountCents: d.amountCents ?? null,
     },
   });
   // Confirmed by the server: only now is it submitted.

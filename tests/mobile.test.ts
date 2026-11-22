@@ -204,6 +204,50 @@ describe('capture from the phone', () => {
     const { id } = (await res.json()) as { id: string };
     const docs = await w.db.select().from(documents).where(eq(documents.payApplicationId, id));
     expect(docs.map((d) => [d.filename, d.mimeType])).toEqual([['Pay app 4.pdf', 'application/pdf']]);
+
+    // The person finds it again under the name they gave it, before anyone has matched it.
+    const mine = await apps.GET(req('/api/mobile/applications?view=mine', { token }));
+    const { items } = (await mine.json()) as { items: Array<{ id: string; title: string | null }> };
+    expect(items.find((a) => a.id === id)?.title).toBe('Pay app 4');
+  });
+
+  it('keeps the typed name on a single photo, so it is not just "Page 1"', async () => {
+    const p1 = await stage(token, 'Page 1.png', PNG, 'image/png');
+    const res = await apps.POST(req('/api/mobile/applications', { method: 'POST', token, body: { clientRef: crypto.randomUUID(), staged: [p1], combinePhotos: true, photosName: 'Concrete' } }));
+    expect(res.status).toBe(201);
+    const { id } = (await res.json()) as { id: string };
+    const docs = await w.db.select().from(documents).where(eq(documents.payApplicationId, id));
+    expect(docs.map((d) => d.filename)).toEqual(['Concrete.png']);
+    const mine = await apps.GET(req('/api/mobile/applications?view=mine', { token }));
+    const { items } = (await mine.json()) as { items: Array<{ id: string; title: string | null }> };
+    expect(items.find((a) => a.id === id)?.title).toBe('Concrete');
+  });
+
+  it('keeps the description, tags and typed amount, and offers the tags back most used first', async () => {
+    const send = async (name: string, extra: Record<string, unknown>) => {
+      const p1 = await stage(token, 'Page 1.png', PNG, 'image/png');
+      const res = await apps.POST(req('/api/mobile/applications', { method: 'POST', token, body: { clientRef: crypto.randomUUID(), staged: [p1], photosName: name, ...extra } }));
+      expect(res.status).toBe(201);
+      return ((await res.json()) as { id: string }).id;
+    };
+    const a = await send('Concrete', { description: 'Level 2 pour, 40 yards', tags: ['Concrete', ' concrete ', 'Site  2', ''], amountCents: 1_240_000 });
+    await send('Fuel', { tags: ['Fuel', 'Site 2'], amountCents: 8_550 });
+
+    const mine = await apps.GET(req('/api/mobile/applications?view=mine', { token }));
+    const { items } = (await mine.json()) as { items: Array<{ id: string; description: string | null; tags: string[]; stated: number | null }> };
+    expect(items.find((i) => i.id === a)).toMatchObject({ description: 'Level 2 pour, 40 yards', tags: ['Concrete', 'Site 2'], stated: 1_240_000 });
+    const detail = await appDetail.GET(req(`/api/mobile/applications/${a}`, { token }), idParams(a));
+    expect(await detail.json()).toMatchObject({ title: 'Concrete', description: 'Level 2 pour, 40 yards', tags: ['Concrete', 'Site 2'], stated: 1_240_000 });
+
+    const tagsRoute = await import('@/app/api/mobile/tags/route');
+    requestHeaders = req('/api/mobile/tags', { token }).headers;
+    const res = await tagsRoute.GET();
+    const body = (await res.json()) as { items: Array<{ tag: string; count: number }> };
+    expect(body.items.slice(0, 3)).toEqual([
+      { tag: 'Site 2', count: 2 },
+      { tag: 'Concrete', count: 1 },
+      { tag: 'Fuel', count: 1 },
+    ]);
   });
 
   it('refuses capture to someone whose role cannot upload', async () => {

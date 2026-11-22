@@ -42,14 +42,14 @@ export default function Verify() {
           <ShieldCheck size={24} color={p.accentText} />
         </View>
         <View style={{ gap: 6 }}>
-          <T v="display">Two-step verification</T>
+          <T v="display">Enter your code</T>
           <T tone="ink3">
-            {recovery ? 'Enter one of the recovery codes you saved when you turned on two-step verification. Each works once.' : `Enter the 6-digit code from your authenticator app${state.status === 'verify' ? ` for ${state.email}` : ''}.`}
+            {recovery ? 'Enter one of the backup codes you saved when you turned this on. Each one works once.' : `Open your code app and type the 6-digit code${state.status === 'verify' ? ` for ${state.email}` : ''}`}
           </T>
         </View>
         {error ? <Banner tone="block">{error}</Banner> : null}
         <Field
-          label={recovery ? 'Recovery code' : 'Code'}
+          label={recovery ? 'Backup code' : 'Code'}
           value={code}
           onChangeText={setCode}
           autoFocus
@@ -62,8 +62,8 @@ export default function Verify() {
           onSubmitEditing={submit}
           style={recovery ? undefined : { fontSize: 24, letterSpacing: 8, textAlign: 'center', fontVariant: ['tabular-nums'] }}
         />
-        <Button label="Verify" onPress={submit} loading={busy} size="lg" />
-        <Button label={recovery ? 'Use an authenticator code' : 'Use a recovery code'} kind="ghost" onPress={() => { setRecovery(!recovery); setCode(''); setError(null); }} />
+        <Button label="Continue" onPress={submit} loading={busy} size="lg" />
+        <Button label={recovery ? 'Use the code app instead' : 'Use a backup code'} kind="ghost" onPress={() => { setRecovery(!recovery); setCode(''); setError(null); }} />
         <Button label="Start again" kind="ghost" onPress={cancelVerify} />
       </ScrollView>
     </KeyboardAvoidingView>

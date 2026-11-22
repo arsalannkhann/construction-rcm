@@ -16,26 +16,26 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: p.scheme === 'dark' ? p.ink : p.accentText,
+        tabBarActiveTintColor: p.accentText,
         tabBarInactiveTintColor: p.ink3,
         tabBarStyle: { backgroundColor: p.surface, borderTopColor: p.line, borderTopWidth: StyleSheet.hairlineWidth },
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
+        tabBarLabelStyle: { fontSize: 12, fontWeight: '500' },
         sceneStyle: { backgroundColor: p.canvas },
       }}
     >
-      <Tabs.Screen name="index" options={{ title: 'Overview', tabBarIcon: ({ color, size }) => <House color={color} size={size - 2} /> }} />
+      <Tabs.Screen name="index" options={{ title: 'Home', tabBarIcon: ({ color, size }) => <House color={color} size={size - 2} /> }} />
       <Tabs.Screen name="projects" options={{ title: 'Projects', tabBarIcon: ({ color, size }) => <Building2 color={color} size={size - 2} /> }} />
-      <Tabs.Screen name="billing" options={{ title: 'Billing', tabBarIcon: ({ color, size }) => <ReceiptText color={color} size={size - 2} /> }} />
+      <Tabs.Screen name="billing" options={{ title: 'Bills', tabBarIcon: ({ color, size }) => <ReceiptText color={color} size={size - 2} /> }} />
       <Tabs.Screen
         name="activity"
         options={{
-          title: 'Activity',
+          title: 'Updates',
           tabBarIcon: ({ color, size }) => <Bell color={color} size={size - 2} />,
           tabBarBadge: unread > 0 ? (unread > 99 ? '99+' : unread) : undefined,
           tabBarBadgeStyle: { backgroundColor: p.block, color: '#fff', fontSize: 10 },
         }}
       />
-      <Tabs.Screen name="profile" options={{ title: 'Profile', tabBarIcon: ({ color, size }) => <CircleUser color={color} size={size - 2} /> }} />
+      <Tabs.Screen name="profile" options={{ title: 'Me', tabBarIcon: ({ color, size }) => <CircleUser color={color} size={size - 2} /> }} />
     </Tabs>
   );
 }

@@ -1,15 +1,15 @@
-/** Pieces shared by several screens: application rows, the offline banner, error states. */
+/** Pieces shared by several screens: bill rows, the offline banner, error states. */
 import { useNetworkState } from 'expo-network';
 import { router } from 'expo-router';
 import { View } from 'react-native';
 import CloudOff from 'lucide-react-native/icons/cloud-off';
 import TriangleAlert from 'lucide-react-native/icons/triangle-alert';
-import OctagonAlert from 'lucide-react-native/icons/octagon-alert';
 import { ago, date, money } from '@/lib/format';
 import { messageOf, type Row as AppRowData } from '@/lib/api';
 import { isOnlineState } from '@/lib/queries';
-import { usePalette } from '@/theme';
-import { Banner, Button, Divider, Pill, Row, statusTone, T } from './kit';
+import { rowStatus } from '@/lib/uploads';
+import { Stamp } from './bill-slip';
+import { Banner, Button, Divider, Row, T } from './kit';
 
 export function useOnline(): boolean {
   return isOnlineState(useNetworkState());
@@ -19,26 +19,29 @@ export function OfflineBanner() {
   const online = useOnline();
   if (online) return null;
   return (
-    <Banner tone="neutral" icon={CloudOff} title="You are offline">
-      Drafts and captures are saved on this phone and send when you are back online. Approvals and figures need a connection.
+    <Banner tone="neutral" icon={CloudOff} title="No internet right now">
+      Bills you send are kept on this phone and go out by themselves when you are back online. Approving needs internet.
     </Banner>
   );
 }
 
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
-  return <Banner tone="block" icon={TriangleAlert} title="Could not load this" action={onRetry ? <Button label="Try again" kind="secondary" size="sm" onPress={onRetry} /> : undefined}>{messageOf(error)}</Banner>;
+  return <Banner tone="block" icon={TriangleAlert} title="This did not load" action={onRetry ? <Button label="Try again" kind="secondary" size="sm" onPress={onRetry} /> : undefined}>{messageOf(error)}</Banner>;
 }
 
-/** One application in a list: who, which number, what state, how much. */
+/** One bill in a list: whose, which number, where it stands (as a stamp), how much. */
 export function AppRow({ a, showProject = true }: { a: AppRowData; showProject?: boolean }) {
-  const p = usePalette();
-  const who = a.subcontractor ?? 'Unmatched submission';
-  const amount = a.approved ?? a.verified ?? a.claimed;
-  const label = a.approved !== null ? 'Approved' : a.verified !== null ? 'Verified' : a.claimed !== null ? 'Requested' : null;
+  // The name the person gave it comes first, so an upload is recognisable before Zephric has matched it.
+  const named = a.title?.trim() || null;
+  const who = named ?? a.subcontractor ?? 'Not matched yet';
+  const typed = a.stated ?? null;
+  const amount = typed ?? a.approved ?? a.verified ?? a.claimed;
+  const label = typed !== null ? 'As typed' : a.approved !== null ? 'Approved' : a.verified !== null ? 'Checked' : a.claimed !== null ? 'Asked for' : null;
+  const said = rowStatus(a);
   return (
     <Row
       onPress={() => router.push(`/application/${a.id}`)}
-      accessibilityLabel={`${who}, application ${a.number ?? 'without a number'}, ${a.statusLabel}`}
+      accessibilityLabel={`${who}${a.number !== null ? `, bill ${a.number}` : ''}, ${said.status}`}
       title={
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <T v="label" numberOfLines={1} style={{ flexShrink: 1 }}>
@@ -51,25 +54,14 @@ export function AppRow({ a, showProject = true }: { a: AppRowData; showProject?:
           ) : null}
         </View>
       }
-      subtitle={[showProject ? a.project : null, a.periodTo ? `to ${date(a.periodTo)}` : `received ${ago(a.receivedAt)}`].filter(Boolean).join(' · ')}
+      subtitle={[named ? a.subcontractor : null, showProject ? a.project : null, a.periodTo ? `for ${date(a.periodTo)}` : `sent ${ago(a.receivedAt)}`].filter(Boolean).join(' · ')}
       meta={
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-          <Pill label={a.failed ? 'Could not be read' : a.statusLabel} tone={a.failed ? 'block' : statusTone(a.status)} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 8, flexWrap: 'wrap' }}>
+          <Stamp label={said.stamp} tone={said.tone} size="sm" />
           {a.openBlocking > 0 ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-              <OctagonAlert size={13} color={p.block} />
-              <T v="caption" tone="block">
-                {a.openBlocking}
-              </T>
-            </View>
-          ) : null}
-          {a.openWarnings > 0 ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-              <TriangleAlert size={13} color={p.warn} />
-              <T v="caption" tone="warn">
-                {a.openWarnings}
-              </T>
-            </View>
+            <T v="caption" tone="block">
+              {a.openBlocking === 1 ? '1 problem' : `${a.openBlocking} problems`}
+            </T>
           ) : null}
         </View>
       }

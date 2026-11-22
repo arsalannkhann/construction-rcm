@@ -17,7 +17,9 @@ import { openDocument } from '@/lib/documents';
 import { ago, bytes, date, dateTime, money, plural } from '@/lib/format';
 import { useApplication, useInvalidate } from '@/lib/queries';
 import { usePalette } from '@/theme';
-import { Banner, Button, Card, Divider, Field, LoadingCard, Pill, Row, Screen, Section, statusTone, T } from '@/ui/kit';
+import { rowStatus, type UploadItem } from '@/lib/uploads';
+import { BillSlip } from '@/ui/bill-slip';
+import { Banner, Button, Card, Divider, Field, LoadingCard, Row, Screen, Section, T } from '@/ui/kit';
 import { ErrorState, OfflineBanner, useOnline } from '@/ui/parts';
 
 export default function ApplicationScreen() {
@@ -26,7 +28,7 @@ export default function ApplicationScreen() {
   const d = q.data;
   return (
     <>
-      <Stack.Screen options={{ title: d ? (d.number !== null ? `Application #${d.number}` : 'Application') : '' }} />
+      <Stack.Screen options={{ title: d ? (d.number !== null ? `Bill #${d.number}` : 'Bill') : '' }} />
       <Screen refreshing={q.isRefetching} onRefresh={() => void q.refetch()}>
         <OfflineBanner />
         {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : null}
@@ -42,58 +44,67 @@ export default function ApplicationScreen() {
   );
 }
 
+/** The bill as the paper slip: the sender's name for it, their words and tags, the amount, and the stamp. */
+function slipFor(d: Detail): UploadItem {
+  const said = rowStatus({ ...d, title: d.title ?? null, project: d.project?.name ?? null, contractNumber: d.contract?.number ?? null, claimed: d.amounts.claimed, verified: d.amounts.verified, approved: d.amounts.approved, openBlocking: d.findings.open.filter((f) => f.severity === 'blocking').length, failed: !!d.processingError });
+  const typed = d.stated ?? null;
+  const cents = typed ?? d.amounts.approved ?? d.amounts.verified ?? d.amounts.claimed;
+  const named = d.title?.trim() || null;
+  return {
+    key: d.id,
+    target: { kind: 'application', id: d.id },
+    title: named ?? d.subcontractor ?? 'Not matched yet',
+    detail: [named ? d.subcontractor : null, d.project?.name, d.number !== null ? `#${d.number}` : null].filter(Boolean).join(' · ') || null,
+    at: d.receivedAt,
+    ...said,
+    amount: cents !== null ? money(cents) : null,
+    amountTyped: typed !== null,
+    description: d.description?.trim() || null,
+    tags: d.tags ?? [],
+    haystack: '',
+  };
+}
+
 function Body({ d, onChanged }: { d: Detail; onChanged: () => void }) {
   const differs = d.amounts.claimed !== null && d.amounts.verified !== null && d.amounts.claimed !== d.amounts.verified;
-  const headline = d.amounts.approved ?? d.amounts.verified ?? d.amounts.claimed;
-  const headlineLabel = d.amounts.approved !== null ? 'Approved payment' : d.amounts.verified !== null ? 'Verified payment due' : 'Payment requested';
+  const slip = slipFor(d);
+  const checked = d.amounts.approved ?? d.amounts.verified;
 
   return (
     <>
-      <Card style={{ gap: 14 }}>
-        <View style={{ gap: 4 }}>
-          <T v="title" numberOfLines={2}>
-            {d.subcontractor ?? 'Unmatched submission'}
-          </T>
-          <T v="caption" tone="ink3">
-            {[d.project?.name, d.contract ? `${d.contract.number} ${d.contract.title}` : null].filter(Boolean).join(' · ') || 'Not yet matched to a subcontract'}
-          </T>
-        </View>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-          <Pill label={d.statusLabel} tone={statusTone(d.status)} />
-          {d.periodTo ? <Pill label={`Period to ${date(d.periodTo)}`} /> : null}
-          <Pill label={`Received ${ago(d.receivedAt)}${d.receivedVia === 'email' ? ' by email' : ''}`} />
-        </View>
-        <Divider />
-        <View style={{ gap: 2 }}>
-          <T v="caption" tone="ink3">
-            {headlineLabel}
-          </T>
-          <T v="amountLarge">{money(headline)}</T>
-          {differs && d.amounts.approved === null ? (
-            <T v="caption" tone="warn">
-              The subcontractor requested {money(d.amounts.claimed)}. Zephric’s verified figure differs.
-            </T>
-          ) : null}
-        </View>
-        <View style={{ flexDirection: 'row', gap: 12 }}>
-          <Figure label="Contract sum to date" value={money(d.amounts.contractSumToDate)} />
-          <Figure label="Retainage" value={money(d.amounts.retainage)} />
-          <Figure label="Balance to finish" value={money(d.amounts.balanceToFinish)} />
-        </View>
-        <T v="caption" tone="ink3">
-          Figures are computed by Zephric’s reconciliation on the server, not on this phone.
-        </T>
-      </Card>
+      <BillSlip item={slip} caption={`Sent ${ago(d.receivedAt)}${d.receivedVia === 'email' ? ' by email' : ''}`} />
 
       {d.status === 'processing' ? (
-        <Banner tone="accent" icon={Loader} title="Zephric is reading this package">
-          Figures and checks appear when it finishes. Pull down to refresh.
+        <Banner tone="neutral" icon={Loader} title="Zephric is reading it">
+          Amounts and checks show up when it finishes. Pull down to refresh
         </Banner>
       ) : null}
       {d.processingError ? (
-        <Banner tone="block" icon={TriangleAlert} title="This package could not be read automatically">
-          {d.processingError}
+        <Banner tone="block" icon={TriangleAlert} title="Zephric could not read it">
+          Someone in the office will look at it by hand
         </Banner>
+      ) : null}
+
+      {d.status !== 'processing' && (checked !== null || d.amounts.claimed !== null) ? (
+        <Section title="Zephric’s check">
+          <Card style={{ gap: 16 }}>
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <Figure label="Asked for" value={money(d.amounts.claimed)} />
+              <Figure label={d.amounts.approved !== null ? 'Approved' : 'Checked amount'} value={money(checked)} />
+            </View>
+            {differs && d.amounts.approved === null ? (
+              <T v="body" tone="warn">
+                The checked amount is different from what was asked for
+              </T>
+            ) : null}
+            <Divider />
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <Figure label="Contract so far" value={money(d.amounts.contractSumToDate)} small />
+              <Figure label="Held back" value={money(d.amounts.retainage)} small />
+              <Figure label="Left to bill" value={money(d.amounts.balanceToFinish)} small />
+            </View>
+          </Card>
+        </Section>
       ) : null}
 
       <Decision d={d} onChanged={onChanged} />
@@ -101,7 +112,7 @@ function Body({ d, onChanged }: { d: Detail; onChanged: () => void }) {
       <Findings d={d} />
 
       {d.documents.length > 0 ? (
-        <Section title={`Documents · ${d.documents.length}`}>
+        <Section title={d.documents.length === 1 ? 'The file' : `Files · ${d.documents.length}`}>
           <Card padded={false}>
             {d.documents.map((doc, i) => (
               <View key={doc.id}>
@@ -114,16 +125,16 @@ function Body({ d, onChanged }: { d: Detail; onChanged: () => void }) {
       ) : null}
 
       {d.can.requestInfo ? (
-        <Button label="Request information from the subcontractor" kind="secondary" icon={Send} onPress={() => router.push(`/request-info/${d.id}`)} />
+        <Button label="Ask the subcontractor for something" kind="secondary" icon={Send} onPress={() => router.push(`/request-info/${d.id}`)} />
       ) : null}
 
       {d.messages.length > 0 ? (
-        <Section title="Messages to the subcontractor">
+        <Section title="Messages sent to the subcontractor">
           <Card padded={false}>
             {d.messages.map((m, i) => (
               <View key={m.id}>
                 {i > 0 ? <Divider inset={16} /> : null}
-                <Row title={m.subject} subtitle={`${m.to ?? ''} · ${ago(m.at)}`} chevron={false} right={<Pill label={messageStatus(m.status)} tone={m.status === 'sent' ? 'pass' : m.status === 'failed' ? 'block' : 'warn'} />} />
+                <Row title={m.subject} subtitle={`${m.to ?? ''} · ${ago(m.at)}`} chevron={false} right={<T v="caption" tone={m.status === 'sent' ? 'pass' : m.status === 'failed' ? 'block' : 'ink3'}>{messageStatus(m.status)}</T>} />
               </View>
             ))}
           </Card>
@@ -134,7 +145,7 @@ function Body({ d, onChanged }: { d: Detail; onChanged: () => void }) {
 
       {d.timeline.length > 0 ? <Timeline d={d} /> : null}
 
-      <Button label="Open on the web" kind="ghost" icon={Laptop} onPress={() => void Linking.openURL(`${currentServer()}/applications/${d.id}`)} />
+      <Button label="Open on the website" kind="ghost" icon={Laptop} onPress={() => void Linking.openURL(`${currentServer()}/applications/${d.id}`)} />
     </>
   );
 }
@@ -144,7 +155,7 @@ function messageStatus(status: string): string {
     case 'sent':
       return 'Sent';
     case 'not_sent':
-      return 'Recorded, not sent';
+      return 'Saved, not emailed';
     case 'failed':
       return 'Failed';
     case 'unconfirmed':
@@ -156,13 +167,13 @@ function messageStatus(status: string): string {
   }
 }
 
-function Figure({ label, value }: { label: string; value: string }) {
+function Figure({ label, value, small = false }: { label: string; value: string; small?: boolean }) {
   return (
     <View style={{ flex: 1, gap: 2 }}>
       <T v="caption" tone="ink3" numberOfLines={2}>
         {label}
       </T>
-      <T v="caption" style={{ fontWeight: '600', fontVariant: ['tabular-nums'] }}>
+      <T v="amount" style={small ? { fontSize: 15 } : { fontSize: 20, lineHeight: 26 }}>
         {value}
       </T>
     </View>
@@ -171,13 +182,14 @@ function Figure({ label, value }: { label: string; value: string }) {
 
 /** The decision area: approve here when the server allows it, otherwise the reason and a way to the desktop. */
 function Decision({ d, onChanged }: { d: Detail; onChanged: () => void }) {
+  const p = usePalette();
   const online = useOnline();
   const invalidate = useInvalidate();
   const [busy, setBusy] = useState(false);
 
   if (d.decision && (d.status === 'approved' || d.status === 'rejected')) {
     return (
-      <Banner tone={d.status === 'approved' ? 'pass' : 'block'} icon={d.status === 'approved' ? CircleCheck : OctagonAlert} title={`${d.status === 'approved' ? 'Approved' : 'Rejected'}${d.decision.by ? ` by ${d.decision.by}` : ''}`}>
+      <Banner tone={d.status === 'approved' ? 'pass' : 'block'} icon={d.status === 'approved' ? CircleCheck : OctagonAlert} title={`${d.status === 'approved' ? 'Approved' : 'Turned down'}${d.decision.by ? ` by ${d.decision.by}` : ''}`}>
         {dateTime(d.decision.at)}
         {d.decision.note ? ` · ${d.decision.note}` : ''}
       </Banner>
@@ -189,7 +201,7 @@ function Decision({ d, onChanged }: { d: Detail; onChanged: () => void }) {
     const approve = () => {
       Alert.alert(
         `Approve ${money(amount)}?`,
-        `${d.subcontractor ?? 'This subcontractor'}${d.number !== null ? `, application #${d.number}` : ''}. Zephric checks the figures again before recording your approval, and refuses if anything has changed.`,
+        `${d.subcontractor ?? 'This bill'}${d.number !== null ? `, bill #${d.number}` : ''}. Zephric checks the amount once more before saving your approval.`,
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -204,12 +216,12 @@ function Decision({ d, onChanged }: { d: Detail; onChanged: () => void }) {
                 void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
                 onChanged();
                 if (err instanceof ApiError && err.code === 'desktop_required') {
-                  Alert.alert('Decide on the desktop', err.message, [
+                  Alert.alert('Approve this on the website', err.message, [
                     { text: 'Close', style: 'cancel' },
-                    { text: 'Open on the web', onPress: () => void Linking.openURL(`${currentServer()}/applications/${d.id}`) },
+                    { text: 'Open the website', onPress: () => void Linking.openURL(`${currentServer()}/applications/${d.id}`) },
                   ]);
                 } else {
-                  Alert.alert(err instanceof ApiError && err.code === 'conflict' ? 'The application changed' : 'Not approved', messageOf(err));
+                  Alert.alert(err instanceof ApiError && err.code === 'conflict' ? 'This bill changed' : 'Not approved', messageOf(err));
                 }
               } finally {
                 setBusy(false);
@@ -222,16 +234,16 @@ function Decision({ d, onChanged }: { d: Detail; onChanged: () => void }) {
     return (
       <Card style={{ gap: 12 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <ShieldCheck size={18} color="#1b7a4a" />
-          <T v="heading">Ready for your approval</T>
+          <ShieldCheck size={20} color={p.pass} strokeWidth={1.75} />
+          <T v="heading">Ready for you to approve</T>
         </View>
-        <T v="caption" tone="ink2">
-          Submitted for approval with every check passed or decided. You approve the verified amount, nothing else.
+        <T v="body" tone="ink2">
+          Every check is done. You are approving the checked amount, nothing else
         </T>
         <Button label={`Approve ${money(amount)}`} kind="approve" onPress={approve} loading={busy} disabled={!online} size="lg" />
         {!online ? (
           <T v="caption" tone="ink3">
-            Approvals need a connection.
+            Approving needs internet
           </T>
         ) : null}
       </Card>
@@ -240,7 +252,7 @@ function Decision({ d, onChanged }: { d: Detail; onChanged: () => void }) {
 
   if (d.desktopReason) {
     return (
-      <Banner tone="neutral" icon={Laptop} title="Decide on the desktop" action={<Button label="Open on the web" kind="secondary" size="sm" onPress={() => void Linking.openURL(`${currentServer()}/applications/${d.id}`)} />}>
+      <Banner tone="neutral" icon={Laptop} title="Approve this on the website" action={<Button label="Open the website" kind="secondary" size="sm" onPress={() => void Linking.openURL(`${currentServer()}/applications/${d.id}`)} />}>
         {d.desktopReason}
       </Banner>
     );
@@ -256,17 +268,21 @@ function Findings({ d }: { d: Detail }) {
   const info = open.filter((f) => f.severity === 'info');
   if (d.status === 'processing') return null;
   return (
-    <Section title="Checks">
-      <Card style={{ gap: 14 }}>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-          {blocking.length ? <Pill label={plural(blocking.length, 'blocking finding')} tone="block" /> : null}
-          {warnings.length ? <Pill label={plural(warnings.length, 'warning')} tone="warn" /> : null}
-          {d.findings.accepted.length ? <Pill label={`${d.findings.accepted.length} decided with a reason`} tone="neutral" /> : null}
-          <Pill label={`${d.findings.passed} passed`} tone="pass" />
-        </View>
+    <Section title="What Zephric checked">
+      <Card style={{ gap: 16 }}>
+        <T v="body" tone="ink2">
+          {[
+            blocking.length ? (blocking.length === 1 ? '1 problem' : `${blocking.length} problems`) : null,
+            warnings.length ? `${warnings.length} worth a look` : null,
+            d.findings.accepted.length ? `${d.findings.accepted.length} settled` : null,
+            `${d.findings.passed} fine`,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        </T>
         {[...blocking, ...warnings, ...info].map((f) => (
           <View key={f.id} style={{ flexDirection: 'row', gap: 10 }}>
-            {f.severity === 'blocking' ? <OctagonAlert size={18} color={p.block} /> : f.severity === 'warning' ? <TriangleAlert size={18} color={p.warn} /> : <CircleCheck size={18} color={p.ink3} />}
+            {f.severity === 'blocking' ? <OctagonAlert size={20} color={p.block} strokeWidth={1.75} /> : f.severity === 'warning' ? <TriangleAlert size={20} color={p.warn} strokeWidth={1.75} /> : <CircleCheck size={20} color={p.ink3} strokeWidth={1.75} />}
             <View style={{ flex: 1, gap: 2 }}>
               <T v="label">{f.title}</T>
               <T v="caption" tone="ink2">
@@ -274,7 +290,7 @@ function Findings({ d }: { d: Detail }) {
               </T>
               {f.needsQualifiedReview ? (
                 <T v="caption" tone="warn">
-                  Needs a qualified reviewer’s judgement. Zephric does not decide this.
+                  A person has to decide this, not Zephric
                 </T>
               ) : null}
             </View>
@@ -282,18 +298,18 @@ function Findings({ d }: { d: Detail }) {
         ))}
         {open.length === 0 ? (
           <T v="caption" tone="ink2">
-            No open findings. {d.findings.passed > 0 ? `${plural(d.findings.passed, 'check')} passed.` : ''}
+            Nothing wrong found{d.findings.passed > 0 ? ` in ${plural(d.findings.passed, 'check')}` : ''}
           </T>
         ) : null}
         {d.findings.accepted.map((f) => (
           <View key={f.id} style={{ flexDirection: 'row', gap: 10, opacity: 0.85 }}>
-            <CircleCheck size={18} color={p.ink3} />
+            <CircleCheck size={20} color={p.ink3} strokeWidth={1.75} />
             <View style={{ flex: 1, gap: 2 }}>
               <T v="label" tone="ink2">
                 {f.title}
               </T>
               <T v="caption" tone="ink3">
-                Decided{f.by ? ` by ${f.by}` : ''}
+                Settled{f.by ? ` by ${f.by}` : ''}
                 {f.note ? `: “${f.note}”` : ''}
               </T>
             </View>
@@ -310,16 +326,16 @@ function DocumentRow({ doc }: { doc: Detail['documents'][number] }) {
   const Icon = doc.mimeType.startsWith('image/') ? Image : FileText;
   return (
     <Row
-      left={<Icon size={20} color={p.ink3} />}
+      left={<Icon size={20} color={p.ink3} strokeWidth={1.75} />}
       title={doc.filename}
-      subtitle={[doc.pageCount ? plural(doc.pageCount, 'page') : null, bytes(doc.size), doc.status === 'unreadable' ? 'Not machine-readable' : null].filter(Boolean).join(' · ')}
+      subtitle={[doc.pageCount ? plural(doc.pageCount, 'page') : null, bytes(doc.size), doc.status === 'unreadable' ? 'Zephric could not read it' : null].filter(Boolean).join(' · ')}
       right={busy ? <ActivityIndicator color={p.ink3} /> : null}
       onPress={async () => {
         setBusy(true);
         try {
           await openDocument(doc);
         } catch (err) {
-          Alert.alert('Could not open the document', messageOf(err));
+          Alert.alert('Could not open the file', messageOf(err));
         } finally {
           setBusy(false);
         }
@@ -341,13 +357,13 @@ function Comments({ d, onChanged }: { d: Detail; onChanged: () => void }) {
       setText('');
       onChanged();
     } catch (err) {
-      Alert.alert('Comment not added', messageOf(err));
+      Alert.alert('Note not added', messageOf(err));
     } finally {
       setBusy(false);
     }
   };
   return (
-    <Section title={`Comments${d.comments.length ? ` · ${d.comments.length}` : ''}`}>
+    <Section title={`Team notes${d.comments.length ? ` · ${d.comments.length}` : ''}`}>
       <Card style={{ gap: 14 }}>
         {d.comments.map((c) => (
           <View key={c.id} style={{ gap: 2 }}>
@@ -361,8 +377,8 @@ function Comments({ d, onChanged }: { d: Detail; onChanged: () => void }) {
         ))}
         {d.can.comment ? (
           <View style={{ gap: 10 }}>
-            <Field label="Add a comment for your team" value={text} onChangeText={setText} multiline maxLength={4000} placeholder="Visible to your team, not the subcontractor" />
-            <Button label="Post comment" kind="secondary" icon={MessageSquare} onPress={post} loading={busy} disabled={!text.trim() || !online} />
+            <Field label="Add a note for your team" value={text} onChangeText={setText} multiline maxLength={4000} placeholder="Only your team sees this" />
+            <Button label="Add note" kind="secondary" icon={MessageSquare} onPress={post} loading={busy} disabled={!text.trim() || !online} />
           </View>
         ) : null}
       </Card>

@@ -50,6 +50,44 @@ export function authHeaders(): Record<string, string> {
 
 type Options = { method?: 'GET' | 'POST' | 'DELETE'; body?: unknown; timeoutMs?: number; signal?: AbortSignal; token?: string | null; server?: string };
 
+/**
+ * Settle within `ms` whatever the network does. Aborting the request is not
+ * enough on its own: on a phone the request can stall (a weak signal, the
+ * screen going off) without the abort ever settling it, and the queue then
+ * waited for ever at "Sending… 0%". This always ends it, as a connection
+ * problem, so the draft goes back to waiting and is sent again.
+ */
+function withDeadline<T>(work: Promise<T>, ms: number, onTimeout: () => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      onTimeout();
+      reject(new NetworkError());
+    }, ms + 5_000);
+    work.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+/** Send and read the answer, both inside the deadline. */
+async function call<T>(path: string, opts: Options, body: BodyInit | undefined, contentType: string | undefined): Promise<T> {
+  const controller = new AbortController();
+  opts.signal?.addEventListener('abort', () => controller.abort());
+  const sentToken = !!(opts.token === undefined ? config.token : opts.token);
+  return withDeadline(
+    send(path, { ...opts, signal: controller.signal }, body, contentType).then((res) => read<T>(res, sentToken)),
+    opts.timeoutMs ?? 20_000,
+    () => controller.abort(),
+  );
+}
+
 async function send(path: string, opts: Options, body: BodyInit | undefined, contentType: string | undefined): Promise<Response> {
   const token = opts.token === undefined ? config.token : opts.token;
   const headers: Record<string, string> = { accept: 'application/json', 'user-agent': userAgent };
@@ -82,15 +120,14 @@ async function read<T>(res: Response, sentToken: boolean): Promise<T> {
 }
 
 export async function api<T>(path: string, opts: Options = {}): Promise<T> {
-  const res = await send(path, opts, opts.body === undefined ? undefined : JSON.stringify(opts.body), opts.body === undefined ? undefined : 'application/json');
-  return read<T>(res, !!(opts.token === undefined ? config.token : opts.token));
+  return call<T>(path, opts, opts.body === undefined ? undefined : JSON.stringify(opts.body), opts.body === undefined ? undefined : 'application/json');
 }
 
 /** One part of a staged file (src/server/services/uploads.ts on the server). Sending the same part again replaces it. */
 export async function putPart(uploadId: string, part: number, bytes: Uint8Array): Promise<void> {
   // expo/fetch sends typed arrays as they are (normalizeBodyInitAsync); the DOM typing just does not list them.
-  const res = await send(`/api/uploads/${uploadId}/parts/${part}`, { method: 'POST', timeoutMs: 120_000 }, bytes as unknown as BodyInit, 'application/octet-stream');
-  await read<{ ok: true }>(res, true);
+  // A part is at most 4 MB: a minute is plenty on a slow connection, and a stalled one is retried sooner.
+  await call<{ ok: true }>(`/api/uploads/${uploadId}/parts/${part}`, { method: 'POST', timeoutMs: 60_000 }, bytes as unknown as BodyInit, 'application/octet-stream');
 }
 
 /** Whether the server answers at all, for the "Server" setting. */
@@ -122,6 +159,12 @@ export type Me = {
 };
 
 export type Row = {
+  /** What the person called it (the name typed on the phone, or the first file's name). Null from older servers. */
+  title?: string | null;
+  /** The sender's description, tags and typed amount (cents). Missing from older servers. */
+  description?: string | null;
+  tags?: string[];
+  stated?: number | null;
   id: string;
   status: AppStatus;
   statusLabel: string;
@@ -151,6 +194,11 @@ export type Home = {
 
 export type Detail = {
   id: string;
+  /** What the sender called it, said about it, tagged it and typed as the amount (cents). Missing from older servers. */
+  title?: string | null;
+  description?: string | null;
+  tags?: string[];
+  stated?: number | null;
   version: number;
   status: AppStatus;
   statusLabel: string;
