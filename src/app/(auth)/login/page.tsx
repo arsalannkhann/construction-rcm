@@ -42,6 +42,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <Link href="/signup" className="font-medium text-accent hover:underline">
           Set up your company
         </Link>
+        <span className="text-ink-4"> · </span>
+        <Link href="/sample" className="font-medium text-accent hover:underline">
+          See the sample workflow
+        </Link>
       </p>
     </>
   );

@@ -194,7 +194,7 @@ function FindingCard({ finding: f }: { finding: Finding }) {
   const hasNumbers = f.data && typeof f.data.expected === 'number' && typeof f.data.actual === 'number';
 
   return (
-    <article className={cn('rounded-lg border bg-surface', blocking ? 'border-block-line' : 'border-warn-line')}>
+    <article data-tour="finding" className={cn('rounded-lg border bg-surface', blocking ? 'border-block-line' : 'border-warn-line')}>
       <div className={cn('flex items-start gap-2.5 rounded-t-lg px-3.5 py-2.5', blocking ? 'bg-block-soft/60' : 'bg-warn-soft/60')}>
         {blocking ? <OctagonAlert className="mt-0.5 size-4 shrink-0 text-block" /> : <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" />}
         <div className="min-w-0 flex-1">
@@ -240,7 +240,7 @@ function FindingCard({ finding: f }: { finding: Finding }) {
 
         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
           {spot ? (
-            <Button size="sm" onClick={() => ws.show(spot)}>
+            <Button size="sm" data-tour="finding-show" onClick={() => ws.show(spot)}>
               <LocateFixed className="size-3.5" />
               Show in document
             </Button>

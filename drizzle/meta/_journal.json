@@ -82,8 +82,15 @@
     {
       "idx": 11,
       "version": "7",
-      "when": 1795329031114,
-      "tag": "0011_upload_notes",
+      "when": 1795359178510,
+      "tag": "0011_member_onboarding",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795409388611,
+      "tag": "0012_upload_notes",
       "breakpoints": true
     }
   ]

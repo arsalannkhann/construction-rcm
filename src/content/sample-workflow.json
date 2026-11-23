@@ -1,0 +1,482 @@
+{
+  "reader": "text-layer",
+  "parties": {
+    "generalContractor": "Northgate Builders, Inc.",
+    "project": "Alder Street Clinic",
+    "projectLocation": "Austin, TX",
+    "owner": "Alder Street Health Partners",
+    "subcontractor": "Brightline Electric, LLC",
+    "trade": "Electrical",
+    "contractNumber": "SC-1042-16",
+    "contractTitle": "Electrical"
+  },
+  "contract": {
+    "originalAmount": 120000000,
+    "approvedChangeOrders": 3840000,
+    "contractSumToDate": 123840000,
+    "retainageWorkBps": 1000,
+    "retainageStoredBps": 1000,
+    "history": [
+      {
+        "number": 1,
+        "periodTo": "2026-07-31",
+        "approved": 13176000
+      },
+      {
+        "number": 2,
+        "periodTo": "2026-08-31",
+        "approved": 16965000
+      },
+      {
+        "number": 3,
+        "periodTo": "2026-09-30",
+        "approved": 23481000
+      }
+    ]
+  },
+  "application": {
+    "number": 4,
+    "periodTo": "2026-10-31",
+    "requested": 26847000,
+    "verified": 25119000,
+    "difference": -1728000,
+    "retainageHeld": 8749000,
+    "statusLabel": "Needs review"
+  },
+  "document": {
+    "filename": "brightline-electric-pay-application-4.pdf",
+    "url": "/sample/brightline-electric-pay-application-4.pdf",
+    "pageCount": 3,
+    "pages": [
+      {
+        "page": 1,
+        "label": "Pay application",
+        "width": 612,
+        "height": 792
+      },
+      {
+        "page": 2,
+        "label": "Schedule of values",
+        "width": 792,
+        "height": 612
+      },
+      {
+        "page": 3,
+        "label": "Lien waiver",
+        "width": 612,
+        "height": 792
+      }
+    ]
+  },
+  "summary": [
+    {
+      "key": "originalContractSum",
+      "label": "Original contract sum",
+      "onDocument": 120000000,
+      "verified": 120000000,
+      "agrees": true,
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8416,
+          0.2518,
+          0.0955,
+          0.0158
+        ]
+      }
+    },
+    {
+      "key": "netChangeOrders",
+      "label": "Net change by change orders",
+      "onDocument": 3840000,
+      "verified": 3840000,
+      "agrees": true,
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8631,
+          0.2732,
+          0.0739,
+          0.0158
+        ]
+      }
+    },
+    {
+      "key": "contractSumToDate",
+      "label": "Contract sum to date",
+      "onDocument": 123840000,
+      "verified": 123840000,
+      "agrees": true,
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8416,
+          0.2947,
+          0.0955,
+          0.0158
+        ]
+      }
+    },
+    {
+      "key": "totalCompletedStored",
+      "label": "Total completed & stored to date",
+      "onDocument": 87490000,
+      "verified": 87490000,
+      "agrees": true,
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8545,
+          0.3162,
+          0.0826,
+          0.0158
+        ]
+      }
+    },
+    {
+      "key": "retainageWork",
+      "label": "Retainage on completed work",
+      "onDocument": 8569000,
+      "verified": 8569000,
+      "agrees": true,
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8631,
+          0.3591,
+          0.0739,
+          0.0158
+        ]
+      }
+    },
+    {
+      "key": "retainageStored",
+      "label": "Retainage on stored material",
+      "onDocument": 180000,
+      "verified": 180000,
+      "agrees": true,
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8718,
+          0.3806,
+          0.0653,
+          0.0158
+        ]
+      }
+    },
+    {
+      "key": "retainageTotal",
+      "label": "Total retainage",
+      "onDocument": 8749000,
+      "verified": 8749000,
+      "agrees": true,
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8631,
+          0.402,
+          0.0739,
+          0.0158
+        ]
+      }
+    },
+    {
+      "key": "totalEarnedLessRetainage",
+      "label": "Total earned less retainage",
+      "onDocument": 78741000,
+      "verified": 78741000,
+      "agrees": true,
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8545,
+          0.4235,
+          0.0826,
+          0.0158
+        ]
+      }
+    },
+    {
+      "key": "lessPreviousCertificates",
+      "label": "Less previous certificates",
+      "onDocument": 51894000,
+      "verified": 53622000,
+      "agrees": false,
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8545,
+          0.4449,
+          0.0826,
+          0.0158
+        ]
+      }
+    },
+    {
+      "key": "currentPaymentDue",
+      "label": "Current payment due",
+      "onDocument": 26847000,
+      "verified": 25119000,
+      "agrees": false,
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8545,
+          0.4689,
+          0.0826,
+          0.0158
+        ]
+      }
+    },
+    {
+      "key": "balanceToFinish",
+      "label": "Balance to finish, incl. retainage",
+      "onDocument": 45099000,
+      "verified": 45099000,
+      "agrees": true,
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8545,
+          0.4929,
+          0.0826,
+          0.0158
+        ]
+      }
+    }
+  ],
+  "lines": [
+    {
+      "itemNo": "1",
+      "description": "Mobilization & submittals",
+      "scheduledValue": 4800000,
+      "previous": 4800000,
+      "thisPeriod": 0,
+      "stored": 0,
+      "completedToDate": 4800000,
+      "percent": 100,
+      "source": {
+        "page": 2,
+        "bbox": [
+          0.0591,
+          0.2369,
+          0.9031,
+          0.0196
+        ]
+      }
+    },
+    {
+      "itemNo": "2",
+      "description": "Site power & service entrance",
+      "scheduledValue": 16400000,
+      "previous": 16400000,
+      "thisPeriod": 0,
+      "stored": 0,
+      "completedToDate": 16400000,
+      "percent": 100,
+      "source": {
+        "page": 2,
+        "bbox": [
+          0.0591,
+          0.2614,
+          0.9031,
+          0.0196
+        ]
+      }
+    },
+    {
+      "itemNo": "3",
+      "description": "Branch rough-in, first floor",
+      "scheduledValue": 28600000,
+      "previous": 20020000,
+      "thisPeriod": 7150000,
+      "stored": 0,
+      "completedToDate": 27170000,
+      "percent": 95,
+      "source": {
+        "page": 2,
+        "bbox": [
+          0.0591,
+          0.2859,
+          0.9031,
+          0.0196
+        ]
+      }
+    },
+    {
+      "itemNo": "4",
+      "description": "Branch rough-in, second floor",
+      "scheduledValue": 26200000,
+      "previous": 7860000,
+      "thisPeriod": 7860000,
+      "stored": 0,
+      "completedToDate": 15720000,
+      "percent": 60,
+      "source": {
+        "page": 2,
+        "bbox": [
+          0.0591,
+          0.3105,
+          0.9031,
+          0.0196
+        ]
+      }
+    },
+    {
+      "itemNo": "5",
+      "description": "Switchgear & panelboards",
+      "scheduledValue": 22800000,
+      "previous": 7980000,
+      "thisPeriod": 5700000,
+      "stored": 0,
+      "completedToDate": 13680000,
+      "percent": 60,
+      "source": {
+        "page": 2,
+        "bbox": [
+          0.0591,
+          0.335,
+          0.9031,
+          0.0196
+        ]
+      }
+    },
+    {
+      "itemNo": "6",
+      "description": "Lighting fixtures & controls",
+      "scheduledValue": 15200000,
+      "previous": 0,
+      "thisPeriod": 2280000,
+      "stored": 1800000,
+      "completedToDate": 4080000,
+      "percent": 26.8,
+      "source": {
+        "page": 2,
+        "bbox": [
+          0.0591,
+          0.3595,
+          0.9031,
+          0.0196
+        ]
+      }
+    },
+    {
+      "itemNo": "7",
+      "description": "Fire alarm & low voltage",
+      "scheduledValue": 6000000,
+      "previous": 600000,
+      "thisPeriod": 1200000,
+      "stored": 0,
+      "completedToDate": 1800000,
+      "percent": 30,
+      "source": {
+        "page": 2,
+        "bbox": [
+          0.0591,
+          0.384,
+          0.9031,
+          0.0196
+        ]
+      }
+    },
+    {
+      "itemNo": "CO-1",
+      "description": "Added circuits, imaging room",
+      "scheduledValue": 3840000,
+      "previous": 1920000,
+      "thisPeriod": 1920000,
+      "stored": 0,
+      "completedToDate": 3840000,
+      "percent": 100,
+      "source": {
+        "page": 2,
+        "bbox": [
+          0.0498,
+          0.4085,
+          0.9123,
+          0.0196
+        ]
+      }
+    }
+  ],
+  "checks": {
+    "passed": 24,
+    "blocking": 2,
+    "warnings": 1,
+    "passedGroups": [
+      "Package completeness",
+      "Arithmetic",
+      "Contract value",
+      "Change orders",
+      "Schedule of values",
+      "Retainage"
+    ]
+  },
+  "findings": [
+    {
+      "id": "f1",
+      "severity": "blocking",
+      "category": "Prior billing",
+      "title": "Previous certificates do not match what was approved",
+      "message": "Line 7 states $518,940.00; $536,220.00 was certified through application #3. Deducting $17,280.00 too little would pay that amount a second time.",
+      "expected": "$536,220.00",
+      "onDocument": "$518,940.00",
+      "difference": "−$17,280.00",
+      "whatToDo": "The verified payment uses the approved history. Request a corrected application if needed.",
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8545,
+          0.4449,
+          0.0826,
+          0.0158
+        ]
+      }
+    },
+    {
+      "id": "f2",
+      "severity": "blocking",
+      "category": "Payment amount",
+      "title": "Requested payment is $17,280.00 more than the verified amount",
+      "message": "The subcontractor requests $268,470.00. Recomputed from the contract, approved change orders, approved billing history and this period’s line items, $251,190.00 is due. The items above explain the difference.",
+      "expected": "$251,190.00",
+      "onDocument": "$268,470.00",
+      "difference": "+$17,280.00",
+      "whatToDo": "Resolve the items above so the amounts agree, or accept this item to approve at the verified amount.",
+      "source": {
+        "page": 1,
+        "bbox": [
+          0.8545,
+          0.4689,
+          0.0826,
+          0.0158
+        ]
+      }
+    },
+    {
+      "id": "f3",
+      "severity": "warning",
+      "category": "Lien waivers",
+      "title": "Waiver amount will not match the verified payment",
+      "message": "The waiver covers $268,470.00, but the verified amount is $251,190.00. If you approve the verified amount, the waiver on file will be for a different sum than the payment.",
+      "expected": "$251,190.00",
+      "onDocument": "$268,470.00",
+      "difference": "+$17,280.00",
+      "whatToDo": "Request a revised waiver for the approved amount, or note why the existing one is acceptable.",
+      "source": {
+        "page": 3,
+        "bbox": [
+          0.1152,
+          0.1815,
+          0.7478,
+          0.0158
+        ]
+      }
+    }
+  ],
+  "correction": {
+    "subject": "Pay application #4 – Alder Street Clinic: corrections needed",
+    "body": "Hi Teresa,\n\nWe have reviewed pay application #4 for the period to Oct 31, 2026 on Alder Street Clinic and cannot approve it as submitted. Please correct the following and resubmit:\n\n1. Previous certificates do not match what was approved\n   Line 7 states $518,940.00; $536,220.00 was certified through application #3. Deducting $17,280.00 too little would pay that amount a second time.\n\n2. Requested payment is $17,280.00 more than the verified amount\n   The subcontractor requests $268,470.00. Recomputed from the contract, approved change orders, approved billing history and this period’s line items, $251,190.00 is due. The items above explain the difference.\n\n3. Waiver amount will not match the verified payment\n   The waiver covers $268,470.00, but the verified amount is $251,190.00. If you approve the verified amount, the waiver on file will be for a different sum than the payment.\n\nReply to this email with the revised documents and we will pick it up from there.\n\nThank you,\nLucia Marin\nNorthgate Builders, Inc."
+  }
+}

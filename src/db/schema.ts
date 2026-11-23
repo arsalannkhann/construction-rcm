@@ -34,6 +34,7 @@ import type {
   HeaderCorrections,
   LineSnapshot,
   MatchCandidate,
+  MemberOnboarding,
   OrgSettings,
   OwnerApplicationRecord,
   OwnerEntry,
@@ -90,6 +91,8 @@ export const memberships = pgTable(
     userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
     role: text('role').notNull(),
     status: text('status').notNull().default('active'), // active | deactivated
+    /** This member's welcome answers and tour progress in this organisation. Null until they have any. */
+    onboarding: jsonb('onboarding').$type<MemberOnboarding>(),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('memberships_org_user').on(t.orgId, t.userId)],

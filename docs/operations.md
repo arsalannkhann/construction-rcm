@@ -171,10 +171,17 @@ Then check that it is recorded, and only then merge:
 select version, name from supabase_migrations.schema_migrations order by version;
 ```
 
-Migrations 0000–0010 are applied to `construction-rcm` and recorded under the
+Migrations 0000–0011 are applied to `construction-rcm` and recorded under the
 same versions as the files (0007, the project budget column, and 0008, the
 owner billing tables, on 2026-11-17; 0009, the subcontractor portal tables, and
-0010, the budget lines and changes, on 2026-11-18).
+0010, the budget lines and changes, on 2026-11-18; 0011, the
+`memberships.onboarding` column, on 2026-11-23).
+
+0011 adds one nullable column and gave every membership that existed then an
+empty onboarding record, so members who were already there are not shown the
+welcome step. It was applied before its release was merged; a membership made
+by the older code in between has no record, and its member is welcomed once
+the release is live.
 
 Never let the app apply its own migrations to a database Supabase manages: set
 `RCM_MIGRATIONS=external`. If you forget, the app refuses to start and says so.
@@ -450,14 +457,24 @@ in `localStorage`; neither grants access, so a stale marker only means the
 dashboard link asks the person to sign in. Old `/landing/...` links redirect
 to `/`.
 
-The product previews on the page use illustrative, internally consistent
-figures and are labelled as such. Keep its claims in line with what is
-verified: anything built but unverified is listed under "Built, in
-verification", never as available.
+The hero preview, the sign-in screens' side panel and the sample workflow at
+`/sample` all show the same thing: the product's own output for one fictitious
+billing package, saved in `src/content/sample-workflow.json` (README,
+"Onboarding"). After a change to the reader, the checks or their wording, run
+`pnpm sample:build` and commit the result; the test suite fails until you do.
+The sample's PDF is served from `public/sample/`. `/sample` needs no account,
+stores nothing and sends nothing.
+
+Keep the page's claims in line with what is verified. "Where it stands" has
+three lists: working today, built but not yet proven on real projects, and not
+built. When something moves between them (a Procore sandbox run, a mail
+provider connected, real documents measured), move it on the page and in the
+README's "What is and is not verified" together.
 
 ### Website inquiries
 
-The "design partner" form posts to `/api/inquiries`, which stores each inquiry
+The inquiry form (a design-partner conversation or a demonstration; which one
+was asked for is the first line of the stored message) posts to `/api/inquiries`, which stores each inquiry
 in the `inquiries` table. It belongs to no organisation and no page in the app
 shows it. To read new inquiries, open the Supabase dashboard → Table Editor →
 `inquiries`, or run:

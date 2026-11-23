@@ -10,21 +10,21 @@ const TEAMS = [
     label: 'General contractors',
     title: 'Every pay application checked before anyone reviews it.',
     body: 'Project teams upload pay applications as they arrive. Zephric reads each one, matches it to the subcontract and checks it against the contract, approved change orders and the last application, so reviewers start from findings instead of a blank spreadsheet.',
-    points: ['One queue for what needs attention, by project and subcontractor', 'Contract value, billed to date and retainage held for each subcontract', 'Correction requests that name the line, the figure and the reason'],
+    points: ['One queue for what needs attention, by project and subcontractor', 'Contract value, billed to date and retainage held for each subcontract', 'Each month, who has billed and who is missing'],
   },
   {
     key: 'sub',
     label: 'Subcontractors',
     title: 'Fewer rejected applications, and clear reasons when one is held.',
-    body: 'Subcontractors keep submitting the way they do today. When something does not reconcile, the request that comes back says exactly which line and which figure, and what would resolve it, instead of a vague “please resubmit”.',
-    points: ['No new portal or login required', 'Specific, line-level correction requests', 'A clear path from correction to approval'],
+    body: 'Subcontractors keep sending the PDFs they send today. When something does not reconcile, the request that comes back says exactly which line and which figure, and what would resolve it, instead of a vague “please resubmit”.',
+    points: ['No account or password to create: a private link is enough', 'Specific, line-level correction requests', 'They can see what was received and what was approved'],
   },
   {
     key: 'finance',
     label: 'Finance & controllers',
     title: 'Approvals with rules, evidence and a complete record.',
     body: 'Blocking findings stop an approval outright. Warnings need a reviewer to acknowledge them with a reason. Every figure is recomputed at the moment of approval, and every decision is kept in the activity history.',
-    points: ['Role-based permissions for review, approval and export', 'Retainage tracked per subcontract', 'CSV export for your accounting system'],
+    points: ['Role-based permissions for review, approval and export', 'Retainage tracked per subcontract', 'Approval records as PDF, CSV or JSON for your accounting system'],
   },
 ] as const;
 

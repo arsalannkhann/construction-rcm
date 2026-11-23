@@ -18,10 +18,18 @@ name; everything a customer sees says Zephric. Authenticator entries
 made before the rename are labelled "Construction RCM" and keep working.
 
 Everyone who opens `/` sees the public Zephric website
-(`src/app/(marketing)/`), with a "design partner" inquiry form stored in the
-`inquiries` table; a signed-in member is offered "Continue to dashboard"
-rather than being sent away from the page. See
+(`src/app/(marketing)/`), with a "design partner or demonstration" inquiry form
+stored in the `inquiries` table; a signed-in member is offered "Continue to
+dashboard" rather than being sent away from the page. `/sample` is a public
+sample workflow that needs no account: one fictitious billing package followed
+from arrival to decision, built from the product's own output for that
+document. See
 [operations: the public website](docs/operations.md#the-public-website).
+
+A new member is welcomed once (two questions, then a choice between the
+example workspace and setting up their own project), and from then on has a
+setup guide worked out from the organisation's records, two product tours and
+a Help menu that reopens all of it. See [Onboarding](#onboarding).
 
 A native Android and iOS app (`mobile/`, React Native through Expo) covers the
 work away from a desk: photographing or attaching a pay application with
@@ -52,8 +60,11 @@ pnpm install
 pnpm dev
 ```
 
-Open http://localhost:3000, choose **Set up your company**, then on the
-overview page choose **Create the demo workspace**. It builds in a few seconds.
+Open http://localhost:3000 and choose **Explore a sample workflow** to see the
+public sample without an account. To go further, choose **Sign in → Set up
+your company**, and on the welcome step choose **Explore a ready-made
+example**: the example workspace (called the demo workspace in the code)
+builds in under a minute and opens with a short tour.
 
 Alternatively, create a sign-in and the demo workspace from the terminal (stop
 the dev server first, because the embedded database opens in one process at a
@@ -69,8 +80,9 @@ monitoring and onboarding the first customer.
 
 ## What to look at first
 
-In the demo workspace (fictitious companies; a separate organisation from your
-own):
+In the example workspace (fictitious companies; a separate organisation from
+your own). **Help → Tour: how billing is reviewed** walks through the first
+two points:
 
 1. **Pay applications** lists what needs attention. Open *Lone Star Electric
    #5*: it re-bills $18,400 that was already certified. Click **Show in
@@ -551,6 +563,46 @@ is `/portal/[token]`, managed from the subcontract page).
   retried. With no email provider configured nothing is sent and the
   subcontract page says so.
 
+### Onboarding
+
+Three things, kept apart on purpose (`src/server/services/onboarding.ts`):
+
+- **The welcome step** (`/start`). A membership with no onboarding record is
+  new: its member is sent to `/start` once, from the app layout. It asks what
+  they will mostly do (their *focus*, offered only where their role can do the
+  work), and, of someone who manages the organisation, the company type and
+  where its projects are. The focus orders the overview and its "Needs you"
+  list (`src/lib/next-actions.ts`); the company profile
+  (`organizations.settings.profile`) only changes guidance. Neither grants or
+  removes any permission. Migration 0011 gave every existing membership an
+  empty record, so nobody who was already a member is interrupted.
+- **The setup guide** (`/get-started`, `src/lib/setup-guide.ts`). Eight steps
+  from an empty organisation to a first decided application. No step is ticked
+  by hand: each is done when the record exists, whoever made it, so the guide
+  can be left and resumed by anyone on the team. The one exception, "see what
+  was read", is noted per member the first time they open an application. A
+  step the member's role cannot do says who can.
+- **Tours** (`src/components/tour/`). A step names a control by its
+  `data-tour` attribute and is only ever shown against a control that is on
+  screen; optional steps are passed over where the control is absent (a narrow
+  screen, a role without it). The tour shields the page while a step is
+  showing and never operates a control: steps that are the member's to do wait
+  for their own click, so nothing is approved, sent or deleted by a tour.
+  Progress is saved on the membership (`memberships.onboarding`), so a tour
+  survives a reload or signing in again; closing it pauses it, and Help
+  restarts either tour at any time.
+
+The **public sample** (`/sample`) is a static page. Its content is
+`src/content/sample-workflow.json`, written by `pnpm sample:build`: the script
+creates a throwaway in-memory database, runs one fictitious subcontract
+through the real intake, reading, reconciliation and approval code
+(`src/server/services/sample-workflow.ts`), and saves what the review
+workspace would show for the last, undecided application, with the PDF under
+`public/sample/`. `tests/sample-workflow.test.ts` rebuilds it and fails when
+the saved copy no longer matches, so the page and the homepage's preview
+cannot show a result the product would not produce. What a visitor does on the
+page (writing a reason, approving) happens in their browser tab only.
+
 ### Background work
 
 `src/server/jobs.ts`. A queue in the `jobs` table: `queued → running →
@@ -774,8 +826,10 @@ Status on 2026-11-18, `main`. The current phase is summarised in
 [docs/phase-3-report.md](docs/phase-3-report.md), the previous one in
 [docs/phase-2-report.md](docs/phase-2-report.md).
 
-**Verified by automated tests.** `pnpm test`: 575 passed, 3 skipped (the
-skipped tests need a PostgreSQL server). `pnpm test:pg` on a throwaway
+**Verified by automated tests.** `pnpm test`: 598 passed, 3 skipped (the
+skipped tests need a PostgreSQL server; counted on 2026-11-22 as 585 in a
+checkout without `mobile/node_modules`, where the 13 phone-formatting tests
+cannot load, plus those 13). `pnpm test:pg` on a throwaway
 PostgreSQL server: 496 passed (run before cost control, billing periods,
 owner billing, the subcontractor portal and budgets by cost code were added;
 not re-run since). `pnpm typecheck` is clean and `pnpm build`
@@ -846,6 +900,17 @@ succeeds, on Node 22; `npx tsc --noEmit` in `mobile/` is clean. Covered:
   using the lines; the overview's line, unassigned and forecast risks; the
   CSV; starting from the subcontracts, including a budget below what is
   committed shared in proportion; and every change audited.
+- Onboarding (`tests/onboarding.test.ts`): the welcome step shown once to a
+  new membership and never to an existing one or in the example workspace;
+  focuses limited to what a role can do; the company profile taken only from
+  someone who manages the organisation, audited, and kept when review policy
+  changes; the setup guide following an organisation's records from empty to
+  a decided application, per role, with organisation isolation; tour progress,
+  pausing and finishing per member; and the overview's "Needs you" list never
+  offering a role work it cannot do. The public sample
+  (`tests/sample-workflow.test.ts`): the saved snapshot equals what the
+  product produces for the sample package today, and its PDF and highlight
+  positions are consistent.
 - The mobile API (`tests/mobile.test.ts`): bearer sign-in and sign-out (the
   token is never read from a query string), the second step, organisation
   isolation, refusal of a member who owes their organisation two-step
@@ -929,12 +994,25 @@ list showed no budget for a project with lines, line removal had no
 confirmation, and panel headers squeezed their text beside their buttons on
 narrow screens.
 
+On 2026-11-22, on a local server with a scratch database, the first-run
+experience: the public sample (all four steps, the PDF drawn with its
+highlights, the correction wording, approval locked until each blocking
+finding has a reason), sign-up with live password feedback landing on the
+welcome step, the example workspace built from there with the review tour
+starting by itself and followed through all ten steps across two pages
+(including the steps the visitor performs), "Set up my own project" returning
+to the member's own organisation at the setup guide, the overview's "Needs
+you" list and first-run state, the Help menu, and the homepage, sample,
+welcome step and overview at 375 px. Not exercised by hand: invitation
+acceptance into an established organisation, the tours on a touch device, and
+anything on the live site (this release is not deployed).
+
 **Verified against real infrastructure:**
 
 | What | Result |
 |---|---|
 | Vercel + Supabase production | https://zephric.vercel.app (formerly https://construction-rcm.vercel.app, which still answers), Node 22, region sin1, all secrets set. Checked live on 2026-11-15: `/api/health` returns `ok` with PostgreSQL reached through Supabase's session pooler and TLS **verified** against the configured CA, the Data API exposing no table and no table without RLS, documents stored in the database, and the queue empty. `/api/jobs/run` refuses no token and a wrong token (401) and, with `CRON_SECRET`, runs the queue against the live database (200). Signed-out pages redirect to sign-in; the sign-up page renders. |
-| Supabase project `construction-rcm` | Schema applied (migrations 0000–0010, recorded under the repository's versions, applied by hand; 0008, the owner billing tables, on 2026-11-17, and 0009, the subcontractor portal tables, and 0010, the budget lines and changes, on 2026-11-18, with row-level security confirmed on each new table). The Data API, probed from outside with both public keys, refuses every table. |
+| Supabase project `construction-rcm` | Schema applied (migrations 0000–0011, recorded under the repository's versions, applied by hand; 0008, the owner billing tables, on 2026-11-17, and 0009, the subcontractor portal tables, and 0010, the budget lines and changes, on 2026-11-18, with row-level security confirmed on each new table; 0011, the `memberships.onboarding` column, on 2026-11-23, with both existing memberships confirmed to hold an empty record and `/api/health` still `ok` on the code then live). The Data API, probed from outside with both public keys, refuses every table. |
 | Docker image and Compose stack | Built and run to a healthy state on 2026-11-15, before that day's authentication changes; not rebuilt since. |
 | Signed-in use of the live site | On 2026-11-15 the owner signed up on the live site, and a project, a subcontractor and a subcontract with a three-line schedule of values ($500,000.00, retainage 10% / 10%) were created through the interface and confirmed in the Supabase database. |
 | Uploads and reading on the live site | On 2026-11-15 the five sample PDFs were uploaded as one package, including a 5.9 MB file sent in 4 MiB parts; every stored object matches its original byte for byte (SHA-256). The first reading failed for every file: pdf.js's worker was not in the deployed functions (fixed in [PR #2](https://github.com/arsalannkhann/construction-rcm/pull/2); the health check now opens a test PDF so this shows as `degraded`). After the fix, the four extra files were removed from the package through the interface ([PR #3](https://github.com/arsalannkhann/construction-rcm/pull/3)) and the package was read again: the 4-page file was split into pay application, schedule of values, lien waiver and one unreadable page; it was read as application #1 for the period to 2026-09-30, matched to SC-2301-16, with $99,000.00 requested and verified and $11,000.00 retainage, all equal to the generator's figures. The only open finding was the unreadable page (`doc.unreadable_pages`), with 26 checks passed. Each removal was audited and every background job succeeded on its first attempt. |
@@ -1024,12 +1102,16 @@ were not available:**
 ```
 src/app                  pages, server actions, route handlers
   (auth)/                sign-in, sign-up, invitations, password reset
-  (app)/                 overview, applications, contracts, projects,
-                         subcontractors, transfers, activity, settings
+  (app)/                 overview, get-started, applications, billing,
+                         contracts, projects, subcontractors, transfers
+                         (shown as Exports), activity, settings
+  (marketing)/, sample/  the public website and its sample workflow
+  start/                 the welcome step
   api/                   uploads and parts, documents, health, scheduler,
                          inbound email, Procore OAuth, exports
   api/mobile/            the mobile app's API (bearer sessions)
-src/components           UI kit, shell, charts, record views
+src/components           UI kit, shell, charts, record views, onboarding, tours, the sample
+src/content              the public sample's saved snapshot and its type
 src/lib                  money and retainage arithmetic, upload client, helpers
 src/server
   recon/                 reconciliation engine and matching (pure)
@@ -1046,7 +1128,7 @@ src/db                   schema, connection, migrations, withOrgLock
 drizzle/                 SQL migrations (`pnpm db:generate` after a schema change)
 supabase/                the same migrations for Supabase's GitHub integration (`pnpm db:supabase`)
 eval/                    extraction evaluation: synthetic gate, truth template, real documents (git-ignored)
-scripts/                 seed, reset-password, eval-extraction, samples, migration sync
+scripts/                 seed, reset-password, eval-extraction, samples, the public sample, migration sync
 tests/                   Vitest
 docs/                    operations, authentication, mobile, conventions, extraction evaluation, Procore notes and validation, phase reports
 mobile/                  the Android and iOS app (Expo); docs/mobile.md

@@ -19,7 +19,7 @@ export function WelcomeForm() {
         start(async () => {
           const result = await createOrgAction(name);
           if (!result.ok) setError(result.error);
-          else window.location.assign('/overview');
+          else window.location.assign('/start');
         });
       }}
     >

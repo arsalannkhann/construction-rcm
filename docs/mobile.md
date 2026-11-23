@@ -59,7 +59,7 @@ are in `mobile/src/lib/uploads.ts`, tested in `tests/mobile-uploads.test.ts`.
 **Description, tags and amount.** When sending, a person can add a
 description, tags (tapping the company's existing ones, or typing a new one)
 and the amount on the receipt. They are stored on the application
-(`description`, `tags`, `stated_amount`, migration 0011), kept apart from what
+(`description`, `tags`, `stated_amount`, migration 0012), kept apart from what
 Zephric reads and verifies, and returned in lists and the bill detail.
 `GET /api/mobile/tags` offers the company's tags, most used first. A single
 photo keeps the typed name ("Concrete.jpg") instead of "Page 1.jpg".

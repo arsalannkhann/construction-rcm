@@ -11,7 +11,7 @@ import { procoreStatus } from '@/server/integrations/procore';
 import { listAwaitingTransfer, listTransfers } from '@/server/services/exports';
 import { ReadyTable } from './ready-table';
 
-export const metadata = { title: 'Transfers' };
+export const metadata = { title: 'Exports' };
 
 const KIND: Record<string, string> = { pdf: 'Approval record (PDF)', csv: 'CSV', json: 'JSON', procore: 'Procore invoice' };
 
@@ -25,7 +25,7 @@ export default async function TransfersPage() {
 
   return (
     <Page>
-      <PageHeader title="Transfers" description="Approved applications leave Zephric here, as files for your accounting system or as draft invoices in a connected system. Every transfer is produced from the approved record and logged." />
+      <PageHeader title="Exports" description="Approved applications leave Zephric here, as files for your accounting system or as draft invoices in a connected system. Every export is produced from the approved record and logged." />
 
       <Panel className="mb-4 flex items-center gap-3 px-4 py-3">
         <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sunken text-ink-3">

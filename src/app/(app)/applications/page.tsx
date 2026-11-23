@@ -46,6 +46,9 @@ export default async function ApplicationsPage({ searchParams }: { searchParams:
   };
   const scope = rows[0];
 
+  // The row the product tour points at: one with something to find, else the first.
+  const tourRow = (rows.find((r) => r.openBlocking > 0) ?? rows[0])?.id ?? null;
+
   return (
     <Page width="wide">
       <PageHeader
@@ -61,7 +64,7 @@ export default async function ApplicationsPage({ searchParams }: { searchParams:
         }
       />
 
-      <div className="mb-3 flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-line">
+      <div data-tour="queue-tabs" className="mb-3 flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-line">
         {views.map((v) => {
           const n = v.statuses.length ? v.statuses.reduce((a, s) => a + counts[s], 0) : total;
           const on = v.key === view.key;
@@ -128,7 +131,7 @@ export default async function ApplicationsPage({ searchParams }: { searchParams:
                 const age = daysBetween(r.receivedAt);
                 const open = ['needs_matching', 'needs_review', 'pending_approval', 'on_hold'].includes(r.status);
                 return (
-                  <tr key={r.id} className="group relative hover:bg-canvas/70">
+                  <tr key={r.id} data-tour={r.id === tourRow ? 'queue-row' : undefined} className="group relative hover:bg-canvas/70">
                     <Td className="pl-4">
                       <Link href={`/applications/${r.id}`} className="font-medium text-ink after:absolute after:inset-0">
                         {r.subcontractorName ?? r.stated?.contractorName ?? 'Unidentified'}

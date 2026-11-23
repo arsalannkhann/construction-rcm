@@ -36,6 +36,48 @@ export type OrgSettings = {
    * reminds them ahead of it and once after it (src/server/services/portal.ts).
    */
   portalDueDay: number;
+  /**
+   * What the organisation said about itself in the welcome step. It changes
+   * wording and guidance only: no check or permission depends on it. Absent
+   * until someone answers.
+   */
+  profile?: OrgProfile;
+};
+
+export const ORG_KINDS = ['general_contractor', 'subcontractor', 'owner_developer', 'other'] as const;
+export type OrgKind = (typeof ORG_KINDS)[number];
+export const ORG_REGIONS = ['us', 'india', 'other'] as const;
+export type OrgRegion = (typeof ORG_REGIONS)[number];
+export type OrgProfile = { kind: OrgKind; region: OrgRegion };
+
+/** What a member mostly comes here to do. Chosen in the welcome step; it orders the overview and picks the tour. */
+export const MEMBER_FOCUSES = ['review', 'approve', 'oversee', 'projects'] as const;
+export type MemberFocus = (typeof MEMBER_FOCUSES)[number];
+
+export const TOUR_IDS = ['review', 'workspace'] as const;
+export type TourId = (typeof TOUR_IDS)[number];
+
+/**
+ * One member's onboarding in one organisation (memberships.onboarding). Setup
+ * progress itself is never stored: it is read from the organisation's records,
+ * so a step is done when the work is done, whoever did it.
+ */
+export type MemberOnboarding = {
+  /** When the welcome step was answered or skipped. Until then a new member of a new organisation is shown it. */
+  welcomedAt?: string;
+  focus?: MemberFocus;
+  /** How they chose to start: with the ready-made example, or with their own project. */
+  path?: 'example' | 'real';
+  /** The setup guide was put away by this member. It stays reachable from Help. */
+  guideHiddenAt?: string;
+  /** Noted the first time this member is shown a finished setup guide, so it stops being offered (and counted) on every page. */
+  setupDoneAt?: string;
+  /** When this member first opened an application's review workspace: the one setup step no record shows. */
+  openedReviewAt?: string;
+  /** Tours finished or skipped, so they are not offered again unasked. */
+  tours?: Partial<Record<TourId, { status: 'done' | 'skipped'; at: string }>>;
+  /** A tour in progress: the step to come back to, including after signing in again. */
+  activeTour?: { id: TourId; step: number; /** Put aside by the member: offered again, not reopened over their work. */ paused?: boolean } | null;
 };
 
 export const DEFAULT_ORG_SETTINGS: OrgSettings = {

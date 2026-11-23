@@ -4,6 +4,7 @@ import { can } from '@/server/auth/permissions';
 import { requireCtx } from '@/server/auth/session';
 import { aiConfig, emailConfig } from '@/server/config';
 import { canPushToProcore, procoreStatus } from '@/server/integrations/procore';
+import { getOnboardingState, noteOpenedReview } from '@/server/services/onboarding';
 import { getReviewData } from '@/server/services/queries';
 import { ProcessingScreen } from './processing';
 import { ReviewWorkspace } from './workspace';
@@ -26,6 +27,9 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
   if (data.app.status === 'processing') {
     return <ProcessingScreen id={id} files={data.documents.map((d) => d.filename)} error={data.app.processingError} aiConfigured={aiConfig().configured} />;
   }
+
+  // The setup guide's "see what was read" step: no record shows it, so it is noted here, once per member.
+  if (!ctx.isDemo) await noteOpenedReview(db, ctx, await getOnboardingState(db, ctx));
 
   const status = await procoreStatus(db, ctx);
   const push = data.app.status === 'approved' ? await canPushToProcore(db, ctx, id) : { available: false, reason: null, warning: null };

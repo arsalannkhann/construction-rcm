@@ -1,5 +1,5 @@
 {
-  "id": "c297adbb-3d50-4d21-9353-a74cb6db0d88",
+  "id": "5b92e4b1-0870-47eb-b220-dede22fc6d3e",
   "prevId": "51acb03c-1b38-433f-8b79-19f3fd60ca41",
   "version": "7",
   "dialect": "postgresql",
@@ -2676,6 +2676,12 @@
           "notNull": true,
           "default": "'active'"
         },
+        "onboarding": {
+          "name": "onboarding",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -3695,24 +3701,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "tags": {
-          "name": "tags",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "stated_amount": {
-          "name": "stated_amount",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
         },
         "submitted_for_approval_at": {
           "name": "submitted_for_approval_at",
