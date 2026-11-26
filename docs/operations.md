@@ -171,11 +171,18 @@ Then check that it is recorded, and only then merge:
 select version, name from supabase_migrations.schema_migrations order by version;
 ```
 
-Migrations 0000–0011 are applied to `construction-rcm` and recorded under the
+Migrations 0000–0012 are applied to `construction-rcm` and recorded under the
 same versions as the files (0007, the project budget column, and 0008, the
 owner billing tables, on 2026-11-17; 0009, the subcontractor portal tables, and
 0010, the budget lines and changes, on 2026-11-18; 0011, the
-`memberships.onboarding` column, on 2026-11-23).
+`memberships.onboarding` column, on 2026-11-23; 0012, the `description`,
+`tags` and `stated_amount` columns on `pay_applications`, on 2026-11-26).
+
+0012 was applied after its release had already been deployed. Until it was,
+the live deployment refused every request that touched the database
+(`/api/health` reported `down` and named the missing migration, and sign-in
+returned 500). It adds three nullable columns and changes no existing row;
+`/api/health` returned `ok` straight after, without a restart.
 
 0011 adds one nullable column and gave every membership that existed then an
 empty onboarding record, so members who were already there are not shown the
