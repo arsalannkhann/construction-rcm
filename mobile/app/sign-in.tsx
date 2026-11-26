@@ -27,7 +27,7 @@ export default function SignIn() {
 
   const submit = async () => {
     if (!email.trim() || !password) {
-      setError('Enter your email and password.');
+      setError('Enter your email and password');
       return;
     }
     setBusy(true);
@@ -50,7 +50,7 @@ export default function SignIn() {
           <BrandMark size={44} />
           <View style={{ gap: 6 }}>
             <T v="display">Sign in to Zephric</T>
-            <T tone="ink3">Capture billing documents, follow every application, and act on what needs you.</T>
+            <T tone="ink3">Send bills and receipts from the job, and find any of them in seconds</T>
           </View>
         </View>
 
@@ -72,7 +72,7 @@ export default function SignIn() {
         <View style={{ flex: 1 }} />
         <View style={{ gap: 10, alignItems: 'center' }}>
           <T v="caption" tone="ink3" style={{ textAlign: 'center' }}>
-            New to Zephric? Create your organisation on the web, then sign in here.
+            New to Zephric? Ask your company for an invite, or set your company up on the website
           </T>
           <Pressable onPress={() => setServerOpen(true)} accessibilityRole="button" style={{ flexDirection: 'row', alignItems: 'center', gap: 6, padding: 6 }}>
             <Server size={13} color={p.ink3} />

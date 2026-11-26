@@ -16,7 +16,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 import ChevronRight from 'lucide-react-native/icons/chevron-right';
 import { radius, usePalette, type Palette } from '@/theme';
 import type { AppStatus } from '@/lib/api';
@@ -27,16 +27,20 @@ export type IconType = ComponentType<{ size?: number; color?: string; strokeWidt
 
 type Variant = 'display' | 'title' | 'heading' | 'body' | 'label' | 'caption' | 'eyebrow' | 'amount' | 'amountLarge';
 
+// Weights stay at 400–600 and hierarchy comes from size and colour. Sizes lean
+// large: many people using this are not used to reading dense software.
+// Tight tracking only on the large display sizes, never on small text.
 const variants: Record<Variant, TextStyle> = {
-  display: { fontSize: 30, lineHeight: 36, fontWeight: '700', letterSpacing: -0.6 },
-  title: { fontSize: 22, lineHeight: 28, fontWeight: '700', letterSpacing: -0.4 },
-  heading: { fontSize: 16, lineHeight: 22, fontWeight: '600', letterSpacing: -0.2 },
-  body: { fontSize: 15, lineHeight: 21 },
-  label: { fontSize: 14, lineHeight: 19, fontWeight: '500' },
-  caption: { fontSize: 13, lineHeight: 18 },
-  eyebrow: { fontSize: 11, lineHeight: 14, fontWeight: '600', letterSpacing: 0.9, textTransform: 'uppercase' },
-  amount: { fontSize: 15, lineHeight: 20, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  amountLarge: { fontSize: 28, lineHeight: 34, fontWeight: '700', letterSpacing: -0.5, fontVariant: ['tabular-nums'] },
+  display: { fontSize: 30, lineHeight: 36, fontWeight: '600', letterSpacing: -0.4 },
+  title: { fontSize: 24, lineHeight: 30, fontWeight: '600', letterSpacing: -0.2 },
+  heading: { fontSize: 17, lineHeight: 24, fontWeight: '600' },
+  body: { fontSize: 16, lineHeight: 22 },
+  label: { fontSize: 15, lineHeight: 20, fontWeight: '500' },
+  caption: { fontSize: 14, lineHeight: 19 },
+  /** Section labels: sentence case, a quiet step above the content. */
+  eyebrow: { fontSize: 14, lineHeight: 19, fontWeight: '500' },
+  amount: { fontSize: 16, lineHeight: 22, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  amountLarge: { fontSize: 28, lineHeight: 34, fontWeight: '600', letterSpacing: -0.3, fontVariant: ['tabular-nums'] },
 };
 
 type Tone = 'ink' | 'ink2' | 'ink3' | 'accent' | 'pass' | 'warn' | 'block' | 'onAccent' | 'aqua';
@@ -246,13 +250,14 @@ export function Button({
   const p = usePalette();
   const fills: Record<ButtonKind, { bg: string; fg: string; border: string }> = {
     primary: { bg: p.scheme === 'dark' ? p.accent : p.ink, fg: '#ffffff', border: 'transparent' },
-    approve: { bg: p.scheme === 'dark' ? '#1f9d63' : p.pass, fg: '#ffffff', border: 'transparent' },
+    approve: { bg: '#15803d', fg: '#ffffff', border: 'transparent' },
     secondary: { bg: p.surface, fg: p.ink, border: p.lineStrong },
     ghost: { bg: 'transparent', fg: p.accentText, border: 'transparent' },
     danger: { bg: p.blockSoft, fg: p.block, border: 'transparent' },
   };
   const f = fills[kind];
-  const height = size === 'lg' ? 52 : size === 'sm' ? 36 : 46;
+  // Large touch targets: many people using this are on a site, with gloves or in a hurry.
+  const height = size === 'lg' ? 56 : size === 'sm' ? 40 : 48;
   const off = disabled || loading;
   return (
     <Pressable
@@ -268,7 +273,7 @@ export function Button({
       style={({ pressed }) => [
         {
           height,
-          borderRadius: radius.pill,
+          borderRadius: radius.md,
           backgroundColor: f.bg,
           borderWidth: kind === 'secondary' ? StyleSheet.hairlineWidth * 2 : 0,
           borderColor: f.border,
@@ -277,13 +282,14 @@ export function Button({
           alignItems: 'center',
           justifyContent: 'center',
           gap: 8,
-          opacity: off ? 0.55 : pressed ? 0.85 : 1,
+          opacity: off ? 0.5 : 1,
+          transform: [{ scale: pressed && !off ? 0.98 : 1 }],
         },
         style,
       ]}
     >
-      {loading ? <ActivityIndicator size="small" color={f.fg} /> : Icon ? <Icon size={size === 'sm' ? 16 : 18} color={f.fg} strokeWidth={2} /> : null}
-      <Text style={{ color: f.fg, fontSize: size === 'sm' ? 14 : 15, fontWeight: '600' }} maxFontSizeMultiplier={1.4}>
+      {loading ? <ActivityIndicator size="small" color={f.fg} /> : Icon ? <Icon size={18} color={f.fg} strokeWidth={1.75} /> : null}
+      <Text style={{ color: f.fg, fontSize: size === 'sm' ? 15 : 16, fontWeight: '600' }} maxFontSizeMultiplier={1.4}>
         {label}
       </Text>
     </Pressable>
@@ -343,16 +349,16 @@ export function Segmented<V extends string>({ value, options, onChange }: { valu
             accessibilityRole="tab"
             accessibilityState={{ selected: on }}
             style={{
-              height: 34,
-              paddingHorizontal: 14,
-              borderRadius: radius.pill,
+              height: 40,
+              paddingHorizontal: 16,
+              borderRadius: radius.md,
               justifyContent: 'center',
-              backgroundColor: on ? (p.scheme === 'dark' ? p.raised : p.ink) : p.surface,
-              borderWidth: StyleSheet.hairlineWidth * 2,
-              borderColor: on ? 'transparent' : p.line,
+              backgroundColor: on ? p.ink : p.surface,
+              borderWidth: 1,
+              borderColor: on ? p.ink : p.lineStrong,
             }}
           >
-            <Text style={{ color: on ? (p.scheme === 'dark' ? p.ink : '#ffffff') : p.ink2, fontSize: 14, fontWeight: '600' }}>{o.label}</Text>
+            <Text style={{ color: on ? p.canvas : p.ink, fontSize: 15, fontWeight: '500' }}>{o.label}</Text>
           </Pressable>
         );
       })}
@@ -370,7 +376,7 @@ export function IconButton({ icon: Icon, onPress, label, tone }: { icon: IconTyp
       hitSlop={8}
       style={({ pressed }) => ({ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? p.sunken : 'transparent' })}
     >
-      <Icon size={20} color={tone ?? p.ink2} />
+      <Icon size={20} color={tone ?? p.ink2} strokeWidth={1.75} />
     </Pressable>
   );
 }
@@ -407,8 +413,8 @@ export function Pill({ label, tone = 'neutral' }: { label: string; tone?: 'neutr
   } as const;
   const [bg, fg] = map[tone];
   return (
-    <View style={{ backgroundColor: bg, borderRadius: radius.pill, paddingHorizontal: 9, paddingVertical: 3, alignSelf: 'flex-start' }}>
-      <Text style={{ color: fg, fontSize: 12, fontWeight: '600' }} maxFontSizeMultiplier={1.3}>
+    <View style={{ backgroundColor: bg, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, alignSelf: 'flex-start' }}>
+      <Text style={{ color: fg, fontSize: 13, fontWeight: '500' }} maxFontSizeMultiplier={1.3}>
         {label}
       </Text>
     </View>
@@ -420,11 +426,11 @@ export function Banner({ tone = 'neutral', icon: Icon, title, children, action }
   const map = { neutral: [p.sunken, p.ink2], warn: [p.warnSoft, p.warn], block: [p.blockSoft, p.block], pass: [p.passSoft, p.pass], accent: [p.accentSoft, p.accentText] } as const;
   const [bg, fg] = map[tone];
   return (
-    <View style={{ backgroundColor: bg, borderRadius: radius.md, padding: 14, flexDirection: 'row', gap: 10 }} accessibilityRole="summary">
-      {Icon ? <Icon size={18} color={fg} /> : null}
+    <View style={{ backgroundColor: bg, borderRadius: radius.md, padding: 16, flexDirection: 'row', gap: 12 }} accessibilityRole="summary">
+      {Icon ? <Icon size={20} color={fg} strokeWidth={1.75} /> : null}
       <View style={{ flex: 1, gap: 2 }}>
-        {title ? <Text style={{ color: fg, fontSize: 14, fontWeight: '600' }}>{title}</Text> : null}
-        {children ? <Text style={{ color: p.ink2, fontSize: 13.5, lineHeight: 19 }}>{children}</Text> : null}
+        {title ? <Text style={{ color: fg, fontSize: 16, lineHeight: 22, fontWeight: '600' }}>{title}</Text> : null}
+        {children ? <Text style={{ color: p.ink2, fontSize: 15, lineHeight: 21 }}>{children}</Text> : null}
         {action ? <View style={{ marginTop: 8, alignItems: 'flex-start' }}>{action}</View> : null}
       </View>
     </View>
@@ -437,7 +443,7 @@ export function Empty({ icon: Icon, title, children, action }: { icon?: IconType
     <View style={{ alignItems: 'center', paddingVertical: 36, paddingHorizontal: 24, gap: 8 }}>
       {Icon ? (
         <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: p.sunken, alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
-          <Icon size={22} color={p.ink3} />
+          <Icon size={22} color={p.ink3} strokeWidth={1.75} />
         </View>
       ) : null}
       <T v="heading" style={{ textAlign: 'center' }}>
@@ -481,7 +487,7 @@ export function PressableCard({ children, onPress, style, ...rest }: PressablePr
       style={({ pressed }) => [
         { backgroundColor: p.surface, borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: p.line, padding: 16 },
         p.scheme === 'light' ? styles.shadow : null,
-        pressed && { opacity: 0.9, transform: [{ scale: 0.995 }] },
+        pressed && { backgroundColor: p.sunken },
         style,
       ]}
     >
@@ -492,28 +498,23 @@ export function PressableCard({ children, onPress, style, ...rest }: PressablePr
 
 // ── Brand ───────────────────────────────────────────────────────────────────
 
+/**
+ * The Zephric mark, drawn flat: the two bars in graphite and the stroke in the
+ * accent, the same shape as the website's mark without its gradients.
+ */
 export function BrandMark({ size = 28 }: { size?: number }) {
+  const p = usePalette();
   return (
     <Svg width={size} height={size} viewBox="0 0 64 64" accessibilityLabel="Zephric">
-      <Defs>
-        <LinearGradient id="bars" x1="0" y1="0" x2="1" y2="1">
-          <Stop offset="0" stopColor="#0759ff" />
-          <Stop offset="1" stopColor="#0636bd" />
-        </LinearGradient>
-        <LinearGradient id="diag" x1="0" y1="0" x2="0.8" y2="1">
-          <Stop offset="0" stopColor="#00e1ca" />
-          <Stop offset="1" stopColor="#0095fc" />
-        </LinearGradient>
-      </Defs>
-      <Path fill="url(#bars)" d="M18 8h36L38 24H5zM25 40h34L44 56H10z" />
-      <Path fill="url(#diag)" d="M51 8c9 0 12 10 4 17L18 55c-8 6-16-4-9-11L46 10z" />
+      <Path fill={p.ink} d="M18 8h36L38 24H5zM25 40h34L44 56H10z" />
+      <Path fill={p.accent} d="M51 8c9 0 12 10 4 17L18 55c-8 6-16-4-9-11L46 10z" />
     </Svg>
   );
 }
 
 const styles = StyleSheet.create({
   shadow: {
-    shadowColor: '#0b1220',
+    shadowColor: '#000000',
     shadowOpacity: 0.05,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 2 },

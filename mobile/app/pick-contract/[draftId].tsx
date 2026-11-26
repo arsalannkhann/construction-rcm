@@ -2,7 +2,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import Check from 'lucide-react-native/icons/check';
-import Sparkles from 'lucide-react-native/icons/sparkles';
+import Wand from 'lucide-react-native/icons/wand';
 import { updateDraft, useDraft } from '@/lib/drafts';
 import { useContracts } from '@/lib/queries';
 import { usePalette } from '@/theme';
@@ -33,14 +33,14 @@ export default function PickContract() {
   return (
     <Screen>
       <Card padded={false}>
-        <Row left={<Sparkles size={20} color={p.accentText} />} title="Let Zephric match it" subtitle="From the project, subcontractor and contract on the documents" onPress={() => choose(null)} chevron={false} right={!draft?.contract ? <Check size={18} color={p.accentText} /> : null} />
+        <Row left={<Wand size={20} color={p.ink2} strokeWidth={1.75} />} title="Let Zephric work it out" subtitle="It reads the job and subcontractor from the bill" onPress={() => choose(null)} chevron={false} right={!draft?.contract ? <Check size={18} color={p.accentText} /> : null} />
       </Card>
-      <Field label="Search subcontracts" value={query} onChangeText={setQuery} placeholder="Subcontractor, project or contract number" autoCorrect={false} clearButtonMode="while-editing" />
+      <Field label="Search" value={query} onChangeText={setQuery} placeholder="Subcontractor, project or contract number" autoCorrect={false} clearButtonMode="while-editing" />
       {contracts.error ? <ErrorState error={contracts.error} onRetry={() => void contracts.refetch()} /> : null}
       {contracts.isLoading ? <LoadingCard rows={4} /> : null}
       {contracts.data && groups.length === 0 ? (
         <Card>
-          <Empty title={query ? 'No subcontract matches' : 'No active subcontracts'}>{query ? 'Try another name or number.' : 'Subcontracts are set up on the web.'}</Empty>
+          <Empty title={query ? 'Nothing matches' : 'No jobs set up yet'}>{query ? 'Try another name or number' : 'Jobs are set up on the Zephric website'}</Empty>
         </Card>
       ) : null}
       {groups.map(([group, items]) => (
@@ -59,7 +59,7 @@ export default function PickContract() {
         </Section>
       ))}
       <T v="caption" tone="ink3" style={{ textAlign: 'center' }}>
-        Only active subcontracts in your organisation are listed.
+        Only current jobs in your company are listed
       </T>
     </Screen>
   );

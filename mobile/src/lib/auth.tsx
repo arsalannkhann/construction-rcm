@@ -197,7 +197,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(
-    async (notice: string | null = 'You have signed out. Nothing from your organisation stays open in the app.') => {
+    async (notice: string | null = 'You have signed out. Nothing from your company stays open in the app.') => {
       const token = session.current?.token;
       if (token) await api('/api/mobile/session', { method: 'DELETE', token, timeoutMs: 8_000 }).catch(() => undefined);
       await forget(notice);

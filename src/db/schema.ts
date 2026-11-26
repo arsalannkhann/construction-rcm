@@ -521,6 +521,15 @@ export const payApplications = pgTable(
     openBlocking: integer('open_blocking').notNull().default(0),
     openWarnings: integer('open_warnings').notNull().default(0),
 
+    /**
+     * What the person who sent it said about it, so they can find it again:
+     * a description, tags ("Concrete", "Site 2") and the amount they typed, in
+     * cents. Their own words, kept apart from what Zephric read and verified.
+     */
+    description: text('description'),
+    tags: jsonb('tags').$type<string[]>(),
+    statedAmount: cents('stated_amount'),
+
     submittedForApprovalAt: ts('submitted_for_approval_at'),
     submittedForApprovalBy: text('submitted_for_approval_by').references(() => users.id),
     holdSince: ts('hold_since'),

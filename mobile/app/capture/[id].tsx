@@ -2,8 +2,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
-import { Alert, Image, Linking, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { Alert, Image, Linking, Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ArrowLeft from 'lucide-react-native/icons/arrow-left';
 import ArrowRight from 'lucide-react-native/icons/arrow-right';
@@ -13,11 +13,14 @@ import FileText from 'lucide-react-native/icons/file-text';
 import FileUp from 'lucide-react-native/icons/file-up';
 import FolderOpen from 'lucide-react-native/icons/folder-open';
 import Images from 'lucide-react-native/icons/images';
+import Plus from 'lucide-react-native/icons/plus';
 import RotateCw from 'lucide-react-native/icons/rotate-cw';
 import Send from 'lucide-react-native/icons/send';
 import Trash2 from 'lucide-react-native/icons/trash';
 import X from 'lucide-react-native/icons/x';
-import { addToDraft, deleteDraft, DraftLimitError, isSendable, MAX_DRAFT_FILES, moveInDraft, removeFromDraft, rotatePhoto, updateDraft, useDraft, type DraftFile, type IncomingSource } from '@/lib/drafts';
+import { amountInput, parseAmount } from '@/lib/amount';
+import { useTags } from '@/lib/queries';
+import { addToDraft, deleteDraft, useDrafts, DraftLimitError, isSendable, MAX_DRAFT_FILES, moveInDraft, removeFromDraft, rotatePhoto, updateDraft, useDraft, type DraftFile, type IncomingSource } from '@/lib/drafts';
 import { bytes, plural } from '@/lib/format';
 import { useSignedIn } from '@/lib/auth';
 import { submitDraft } from '@/lib/sender';
@@ -86,16 +89,9 @@ export default function DraftScreen() {
       return r.canceled ? null : r.assets.map((a) => ({ uri: a.uri, name: a.name, mimeType: a.mimeType ?? null, size: a.size ?? null }));
     });
 
-  const submit = () => {
-    if (!draft.contract) {
-      Alert.alert('Send without a subcontract?', 'Zephric will try to match it from the documents. If it cannot, a reviewer matches it by hand.', [
-        { text: 'Choose one', onPress: () => router.push(`/pick-contract/${draft.id}`) },
-        { text: 'Send', onPress: () => submitDraft(draft.id) },
-      ]);
-      return;
-    }
-    submitDraft(draft.id);
-  };
+  // No "send without a subcontract?" question: Zephric matches it from the
+  // documents, and choosing the job stays available below for those who know it.
+  const submit = () => submitDraft(draft.id);
 
   const remove = () =>
     Alert.alert('Delete this draft?', 'Its photos and files are removed from this phone. Anything already received by Zephric stays there.', [
@@ -112,7 +108,7 @@ export default function DraftScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: draft.title.trim() || 'New capture', headerRight: () => (draft.status !== 'sending' ? <IconButton icon={Trash2} label="Delete draft" onPress={remove} /> : null) }} />
+      <Stack.Screen options={{ title: draft.title.trim() || 'Send a bill', headerRight: () => (draft.status !== 'sending' ? <IconButton icon={Trash2} label="Delete draft" onPress={remove} /> : null) }} />
       <Screen>
         <OfflineBanner />
 
@@ -123,8 +119,8 @@ export default function DraftScreen() {
         ) : null}
 
         {draft.status === 'submitted' ? (
-          <Banner tone="pass" icon={CircleCheck} title="Received by Zephric" action={draft.applicationId ? <Button label="View application" size="sm" kind="secondary" onPress={() => router.replace(`/application/${draft.applicationId}`)} /> : undefined}>
-            Zephric confirmed it has this submission and is reading it now. The copies on this phone have been removed.
+          <Banner tone="pass" icon={CircleCheck} title="Sent – Zephric has it" action={draft.applicationId ? <Button label="Open" size="sm" kind="secondary" onPress={() => router.replace(`/application/${draft.applicationId}`)} /> : undefined}>
+            You can find it any time under My uploads.
           </Banner>
         ) : null}
         {draft.status === 'failed' ? (
@@ -134,19 +130,7 @@ export default function DraftScreen() {
         ) : null}
         {draft.status === 'queued' || draft.status === 'sending' ? <Progress progress={draft.progress} status={draft.status} note={draft.error} /> : null}
 
-        <Field label="Name (optional)" value={draft.title} onChangeText={(title) => updateDraft(draft.id, { title })} placeholder="For example, Lone Star Electric pay app 4" editable={!locked} maxLength={120} />
-
-        <Section title="Subcontract">
-          <Card padded={false}>
-            <Row
-              title={draft.contract ? draft.contract.label.split(' · ')[0]! : 'Let Zephric match it'}
-              subtitle={draft.contract ? `${draft.contract.group} · ${draft.contract.label.split(' · ').slice(1).join(' · ')}` : 'Or choose the subcontract this billing is for'}
-              onPress={locked ? undefined : () => router.push(`/pick-contract/${draft.id}`)}
-            />
-          </Card>
-        </Section>
-
-        <Section title={draft.files.length ? `Pages and files · ${draft.files.length}` : 'Pages and files'}>
+        <Section title={draft.files.length ? `Photos and files · ${draft.files.length}` : 'Photos and files'}>
           {draft.files.length > 0 ? (
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
               {draft.files.map((f, i) => (
@@ -179,7 +163,7 @@ export default function DraftScreen() {
           ) : (
             <Card>
               <T v="caption" tone="ink2">
-                Photograph each page in order, flat and well lit. Photos of one document are joined into a single PDF when sent. PDFs are sent as they are.
+                Take a photo of the receipt or bill. Several pages? Take one photo per page, in order
               </T>
             </Card>
           )}
@@ -193,10 +177,38 @@ export default function DraftScreen() {
           </View>
         ) : null}
 
+
+        <Field label="Name" value={draft.title} onChangeText={(title) => updateDraft(draft.id, { title })} placeholder="For example, Concrete for level 2" editable={!locked} maxLength={120} />
+
+        <AmountField draftId={draft.id} cents={draft.amountCents} locked={locked} />
+
+        <Field
+          label="Description (optional)"
+          value={draft.description}
+          onChangeText={(description) => updateDraft(draft.id, { description })}
+          placeholder="What it is for, who it is from"
+          editable={!locked}
+          maxLength={1000}
+          multiline
+          style={{ minHeight: 88 }}
+        />
+
+        <TagPicker draftId={draft.id} tags={draft.tags} locked={locked} />
+
+        <Section title="Which job is it for? (optional)">
+          <Card padded={false}>
+            <Row
+              title={draft.contract ? draft.contract.label.split(' · ')[0]! : 'Let Zephric work it out'}
+              subtitle={draft.contract ? `${draft.contract.group} · ${draft.contract.label.split(' · ').slice(1).join(' · ')}` : 'Or choose the subcontract yourself'}
+              onPress={locked ? undefined : () => router.push(`/pick-contract/${draft.id}`)}
+            />
+          </Card>
+        </Section>
+
         {draft.status !== 'submitted' ? (
           <View style={{ gap: 8 }}>
             <Button
-              label={draft.status === 'failed' ? 'Send again' : draft.status === 'queued' || draft.status === 'sending' ? 'Sending…' : 'Send to Zephric'}
+              label={draft.status === 'failed' ? 'Send again' : draft.status === 'queued' || draft.status === 'sending' ? 'Sending…' : 'Send'}
               icon={Send}
               size="lg"
               onPress={submit}
@@ -204,9 +216,9 @@ export default function DraftScreen() {
             />
             <T v="caption" tone="ink3" style={{ textAlign: 'center' }}>
               {draft.files.length === 0
-                ? 'Add at least one page or file.'
+                ? 'Add a photo or file first'
                 : !online
-                  ? 'You are offline. It will send when you are back online.'
+                  ? 'No internet right now. It will send by itself when you are back online'
                   : `${plural(draft.files.length, 'file')} · ${bytes(draft.files.reduce((n, f) => n + f.size, 0))}`}
             </T>
           </View>
@@ -221,12 +233,13 @@ function Progress({ progress, status, note }: { progress: number; status: 'queue
   const p = usePalette();
   return (
     <Card style={{ gap: 10 }}>
-      <T v="label">{status === 'sending' ? `Sending… ${Math.round(progress * 100)}%` : 'Waiting to send'}</T>
+      {/* A one-photo capture is a single piece, so a percentage would sit at 0% until it is done: say so plainly instead. */}
+      <T v="label">{status === 'sending' ? (progress > 0 ? `Sending… ${Math.round(progress * 100)}%` : 'Sending…') : 'Waiting to send'}</T>
       <View style={{ height: 6, borderRadius: 3, backgroundColor: p.sunken, overflow: 'hidden' }}>
         <View style={{ width: `${Math.max(4, Math.round(progress * 100))}%`, height: 6, backgroundColor: p.accent }} />
       </View>
       <T v="caption" tone="ink3">
-        {note ?? 'Kept on this phone until Zephric confirms it has it. You can leave this screen.'}
+        {note ?? 'Safe on this phone until Zephric has it. You can leave this screen. Find it later under My uploads.'}
       </T>
     </Card>
   );
@@ -299,15 +312,15 @@ function PreviewModal({ file, onClose }: { file: DraftFile | null; onClose: () =
   const isPhoto = file && (file.kind === 'photo' || file.kind === 'image');
   return (
     <Modal visible={!!file} animationType="fade" onRequestClose={onClose} transparent={false}>
-      <View style={{ flex: 1, backgroundColor: '#05080f' }}>
+      <View style={{ flex: 1, backgroundColor: '#0c0c0e' }}>
         {file && isPhoto ? <Image source={{ uri: file.path }} style={{ flex: 1 }} resizeMode="contain" /> : null}
         {file && !isPhoto ? (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24 }}>
-            <FileText size={40} color="#a9b4c8" />
+            <FileText size={40} color="#a1a1aa" strokeWidth={1.5} />
             <T v="heading" style={{ color: '#ffffff', textAlign: 'center' }}>
               {file.name}
             </T>
-            <T v="caption" style={{ color: '#a9b4c8' }}>
+            <T v="caption" style={{ color: '#a1a1aa' }}>
               {bytes(file.size)} · sent exactly as it is
             </T>
           </View>
@@ -317,5 +330,151 @@ function PreviewModal({ file, onClose }: { file: DraftFile | null; onClose: () =
         </View>
       </View>
     </Modal>
+  );
+}
+
+/** The amount on the receipt, typed as the person reads it: "12,400.50", "$85", "85". */
+function AmountField({ draftId, cents, locked }: { draftId: string; cents: number | null; locked: boolean }) {
+  const p = usePalette();
+  const [text, setText] = useState(() => amountInput(cents));
+  const parsed = parseAmount(text);
+  const invalid = parsed === 'invalid';
+  return (
+    <View style={{ gap: 6 }}>
+      <T v="label" tone="ink2">
+        Amount (optional)
+      </T>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          minHeight: 56,
+          borderRadius: radius.md,
+          borderWidth: 1,
+          borderColor: invalid ? p.block : p.lineStrong,
+          backgroundColor: p.surface,
+          paddingHorizontal: 14,
+          gap: 6,
+        }}
+      >
+        <T v="title" tone="ink3">
+          $
+        </T>
+        <TextInput
+          value={text}
+          onChangeText={(t) => {
+            setText(t);
+            const v = parseAmount(t);
+            if (v !== 'invalid') updateDraft(draftId, { amountCents: v });
+          }}
+          editable={!locked}
+          keyboardType="decimal-pad"
+          placeholder="0.00"
+          placeholderTextColor={p.ink4}
+          accessibilityLabel="Amount on the receipt"
+          style={{ flex: 1, fontSize: 24, fontWeight: '600', color: p.ink, paddingVertical: 10, fontVariant: ['tabular-nums'] }}
+        />
+      </View>
+      <T v="caption" tone={invalid ? 'block' : 'ink3'}>
+        {invalid ? 'Type the amount in numbers, like 1250.50' : 'The total on the receipt. Helps you find it later'}
+      </T>
+    </View>
+  );
+}
+
+/**
+ * Tags: the company's own, most used first, as big buttons to tap, and a box
+ * to add a new one. Picking from what is there keeps tags consistent without
+ * anyone having to set up a list.
+ */
+function TagPicker({ draftId, tags, locked }: { draftId: string; tags: string[]; locked: boolean }) {
+  const p = usePalette();
+  const session = useSignedIn();
+  const owner = session.profile.orgId ? { userId: session.profile.userId, orgId: session.profile.orgId } : null;
+  const company = useTags();
+  const drafts = useDrafts(owner);
+  const [typing, setTyping] = useState('');
+
+  // Chosen tags first, then the company's most used, then ones used on this phone.
+  const choices = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const t of [...tags, ...(company.data ?? []).map((c) => c.tag), ...drafts.flatMap((d) => d.tags ?? [])]) {
+      const key = t.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(t);
+    }
+    return out.slice(0, 16);
+  }, [tags, company.data, drafts]);
+
+  const has = (t: string) => tags.some((x) => x.toLowerCase() === t.toLowerCase());
+  const toggle = (t: string) => updateDraft(draftId, { tags: has(t) ? tags.filter((x) => x.toLowerCase() !== t.toLowerCase()) : [...tags, t].slice(0, 12) });
+  const addTyped = () => {
+    const t = typing.replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (t && !has(t)) updateDraft(draftId, { tags: [...tags, t].slice(0, 12) });
+    setTyping('');
+  };
+
+  return (
+    <View style={{ gap: 8 }}>
+      <T v="label" tone="ink2">
+        Tags (optional)
+      </T>
+      {choices.length > 0 ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {choices.map((t) => {
+            const on = has(t);
+            return (
+              <Pressable
+                key={t}
+                disabled={locked}
+                onPress={() => toggle(t)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: on }}
+                accessibilityLabel={`Tag ${t}`}
+                style={({ pressed }) => ({
+                  minHeight: 44,
+                  paddingHorizontal: 16,
+                  borderRadius: radius.md,
+                  borderWidth: 1,
+                  borderColor: on ? p.ink : p.lineStrong,
+                  backgroundColor: on ? p.ink : pressed ? p.sunken : p.surface,
+                  justifyContent: 'center',
+                })}
+              >
+                <T v="label" style={{ color: on ? p.canvas : p.ink }}>
+                  {t}
+                </T>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+      {!locked ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TextInput
+            value={typing}
+            onChangeText={setTyping}
+            onSubmitEditing={addTyped}
+            returnKeyType="done"
+            placeholder={choices.length > 0 ? 'Add another tag' : 'Add a tag, like Concrete or Site 2'}
+            placeholderTextColor={p.ink4}
+            accessibilityLabel="Add a tag"
+            maxLength={40}
+            style={{ flex: 1, minHeight: 48, borderRadius: radius.md, borderWidth: 1, borderColor: p.lineStrong, backgroundColor: p.surface, paddingHorizontal: 14, fontSize: 16, color: p.ink }}
+          />
+          <Pressable
+            onPress={addTyped}
+            disabled={!typing.trim()}
+            accessibilityRole="button"
+            accessibilityLabel="Add this tag"
+            style={({ pressed }) => ({ width: 48, height: 48, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? p.sunken : p.surface, borderWidth: 1, borderColor: p.lineStrong, opacity: typing.trim() ? 1 : 0.5 })}
+          >
+            <Plus size={20} color={p.ink2} strokeWidth={1.75} />
+          </Pressable>
+        </View>
+      ) : null}
+    </View>
   );
 }

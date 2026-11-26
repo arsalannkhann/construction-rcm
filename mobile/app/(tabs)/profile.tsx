@@ -11,7 +11,7 @@ import { useAuth, useSignedIn } from '@/lib/auth';
 import { deleteDraft, useDrafts } from '@/lib/drafts';
 import { initials, plural } from '@/lib/format';
 import { ThemeContext, usePalette, type ThemePref } from '@/theme';
-import { Button, Card, Divider, Pill, Row, Section, Segmented, T } from '@/ui/kit';
+import { Button, Card, Divider, Row, Section, Segmented, T } from '@/ui/kit';
 import { TabScreen } from '@/ui/tab-screen';
 
 export default function Profile() {
@@ -37,7 +37,7 @@ export default function Profile() {
       await switchOrganization(orgId);
       router.replace('/');
     } catch (err) {
-      Alert.alert('Could not switch organisation', messageOf(err));
+      Alert.alert('Could not switch company', messageOf(err));
     } finally {
       setSwitching(null);
     }
@@ -49,8 +49,8 @@ export default function Profile() {
       return;
     }
     Alert.alert(
-      `${plural(unsent.length, 'capture')} not sent`,
-      'Unsent captures stay on this phone, visible only to you in this organisation, unless you delete them.',
+      `${plural(unsent.length, 'bill')} not sent`,
+      'Bills you have not sent yet stay on this phone, and only you can see them, unless you delete them.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -68,14 +68,14 @@ export default function Profile() {
 
   const toggleBiometric = async (on: boolean) => {
     const ok = await setBiometric(on);
-    if (!ok && on) Alert.alert('Biometric unlock is not available', 'Set up Face ID, Touch ID or a fingerprint in your phone’s settings first.');
+    if (!ok && on) Alert.alert('Fingerprint or face unlock is not set up', 'Set it up in your phone’s settings first, then turn it on here.');
   };
 
   return (
-    <TabScreen title="Profile">
+    <TabScreen title="Me">
       <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-        <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: p.accentSoft, alignItems: 'center', justifyContent: 'center' }}>
-          <T v="heading" tone="accent">
+        <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: p.sunken, alignItems: 'center', justifyContent: 'center' }}>
+          <T v="heading" tone="ink2">
             {initials(session.profile.name)}
           </T>
         </View>
@@ -87,26 +87,26 @@ export default function Profile() {
             {session.profile.email}
           </T>
           {session.profile.role ? (
-            <View style={{ marginTop: 4 }}>
-              <Pill label={session.profile.role} tone="accent" />
-            </View>
+            <T v="caption" tone="ink2" style={{ marginTop: 4 }}>
+              {session.profile.role}
+            </T>
           ) : null}
         </View>
       </Card>
 
       {orgs.length > 0 ? (
-        <Section title="Organisation">
+        <Section title="Company">
           <Card padded={false}>
             {orgs.map((o, i) => (
               <View key={o.id}>
                 {i > 0 ? <Divider inset={16} /> : null}
                 <Row
                   title={o.name}
-                  subtitle={`${o.roleLabel}${o.isDemo ? ' · Demo workspace' : ''}`}
+                  subtitle={`${o.roleLabel}${o.isDemo ? ' · Practice company' : ''}`}
                   onPress={() => void choose(o.id)}
                   chevron={false}
                   right={switching === o.id ? <ActivityIndicator color={p.ink3} /> : o.id === session.profile.orgId ? <Check size={18} color={p.accentText} /> : null}
-                  accessibilityLabel={`${o.name}${o.id === session.profile.orgId ? ', current organisation' : ''}`}
+                  accessibilityLabel={`${o.name}${o.id === session.profile.orgId ? ', current company' : ''}`}
                 />
               </View>
             ))}
@@ -114,25 +114,25 @@ export default function Profile() {
         </Section>
       ) : null}
 
-      <Section title="Security">
+      <Section title="Signing in">
         <Card padded={false}>
           <Row
-            title="Biometric unlock"
-            subtitle={biometricAvailable === false ? 'Not set up on this phone' : 'Ask for Face ID or fingerprint when opening Zephric'}
+            title="Unlock with fingerprint or face"
+            subtitle={biometricAvailable === false ? 'Not set up on this phone' : 'Asks for it each time you open Zephric'}
             chevron={false}
             right={<Switch value={biometric} onValueChange={(v) => void toggleBiometric(v)} disabled={biometricAvailable === false && !biometric} trackColor={{ true: p.accent, false: p.lineStrong }} />}
           />
           <Divider inset={16} />
           <Row
-            title="Two-step verification"
-            subtitle={!session.me ? 'Shown when Zephric can be reached.' : session.me.user.mfaEnabled ? 'On for your account' : 'Off. Turn it on from Zephric on the web.'}
+            title="Extra sign-in code"
+            subtitle={!session.me ? 'Shown when you are online' : session.me.user.mfaEnabled ? 'A code from your phone each time you sign in' : 'Turn it on from the Zephric website'}
             chevron={false}
-            right={session.me ? <Pill label={session.me.user.mfaEnabled ? 'On' : 'Off'} tone={session.me.user.mfaEnabled ? 'pass' : 'warn'} /> : undefined}
+            right={session.me ? <T v="label" tone={session.me.user.mfaEnabled ? 'pass' : 'ink3'}>{session.me.user.mfaEnabled ? 'On' : 'Off'}</T> : undefined}
           />
         </Card>
       </Section>
 
-      <Section title="Appearance">
+      <Section title="Light or dark">
         <Segmented<ThemePref>
           value={pref}
           onChange={setPref}
@@ -144,9 +144,9 @@ export default function Profile() {
         />
       </Section>
 
-      <Section title="Zephric on the web">
+      <Section title="Zephric website">
         <Card padded={false}>
-          <Row title="Open Zephric" subtitle={server.replace(/^https?:\/\//, '')} onPress={() => void Linking.openURL(`${server}/overview`)} right={<ExternalLink size={16} color={p.ink3} />} chevron={false} />
+          <Row title="Open the website" subtitle={server.replace(/^https?:\/\//, '')} onPress={() => void Linking.openURL(`${server}/overview`)} right={<ExternalLink size={16} color={p.ink3} />} chevron={false} />
         </Card>
       </Section>
 

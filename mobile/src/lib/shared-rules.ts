@@ -68,7 +68,7 @@ export function skippedMessage(s: Skipped): string | null {
   else if (s.tooLarge.length > 1) parts.push(`${s.tooLarge.length} files are larger than ${mb} MB.`);
   if (s.unsupported > 0) parts.push(`${s.unsupported === 1 ? 'One file is' : `${s.unsupported} files are`} not a PDF or an image.`);
   if (s.unreadable > 0) parts.push(`${s.unreadable === 1 ? 'One file' : `${s.unreadable} files`} could not be read; try sharing again.`);
-  if (s.overLimit > 0) parts.push(`A capture takes up to ${MAX_DRAFT_FILES} files, so ${plural(s.overLimit, 'file was', 'files were')} left out.`);
+  if (s.overLimit > 0) parts.push(`One bill takes up to ${MAX_DRAFT_FILES} files, so ${plural(s.overLimit, 'file was', 'files were')} left out.`);
   return parts.length > 0 ? parts.join(' ') : null;
 }
 

@@ -15,19 +15,19 @@ export default function Activity() {
   const unread = list.data?.unread ?? 0;
   return (
     <TabScreen
-      title="Activity"
+      title="Updates"
       subtitle={unread > 0 ? `${unread} unread` : null}
       refreshing={list.isRefetching}
       onRefresh={() => void list.refetch()}
-      action={unread > 0 ? <Button label="Mark all read" kind="secondary" size="sm" loading={markRead.isPending} onPress={() => markRead.mutate(undefined)} /> : null}
+      action={unread > 0 ? <Button label="Mark all as read" kind="secondary" size="sm" loading={markRead.isPending} onPress={() => markRead.mutate(undefined)} /> : null}
     >
       {list.error ? <ErrorState error={list.error} onRetry={() => void list.refetch()} /> : null}
       {list.isLoading ? <LoadingCard rows={5} /> : null}
       {list.data ? (
         <Card padded={false}>
           {list.data.items.length === 0 ? (
-            <Empty icon={Bell} title="No activity yet">
-              Approvals, comments and requests that involve you appear here.
+            <Empty icon={Bell} title="No updates yet">
+              When a bill you sent is approved, questioned or commented on, it shows up here
             </Empty>
           ) : (
             <RowList
@@ -61,7 +61,7 @@ export default function Activity() {
         </Card>
       ) : null}
       <T v="caption" tone="ink3" style={{ textAlign: 'center', paddingHorizontal: 16 }}>
-        Activity updates when you open the app. Push notifications are not turned on in this version.
+        Updates refresh when you open the app
       </T>
     </TabScreen>
   );

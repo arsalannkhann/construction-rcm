@@ -37,6 +37,11 @@ export type Draft = {
   id: string;
   owner: { userId: string; orgId: string };
   title: string;
+  /** What the person says it is, so they can find it again. */
+  description: string;
+  tags: string[];
+  /** The amount they typed, in cents; null when they left it empty. */
+  amountCents: number | null;
   contract: { id: string; label: string; group: string } | null;
   files: DraftFile[];
   status: DraftStatus;
@@ -81,6 +86,10 @@ function load(): Draft[] {
       const d = JSON.parse(meta.textSync()) as Draft;
       // A send interrupted by the app closing picks up again from where it was.
       if (d.status === 'sending') d.status = 'queued';
+      // Drafts saved before descriptions, tags and amounts existed.
+      d.description ??= '';
+      d.tags ??= [];
+      d.amountCents ??= null;
       // iOS moves the app's data folder when the app is updated, so a stored
       // absolute path goes stale. Every file lives in its draft's folder under
       // its own generated name; point each one there again.
@@ -150,6 +159,9 @@ export function createDraft(owner: Owner): Draft {
     id: uuid.v4(),
     owner,
     title: '',
+    description: '',
+    tags: [],
+    amountCents: null,
     contract: null,
     files: [],
     status: 'draft',
@@ -254,7 +266,7 @@ export function moveInDraft(id: string, fileId: string, by: -1 | 1): Draft {
   return saveDraft({ ...draft, files: files.map((f) => (f.kind === 'photo' ? { ...f, name: `Page ${++n}.jpg` } : f)) });
 }
 
-export function updateDraft(id: string, patch: Partial<Pick<Draft, 'title' | 'contract'>>): Draft {
+export function updateDraft(id: string, patch: Partial<Pick<Draft, 'title' | 'contract' | 'description' | 'tags' | 'amountCents'>>): Draft {
   const draft = getDraft(id);
   if (!draft) throw new Error('This draft no longer exists.');
   return saveDraft({ ...draft, ...patch });

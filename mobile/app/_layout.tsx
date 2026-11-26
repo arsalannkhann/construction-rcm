@@ -82,12 +82,13 @@ function Shell() {
       >
         <Stack.Protected guard={signedIn}>
           <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="application/[id]" options={{ headerShown: true, title: 'Application' }} />
+          <Stack.Screen name="application/[id]" options={{ headerShown: true, title: 'Bill' }} />
           <Stack.Screen name="project/[id]" options={{ headerShown: true, title: 'Project' }} />
-          <Stack.Screen name="capture/index" options={{ headerShown: true, title: 'Capture' }} />
-          <Stack.Screen name="capture/[id]" options={{ headerShown: true, title: 'Draft' }} />
-          <Stack.Screen name="request-info/[id]" options={{ headerShown: true, title: 'Request information', presentation: 'modal' }} />
-          <Stack.Screen name="pick-contract/[draftId]" options={{ headerShown: true, title: 'Choose a subcontract', presentation: 'modal' }} />
+          <Stack.Screen name="uploads" options={{ headerShown: true, title: 'My uploads' }} />
+          <Stack.Screen name="capture/index" options={{ headerShown: true, title: 'Send a bill' }} />
+          <Stack.Screen name="capture/[id]" options={{ headerShown: true, title: 'Send a bill' }} />
+          <Stack.Screen name="request-info/[id]" options={{ headerShown: true, title: 'Ask the subcontractor', presentation: 'modal' }} />
+          <Stack.Screen name="pick-contract/[draftId]" options={{ headerShown: true, title: 'Which job is it for?', presentation: 'modal' }} />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="sign-in" />
@@ -139,7 +140,7 @@ function SharedIntake({ owner, canUpload }: { owner: Owner | null; canUpload: bo
     if (!pending || !owner || !nav?.key || busy.current) return;
     if (!canUpload) {
       clearShared();
-      Alert.alert('Your role cannot submit documents', 'The shared files were not added. Ask an admin in your organisation for upload access.');
+      Alert.alert('You cannot send bills yet', 'The shared files were not added. Ask an admin in your company for upload access.');
       return;
     }
     busy.current = true;
